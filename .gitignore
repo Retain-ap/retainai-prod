@@ -1,0 +1,13 @@
+# root
+.env
+.env.*
+# frontend
+frontend/node_modules
+frontend/build
+# python
+**/__pycache__/
+venv
+# data files - deploy uses Render Disk
+leads.json
+notifications.json
+appointments.json
