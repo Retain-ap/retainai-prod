@@ -1203,25 +1203,44 @@ def _within_trial(user: dict, days: int = TRIAL_DAYS) -> bool:
         return False
     return (datetime.datetime.utcnow() - t0) <= datetime.timedelta(days=days)
 
-@app.route('/api/signup', methods=['POST'])
+# --- SIGNUP ROUTE (supports /api/signup and /api/auth/signup) ---
+@app.route('/api/signup', methods=['POST', 'OPTIONS'])
+@app.route('/api/auth/signup', methods=['POST', 'OPTIONS'])
 def signup():
     """
-    Creates a user in users.json, sends a welcome email,
-    and starts a Stripe Checkout subscription with a trial (TRIAL_DAYS).
+    Create a user record in users.json (with optional profile fields),
+    send a welcome email, and kick off a Stripe Checkout subscription
+    with trial (TRIAL_DAYS). Returns { checkoutUrl } on success.
 
-    Returns: { checkoutUrl } on success
+    Accepts JSON:
+    {
+      email, password, name?,
+      businessType?, businessName?, teamSize?, logo?,
+      phone?, website?, instagram?, location?
+    }
     """
+
+    # Handle CORS preflight politely if your UI sends it
+    if request.method == 'OPTIONS':
+        return ('', 204)
+
     # Robust JSON read
     data = request.get_json(silent=True) or {}
 
-    # Normalize + gather fields
-    email        = _norm_email(data.get('email'))
-    password     = (data.get('password') or '').strip()
-    businessType = (data.get('businessType') or '').strip()
-    businessName = (data.get('businessName') or businessType or '').strip()
-    name         = (data.get('name') or '').strip()
-    teamSize     = (data.get('teamSize') or '').strip()
-    logo         = (data.get('logo') or '').strip()
+    # Normalize & gather fields
+    email         = _norm_email(data.get('email'))
+    password      = (data.get('password') or '').strip()
+    name          = (data.get('name') or '').strip()
+
+    businessType  = (data.get('businessType') or '').strip()
+    businessName  = (data.get('businessName') or businessType or '').strip()
+    teamSize      = (data.get('teamSize') or '').strip()
+    logo          = (data.get('logo') or '').strip()
+
+    phone         = (data.get('phone') or '').strip()
+    website       = (data.get('website') or '').strip()
+    instagram     = (data.get('instagram') or '').strip()
+    location      = (data.get('location') or '').strip()
 
     # Validation
     if not email or not password:
@@ -1231,30 +1250,36 @@ def signup():
     if email in users:
         return jsonify({'error': 'User already exists'}), 409
 
-    # Create local user (trial starts now; status pending until verify)
+    # Create local user
     trial_start = datetime.datetime.utcnow().isoformat()
     users[email] = {
-        'password':                password,
-        'businessType':            businessType,
-        'business':                businessName,
-        'name':                    name,
-        'teamSize':                teamSize,
-        'logo':                    logo,
-        'status':                  'pending_payment',
-        'trial_start':             trial_start,
-        'trial_ending_notice_sent': False
+        'password':                  password,
+        'name':                      name,
+        'businessType':              businessType,
+        # Keep prior key ('business') for compatibility; also store businessName verbatim
+        'business':                  businessName,
+        'businessName':              businessName,
+        'teamSize':                  teamSize,
+        'logo':                      logo,
+        'phone':                     phone,
+        'website':                   website,
+        'instagram':                 instagram,
+        'location':                  location,
+        'status':                    'pending_payment',
+        'trial_start':               trial_start,
+        'trial_ending_notice_sent':  False,
     }
     save_users(users)
 
-    # Best-effort welcome email (non-blocking)
+    # Fire-and-forget welcome email
     try:
+        # Adjust signature if your helper takes different args
         send_welcome_email(email, name, businessName)
     except Exception as e:
         print(f"[WARN] Couldn't send welcome email: {e}")
 
-    # Guard required Stripe env
+    # Stripe is optional but preferred; surface a clear error if not configured
     if not STRIPE_SECRET_KEY or not STRIPE_PRICE_ID:
-        # Keep behavior: we *intend* Stripe checkout; if missing, surface clear error
         return jsonify({'error': 'Billing not configured. Missing STRIPE_SECRET_KEY or STRIPE_PRICE_ID.'}), 500
 
     # Create Checkout Session with subscription + trial
@@ -1274,11 +1299,9 @@ def signup():
             success_url=success_url,
             cancel_url=cancel_url,
         )
-        # same contract as before
         return jsonify({'checkoutUrl': session.url}), 200
 
     except stripe.error.StripeError as e:
-        # Stripe-specific message for easier debugging
         print(f"[STRIPE ERROR] {getattr(e, 'user_message', str(e))}")
         return jsonify({'error': 'Could not start payment process.'}), 500
     except Exception as e:

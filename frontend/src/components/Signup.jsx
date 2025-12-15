@@ -177,7 +177,6 @@ export default function Signup() {
           phone,
           website,
           instagram,
-          referral,
         }),
       });
       const data = await res.json();
