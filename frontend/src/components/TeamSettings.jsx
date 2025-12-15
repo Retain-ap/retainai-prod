@@ -1,11 +1,12 @@
 import React, { useEffect, useState } from "react";
+import { API_BASE } from "../config";
 
 export default function TeamSettings({ user }) {
   const [members, setMembers] = useState([]);
   const [email, setEmail] = useState("");
   const [role, setRole] = useState("member");
   const [inviteLink, setInviteLink] = useState(null);
-  const apiBase = process.env.REACT_APP_API_BASE || "http://localhost:5000";
+  const apiBase = API_BASE;
 
   async function loadMembers() {
     const res = await fetch(`${apiBase}/api/team/members`, { headers: { "X-User-Email": user?.email || "" }});

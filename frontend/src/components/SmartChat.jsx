@@ -1,5 +1,6 @@
 // src/components/SmartChat.jsx
 import React, { useState, useRef } from "react";
+import { API_BASE } from "../config";
 
 // Simulate some user and lead context
 const demoLeads = [
@@ -10,7 +11,7 @@ const demoLeads = [
 // --- Helper: Simulate backend NLP/AI extraction ---
 // Replace with a real API POST if you want (see comment below)
 async function extractAppointmentFromMessage(message) {
-  const res = await fetch("http://localhost:5000/api/extract-appointment", {
+  const res = await fetch(`${API_BASE}/api/extract-appointment`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ message }),

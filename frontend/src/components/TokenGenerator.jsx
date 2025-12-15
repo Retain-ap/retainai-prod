@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { API_BASE } from "../config";
 
 export default function TokenGenerator() {
   const [shortToken, setShortToken] = useState("");
@@ -18,7 +19,7 @@ export default function TokenGenerator() {
         setStatus("✅ Long-lived token generated!");
 
         // Save token to backend
-        const saveRes = await fetch("http://localhost:5000/store-token", {
+        const saveRes = await fetch(`${API_BASE}/store-token`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ token: data.access_token }),
