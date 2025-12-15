@@ -1205,68 +1205,103 @@ def _within_trial(user: dict, days: int = TRIAL_DAYS) -> bool:
 
 @app.route('/api/signup', methods=['POST'])
 def signup():
-    data = request.json
+    """
+    Creates a user in users.json, sends a welcome email,
+    and starts a Stripe Checkout subscription with a trial (TRIAL_DAYS).
+
+    Returns: { checkoutUrl } on success
+    """
+    # Robust JSON read
+    data = request.get_json(silent=True) or {}
+
+    # Normalize + gather fields
     email        = _norm_email(data.get('email'))
-    password     = data.get('password')
-    businessType = data.get('businessType','')
-    businessName = data.get('businessName',businessType)
-    name         = data.get('name','')
-    teamSize     = data.get('teamSize','')
-    logo         = data.get('logo','')
+    password     = (data.get('password') or '').strip()
+    businessType = (data.get('businessType') or '').strip()
+    businessName = (data.get('businessName') or businessType or '').strip()
+    name         = (data.get('name') or '').strip()
+    teamSize     = (data.get('teamSize') or '').strip()
+    logo         = (data.get('logo') or '').strip()
+
+    # Validation
+    if not email or not password:
+        return jsonify({'error': 'Email and password required'}), 400
 
     users = load_users()
-    if not email or not password:
-        return jsonify({'error':'Email and password required'}), 400
     if email in users:
-        return jsonify({'error':'User already exists'}), 409
+        return jsonify({'error': 'User already exists'}), 409
 
+    # Create local user (trial starts now; status pending until verify)
     trial_start = datetime.datetime.utcnow().isoformat()
     users[email] = {
-        'password':              password,
-        'businessType':          businessType,
-        'business':              businessName,
-        'name':                  name,
-        'teamSize':              teamSize,
-        'logo':                  logo,
-        'status':                'pending_payment',
-        'trial_start':           trial_start,
+        'password':                password,
+        'businessType':            businessType,
+        'business':                businessName,
+        'name':                    name,
+        'teamSize':                teamSize,
+        'logo':                    logo,
+        'status':                  'pending_payment',
+        'trial_start':             trial_start,
         'trial_ending_notice_sent': False
     }
     save_users(users)
 
+    # Best-effort welcome email (non-blocking)
     try:
         send_welcome_email(email, name, businessName)
     except Exception as e:
         print(f"[WARN] Couldn't send welcome email: {e}")
 
-    # Stripe Checkout (note the session_id in success_url so FE can verify/activate)
+    # Guard required Stripe env
+    if not STRIPE_SECRET_KEY or not STRIPE_PRICE_ID:
+        # Keep behavior: we *intend* Stripe checkout; if missing, surface clear error
+        return jsonify({'error': 'Billing not configured. Missing STRIPE_SECRET_KEY or STRIPE_PRICE_ID.'}), 500
+
+    # Create Checkout Session with subscription + trial
     try:
+        success_url = f"{FRONTEND_URL.rstrip('/')}/login?paid=1&session_id={{CHECKOUT_SESSION_ID}}"
+        cancel_url  = f"{FRONTEND_URL.rstrip('/')}/login?canceled=1"
+
         session = stripe.checkout.Session.create(
             payment_method_types=['card'],
             mode='subscription',
             line_items=[{'price': STRIPE_PRICE_ID, 'quantity': 1}],
             customer_email=email,
-            subscription_data={'trial_period_days': TRIAL_DAYS, 'metadata': {'user_email': email}},
-            success_url=f"{FRONTEND_URL}/login?paid=1&session_id={{CHECKOUT_SESSION_ID}}",
-            cancel_url=f"{FRONTEND_URL}/login?canceled=1",
+            subscription_data={
+                'trial_period_days': int(TRIAL_DAYS),
+                'metadata': {'user_email': email}
+            },
+            success_url=success_url,
+            cancel_url=cancel_url,
         )
+        # same contract as before
         return jsonify({'checkoutUrl': session.url}), 200
+
+    except stripe.error.StripeError as e:
+        # Stripe-specific message for easier debugging
+        print(f"[STRIPE ERROR] {getattr(e, 'user_message', str(e))}")
+        return jsonify({'error': 'Could not start payment process.'}), 500
     except Exception as e:
         print(f"[STRIPE ERROR] {e}")
         return jsonify({'error': 'Could not start payment process.'}), 500
 
+
 @app.route('/api/login', methods=['POST'])
 def login():
+    """
+    Owner login (active or within trial), with teammate fallback:
+    teammates can sign in using the owner's password if the org is active/in trial.
+    """
     data     = request.get_json(silent=True) or {}
     email    = _norm_email(data.get('email'))
-    password = data.get('password') or ""
+    password = (data.get('password') or '').strip()
 
     if not email or not password:
         return jsonify({'error': 'Invalid credentials or account not active'}), 401
 
     users = load_users()
 
-    # ---- 1) Normal owner / materialized user login (unchanged logic) ----
+    # ---- 1) Owner / materialized user
     user = users.get(email)
     if user:
         allowed = (user.get('password') == password) and (
@@ -1277,28 +1312,26 @@ def login():
                 'message': 'Login successful',
                 'user': _user_payload(email, user)
             }), 200
-        # if top-level exists but fails, don't return yet; allow teammate fallback below
+        # fall through to teammate path if top-level record exists but isn't allowed
 
-    # ---- 2) Teammate fallback: allow members to log in with the OWNER'S password ----
+    # ---- 2) Teammate: login with OWNER's password
     team_key = f"user::{email}"
     team_rec = users.get(team_key)
     if not team_rec:
-        # Not a teammate either
         return jsonify({'error': 'Invalid credentials or account not active'}), 401
 
     owner_email = _norm_email(team_rec.get('org_id') or "")
     owner_acct  = users.get(owner_email) or {}
-
-    owner_pw    = owner_acct.get('password')
+    owner_pw    = owner_acct.get('password', '')
     owner_ok    = (owner_acct.get('status') == 'active') or _within_trial(owner_acct, TRIAL_DAYS)
 
     if not (owner_pw and password == owner_pw and owner_ok):
         return jsonify({'error': 'Invalid credentials or account not active'}), 401
 
-    # Build a synthetic user view for this teammate (no file writes; minimal change)
+    # Synthetic member view that borrows business visuals/info from the org owner
     member_user = {
         "email": email,
-        "name":  (team_rec.get("name") or (email.split("@")[0].title())),
+        "name":  team_rec.get("name") or (email.split("@")[0].title()),
         "business":      owner_acct.get("business", ""),
         "businessType":  owner_acct.get("businessType", ""),
         "teamSize":      owner_acct.get("teamSize", ""),
@@ -1308,7 +1341,7 @@ def login():
         "org_id":        owner_acct.get("org_id") or owner_email,
     }
 
-    # If a (failing) top-level user exists, prefer any of its non-empty fields
+    # If there’s also a (failing) top-level user, prefer any of its non-empty fields
     if user:
         merged = dict(member_user)
         merged.update({k: v for k, v in user.items() if v not in (None, "", [])})
@@ -1319,10 +1352,14 @@ def login():
         'user': _user_payload(email, member_user)
     }), 200
 
-
 @app.route('/api/oauth/google', methods=['POST'])
 def google_oauth():
-    data = request.json
+    """
+    Validates the Google ID token, requires an existing account,
+    updates missing name/logo opportunistically, and logs the user in
+    if their account is active or within trial.
+    """
+    data = request.get_json(silent=True) or {}
     token = data.get('credential')
     if not token:
         return jsonify({'error': 'No Google token provided'}), 400
@@ -1330,17 +1367,17 @@ def google_oauth():
     try:
         idinfo  = id_token.verify_oauth2_token(token, grequests.Request(), GOOGLE_CLIENT_ID)
         email   = _norm_email(idinfo['email'])
-        name    = idinfo.get('name', '')
-        picture = idinfo.get('picture', '')
+        name    = idinfo.get('name', '') or ''
+        picture = idinfo.get('picture', '') or ''
 
         users = load_users()
         user  = users.get(email)
 
-        # Do NOT auto-provision via Google. Require existing account.
+        # No auto-provisioning — require prior signup
         if not user:
             return jsonify({'error': 'No account found for this Google email. Please sign up first.'}), 404
 
-        # Update name/logo if missing (non-destructive)
+        # Opportunistic enrichment of missing fields
         changed = False
         if not user.get('name') and name:
             user['name'] = name; changed = True
@@ -1352,38 +1389,45 @@ def google_oauth():
             users[email] = user
             save_users(users)
 
-        # Active OR within trial
+        # Gate by active or in-trial
         if not (user.get('status') == 'active' or _within_trial(user, TRIAL_DAYS)):
             return jsonify({'error': 'Account not active. Please complete payment to activate.'}), 403
 
-        return jsonify({
-            'message': 'Google login successful',
-            'user': _user_payload(email, user)
-        }), 200
+        return jsonify({'message': 'Google login successful', 'user': _user_payload(email, user)}), 200
 
     except Exception as e:
         print("[GOOGLE OAUTH ERROR]", e)
         return jsonify({'error': 'Invalid Google token'}), 401
 
+
 @app.route('/api/oauth/google/complete', methods=['POST'])
 def google_oauth_complete():
-    data         = request.json
+    """
+    Unified 'complete' endpoint:
+    - If called with no meaningful fields, behaves like a safe NO-OP (prevents 404 spam).
+    - If profile fields are provided, updates the existing user (keeps status).
+    """
+    data         = request.get_json(silent=True) or {}
     email        = _norm_email(data.get('email'))
-    businessType = data.get('businessType','')
-    businessName = data.get('businessName', businessType)
-    name         = data.get('name','')
-    logo         = data.get('logo','')
-    people       = data.get('people','')
+    businessType = (data.get('businessType') or '').strip()
+    businessName = (data.get('businessName') or businessType).strip()
+    name         = (data.get('name') or '').strip()
+    logo         = (data.get('logo') or '').strip()
+    people       = (data.get('people') or '').strip()
+
+    if not email:
+        # Strictly keep old noop’s success shape to avoid front-end errors
+        return jsonify({"ok": True}), 200
 
     users = load_users()
-    if not email or email not in users:
+    if email not in users:
         return jsonify({'error': 'User not found'}), 404
 
-    # Keep status as-is; just enrich profile fields
     user = users[email]
+    # Only enrich; do not change status here
     user.update({
-        'businessType': businessType,
-        'business':     businessName,
+        'businessType': businessType or user.get('businessType',''),
+        'business':     businessName or user.get('business',''),
         'name':         name or user.get('name',''),
         'logo':         logo or user.get('logo') or user.get('picture',''),
         'people':       people or user.get('people',''),
@@ -1391,10 +1435,8 @@ def google_oauth_complete():
     users[email] = user
     save_users(users)
 
-    return jsonify({
-        'message': 'Profile updated',
-        'user': _user_payload(email, users[email])
-    }), 200
+    return jsonify({'message': 'Profile updated', 'user': _user_payload(email, users[email])}), 200
+
 
 # ---------- Stripe: verify Checkout and activate ----------
 @app.route("/api/stripe/verify", methods=["GET"])
