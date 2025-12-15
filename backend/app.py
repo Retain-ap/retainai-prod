@@ -20,6 +20,8 @@ import stripe
 from sendgrid import SendGridAPIClient
 from sendgrid.helpers.mail import Mail, Email
 import zlib, random
+from flask_cors import CORS
+from flask import Flask, request, jsonify, make_response
 
 print(f"[BOOT] RetainAI started (PID: {os.getpid()})")
 
@@ -30,6 +32,47 @@ load_dotenv()
 app = Flask(__name__)
 app.config.from_object(Config())
 CORS(app)
+
+# 1) Allowed frontends from env (Render Env Group)
+ALLOWED = [o.strip() for o in os.getenv("ALLOWED_ORIGINS", "").split(",") if o.strip()]
+
+# 2) Flask-CORS: allow credentials and common headers/methods
+CORS(
+    app,
+    origins=ALLOWED if ALLOWED else "*",
+    supports_credentials=True,
+    methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+    allow_headers=["Content-Type", "Authorization", "X-Requested-With"],
+    expose_headers=["Content-Type"],
+)
+
+# 3) Cookie/session flags if you use cookies
+app.config.update(
+    SESSION_COOKIE_SAMESITE="None",
+    SESSION_COOKIE_SECURE=True,
+)
+
+# 4) Generic after_request to keep preflight happy
+@app.after_request
+def add_cors_headers(resp):
+    origin = request.headers.get("Origin")
+    if origin and (not ALLOWED or origin in ALLOWED):
+        resp.headers["Access-Control-Allow-Origin"] = origin
+        resp.headers["Vary"] = "Origin"
+        resp.headers["Access-Control-Allow-Credentials"] = "true"
+        resp.headers["Access-Control-Allow-Methods"] = "GET,POST,PUT,PATCH,DELETE,OPTIONS"
+        resp.headers["Access-Control-Allow-Headers"] = "Content-Type, Authorization, X-Requested-With"
+    return resp
+
+# 5) OPTIONAL: explicit preflight handler (helps if a route returns 404 to OPTIONS)
+@app.route("/api/auth/signup", methods=["OPTIONS"])
+def signup_preflight():
+    return ("", 204)
+
+# healthcheck (ensure you have this)
+@app.route("/healthz")
+def healthz():
+    return jsonify(ok=True), 200
 
 # ----------------------------
 # Storage (flat JSON files)  ← MOVED ABOVE BLUEPRINT IMPORTS
