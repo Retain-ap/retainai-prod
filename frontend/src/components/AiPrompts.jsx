@@ -1,4 +1,6 @@
 import React, { useState } from "react";
+import { API_BASE } from "../config";
+
 // Use your fetch utility as needed
 
 const SUGGESTION_TYPES = [
@@ -71,7 +73,7 @@ Explain your reasoning in 2 sentences below the message.
   const handleGenerate = async () => {
     setLoading(true); setError(""); setPromptResult(""); setAiReason("");
     try {
-      const response = await fetch("http://localhost:5000/api/generate_prompt", {
+      const response = await fetch(`${API_BASE}/api/generate_prompt`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({

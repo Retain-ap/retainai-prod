@@ -1,6 +1,7 @@
 // src/components/Messages.jsx
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { SiWhatsapp } from "react-icons/si";
+import { API_BASE } from "../config";
 
 /** ===== THEME ===== */
 const C = {
@@ -321,8 +322,7 @@ const API = (() => {
     env(process.env.REACT_APP_API_URL) ||
     env(process.env.REACT_APP_API_BASE);
   if (fromEnv) return fromEnv.replace(/\/$/, "");
-  const dev = window.location.hostname === "localhost" && window.location.port === "3000";
-  return dev ? "http://localhost:5000" : window.location.origin.replace(/\/$/, "");
+  return API_BASE;
 })();
 console.log("[API BASE]", API);
 

@@ -1,12 +1,13 @@
 // src/pages/AcceptInvite.jsx
 import React, { useEffect, useState } from "react";
+import { API_BASE } from "../config";
 
 export default function AcceptInvite() {
   // CRA/Webpack-friendly env detection (no import.meta)
   const apiBase =
     (typeof window !== "undefined" && window.__API_BASE__) ||
     process.env.REACT_APP_API_BASE ||
-    "http://localhost:5000";
+    "API_BASE";
 
   // ===== Inline CSS (scoped) =====
   const css = `

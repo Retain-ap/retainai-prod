@@ -5,6 +5,7 @@ import { GoogleLogin } from "@react-oauth/google";
 import { jwtDecode } from "jwt-decode";
 import logo from "../assets/logo.png";
 import defaultAvatar from "../assets/default-avatar.png";
+import { API_BASE } from "../config";   // from components/ → ../config
 
 // ---- Theme ----
 const BG = {

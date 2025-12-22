@@ -1,4 +1,6 @@
 // src/registerPush.js
+import { API_BASE } from "../config";
+
 export async function registerPush(userEmail) {
   if (!('serviceWorker' in navigator) || !('PushManager' in window)) {
     alert('Push notifications are not supported on this browser.');
@@ -23,7 +25,7 @@ export async function registerPush(userEmail) {
     });
 
     // Send to backend
-    await fetch('http://localhost:5000/api/save-subscription', {
+    await fetch(`${API_BASE}/api/save-subscription`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ subscription, email: userEmail })

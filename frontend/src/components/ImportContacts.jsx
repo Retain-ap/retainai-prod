@@ -1,12 +1,14 @@
 // src/components/ImportContacts.jsx
 import React, { useEffect, useMemo, useRef, useState } from "react";
+import { API_BASE } from "../config";
+
 
 export default function ImportContacts({ user }) {
   // Use the SAME env var the rest of the app uses
   const API =
     process.env.REACT_APP_API_URL ||
     process.env.REACT_APP_API_BASE || // fallback if you had older builds
-    "http://localhost:5000";
+    "API_BASE";
 
   // ---------- CSV state ----------
   const [file, setFile] = useState(null);
