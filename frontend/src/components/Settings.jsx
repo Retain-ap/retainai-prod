@@ -3,10 +3,32 @@ import React, { useState, useEffect, useMemo } from "react";
 import { useLocation } from "react-router-dom";
 import GoogleCalendarEvents from "./GoogleCalendarEvents";
 import StripeConnectCard from "./StripeConnectCard";
-// WhatsApp card removed per request
 import { FaUser, FaPlug, FaQuestionCircle, FaUsers, FaSearch, FaTrash } from "react-icons/fa";
 import { SiInstagram } from "react-icons/si";
 import "./settings.css";
+
+const API_BASE =
+  (typeof import.meta !== "undefined" && import.meta.env && import.meta.env.VITE_API_BASE) ||
+  (typeof process !== "undefined" && process.env && process.env.REACT_APP_API_BASE) ||
+  "";
+
+/** Robust JSON fetcher that surfaces HTML/500s clearly */
+async function fetchJSON(url, opts = {}) {
+  const res = await fetch(url, opts);
+  const ct = res.headers.get("content-type") || "";
+  const body = await res.text();
+  if (!res.ok) {
+    throw new Error(`HTTP ${res.status} ${res.statusText} @ ${url}\n${body.slice(0, 400)}`);
+  }
+  if (!ct.includes("application/json")) {
+    throw new Error(`Expected JSON but got ${ct} @ ${url}\n${body.slice(0, 400)}`);
+  }
+  try {
+    return JSON.parse(body);
+  } catch (e) {
+    throw new Error(`Failed to parse JSON @ ${url}: ${e}\n${body.slice(0, 400)}`);
+  }
+}
 
 const TABS = [
   { key: "profile",      label: "Profile",        icon: <FaUser /> },
@@ -37,52 +59,57 @@ export default function Settings({
     if (initialTab && TABS.some(t => t.key === initialTab)) setTab(initialTab);
   }, [initialTab]);
 
-  const loadProfile = () => {
-    if (!user?.email) return;
-    fetch(`/api/user/${encodeURIComponent(user.email)}`)
-      .then(res => res.ok ? res.json() : Promise.reject(res.statusText))
-      .then(data => {
-        setProfile(data);
-        setForm({
-          name: data.name || "",
-          email: data.email || "",
-          business: data.business || "",
-          type: data.businessType || "",
-          location: data.location || "",
-          teamSize: data.people || ""
-        });
-        localStorage.setItem("user", JSON.stringify(data));
-      })
-      .catch(err => console.error("Failed to load profile:", err));
+  /** Load profile from backend (expects GET /api/profile?email=...) */
+  const loadProfile = async () => {
+    try {
+      if (!user?.email) return;
+      const url = `${API_BASE}/api/profile?email=${encodeURIComponent(user.email)}`;
+      const data = await fetchJSON(url, { headers: { Accept: "application/json" }, credentials: "include" });
+      setProfile(data);
+      setForm({
+        name: data.name || "",
+        email: data.email || "",
+        business: data.business || "",
+        type: data.businessType || "",
+        location: data.location || "",
+        teamSize: data.people || data.teamSize || ""
+      });
+      localStorage.setItem("user", JSON.stringify(data));
+    } catch (err) {
+      console.error("Failed to load profile:", err);
+      setProfile(null);
+    }
   };
-  useEffect(loadProfile, [user?.email]);
+  useEffect(() => { loadProfile(); /* runs when user email becomes available */ }, [user?.email]);
 
   useEffect(() => {
     const params = new URLSearchParams(search);
     if (params.get("stripe_connected") === "1") loadProfile();
   }, [search, user?.email]);
 
+  /** Save profile. Uses your existing route /api/oauth/google/complete */
   const handleSave = async () => {
     setSaving(true);
     try {
-      const res = await fetch("/api/oauth/google/complete", {
+      const url = `${API_BASE}/api/oauth/google/complete`;
+      const data = await fetchJSON(url, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: { "Content-Type": "application/json", Accept: "application/json" },
+        credentials: "include",
         body: JSON.stringify({
           email: form.email,
           name: form.name,
-          logo: profile.logo || "",
+          logo: profile?.logo || "",
           businessType: form.type,
           businessName: form.business,
           people: form.teamSize
         }),
       });
-      const data = await res.json();
       if (data.user) {
         await loadProfile();
         setEditMode(false);
       } else {
-        console.error("Save error:", data.error);
+        console.error("Save error payload:", data);
       }
     } catch (e) {
       console.error("Failed to save profile:", e);
@@ -93,7 +120,7 @@ export default function Settings({
 
   const leftOffset = sidebarCollapsed ? 60 : 245;
   const settingsWidth = `calc(100vw - ${leftOffset}px)`;
-  const MAX_W = 1000; // shared center width
+  const MAX_W = 1000;
 
   if (!profile) {
     return (
@@ -119,7 +146,7 @@ export default function Settings({
       </nav>
 
       <main className="settings-content fade-in">
-        {/* PROFILE (centered) */}
+        {/* PROFILE */}
         {tab === "profile" && (
           <div className="profile-tab" style={{ maxWidth: MAX_W, margin: "0 auto" }}>
             <h2>Profile</h2>
@@ -177,12 +204,12 @@ export default function Settings({
           </div>
         )}
 
-        {/* TEAM (centered, no invite UI) */}
+        {/* TEAM */}
         {tab === "team" && (
           <TeamTab ownerEmail={profile.email} maxWidth={MAX_W} />
         )}
 
-        {/* INTEGRATIONS (centered) */}
+        {/* INTEGRATIONS */}
         {tab === "integrations" && (
           <div style={{ maxWidth: MAX_W, margin: "0 auto" }}>
             <h2>Integrations</h2>
@@ -208,7 +235,7 @@ export default function Settings({
           </div>
         )}
 
-        {/* HELP & SUPPORT (centered) */}
+        {/* HELP */}
         {tab === "help" && (
           <div style={{ maxWidth: MAX_W, margin: "0 auto" }}>
             <h2>Help & Support</h2>
@@ -227,7 +254,7 @@ export default function Settings({
 }
 
 /* ─────────────────────────────────────────────────────────────── */
-/* Team tab (centered list management; no invite UI)               */
+/* Team tab                                                        */
 /* ─────────────────────────────────────────────────────────────── */
 function TeamTab({ ownerEmail, maxWidth }) {
   const [members, setMembers] = useState([]);
@@ -238,15 +265,17 @@ function TeamTab({ ownerEmail, maxWidth }) {
   const roles = ["owner", "manager", "member"];
 
   const loadMembers = async () => {
+    if (!ownerEmail) return;
     setLoading(true);
     try {
-      const res = await fetch("/api/team/members", {
-        headers: { "X-User-Email": ownerEmail }
+      const url = `${API_BASE}/api/team/members`;
+      const data = await fetchJSON(url, {
+        headers: { "X-User-Email": ownerEmail, Accept: "application/json" },
+        credentials: "include",
       });
-      const data = await res.json();
       if (data.members) setMembers(data.members);
     } catch (e) {
-      console.error(e);
+      console.error("Load members failed:", e);
     } finally {
       setLoading(false);
     }
@@ -268,14 +297,16 @@ function TeamTab({ ownerEmail, maxWidth }) {
     setBusyEmail(email);
     setMembers(ms => ms.map(m => (m.email === email ? { ...m, role } : m)));
     try {
-      const res = await fetch("/api/team/role", {
+      const url = `${API_BASE}/api/team/role`;
+      const res = await fetch(url, {
         method: "POST",
-        headers: { "Content-Type": "application/json", "X-User-Email": ownerEmail },
+        headers: { "Content-Type": "application/json", "X-User-Email": ownerEmail, Accept: "application/json" },
+        credentials: "include",
         body: JSON.stringify({ email, role })
       });
-      if (!res.ok) throw new Error("Role update failed");
+      if (!res.ok) throw new Error(`Role update failed: HTTP ${res.status}`);
     } catch (e) {
-      alert("Could not change role. Add /api/team/role on backend if missing.");
+      alert("Could not change role. Make sure /api/team/role exists on backend.");
       loadMembers();
     } finally {
       setBusyEmail("");
@@ -288,14 +319,16 @@ function TeamTab({ ownerEmail, maxWidth }) {
     const prev = members;
     setMembers(ms => ms.filter(m => m.email !== email));
     try {
-      const res = await fetch("/api/team/remove", {
+      const url = `${API_BASE}/api/team/remove`;
+      const res = await fetch(url, {
         method: "POST",
-        headers: { "Content-Type": "application/json", "X-User-Email": ownerEmail },
+        headers: { "Content-Type": "application/json", "X-User-Email": ownerEmail, Accept: "application/json" },
+        credentials: "include",
         body: JSON.stringify({ email })
       });
-      if (!res.ok) throw new Error("Remove failed");
+      if (!res.ok) throw new Error(`Remove failed: HTTP ${res.status}`);
     } catch (e) {
-      alert("Could not remove. Add /api/team/remove on backend if missing.");
+      alert("Could not remove. Make sure /api/team/remove exists on backend.");
       setMembers(prev);
     } finally {
       setBusyEmail("");
