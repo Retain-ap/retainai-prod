@@ -22,6 +22,15 @@ from sendgrid.helpers.mail import Mail, Email
 import zlib, random
 from flask_cors import CORS
 from flask import Flask, request, jsonify, make_response
+from storage import (
+    load_users, save_users, get_user, create_user,
+    load_leads, save_leads, migrate_json_to_sqlite_if_needed,
+    DATA_ROOT, USE_SQLITE, SQLITE_PATH
+)
+
+# Kick off one-time JSON -> SQLite migration if needed
+migrate_json_to_sqlite_if_needed()
+print(f"[storage] USE_SQLITE={USE_SQLITE} DATA_ROOT={DATA_ROOT} SQLITE_PATH={SQLITE_PATH}")
 
 print(f"[BOOT] RetainAI started (PID: {os.getpid()})")
 
