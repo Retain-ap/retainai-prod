@@ -20,6 +20,7 @@ import stripe
 from sendgrid import SendGridAPIClient
 from sendgrid.helpers.mail import Mail, Email
 import zlib, random
+from flask import current_app
 from flask_cors import CORS
 from flask import Flask, request, jsonify, make_response
 from storage import (
@@ -216,51 +217,87 @@ def _get_user_by_email(email: str):
 
     return None
 
-@app.route("/api/profile", methods=["GET"])
+@app.route("/api/profile", methods=["GET", "OPTIONS"])
 def api_profile():
-    """
-    Returns the user profile as JSON for Settings.jsx
-    GET /api/profile?email=<email>
-    """
-    email = (request.args.get("email") or "").strip().lower()
-    if not email:
-        return jsonify({"error": "email required"}), 400
+    if request.method == "OPTIONS":
+        return ("", 204)
 
-    user_obj = _get_user_by_email(email)
+    try:
+        email = (request.args.get("email") or "").strip().lower()
+        if not email:
+            return jsonify({"error": "missing email query param"}), 400
 
-    if not user_obj:
-        # Return a minimal, stable object so UI renders gracefully
+        # storage.get_user handles both SQLite and JSON based on USE_SQLITE
+        user = get_user(email)
+        if not user:
+            # For first-time users, create a minimal record so frontend has a shape
+            user = {
+                "email": email,
+                "name": "",
+                "businessName": "",
+                "businessType": "",
+                "location": "",
+                "people": "",
+                "logo": "",
+                "created_at": datetime.datetime.utcnow().isoformat() + "Z",
+            }
+            # create_user is idempotent in our storage adapter
+            create_user(user)
+
+        # Normalize keys expected by the frontend
+        out = {
+            "email": user.get("email", email),
+            "name": user.get("name") or user.get("displayName") or "",
+            "business": user.get("business") or user.get("businessName") or "",
+            "businessName": user.get("businessName") or user.get("business") or "",
+            "businessType": user.get("businessType") or user.get("type") or "",
+            "location": user.get("location") or "",
+            "people": user.get("people") or user.get("teamSize") or "",
+            "teamSize": user.get("teamSize") or user.get("people") or "",
+            "logo": user.get("logo") or "",
+            "last_login": user.get("last_login"),
+            "created_at": user.get("created_at"),
+        }
+        return jsonify(out), 200
+
+    except Exception as e:
+        # Log full stacktrace to Render logs
+        current_app.logger.exception("api_profile failed")
         return jsonify({
-            "email": email,
-            "name": "",
-            "business": "",
-            "businessName": "",
-            "businessType": "",
-            "location": "",
-            "people": "",
-            "logo": ""
-        }), 200
+            "error": "server_error",
+            "message": str(e),
+            "details": {
+                "email": (request.args.get("email") or "").strip().lower(),
+                "USE_SQLITE": bool(USE_SQLITE),
+                "SQLITE_PATH": SQLITE_PATH,
+                "DATA_ROOT": DATA_ROOT,
+            }
+        }), 500
 
-    # Normalize ORM/Row → dict if needed
-    if hasattr(user_obj, "to_dict"):
-        user_obj = user_obj.to_dict()
 
-    # Ensure expected keys exist so frontend fields don’t show 'undefined'
-    user_obj.setdefault("email", email)
-    user_obj.setdefault("name",        user_obj.get("name") or "")
-    user_obj.setdefault("business",    user_obj.get("business") or user_obj.get("businessName") or "")
-    user_obj.setdefault("businessName",user_obj.get("businessName") or user_obj.get("business") or "")
-    user_obj.setdefault("businessType",user_obj.get("businessType") or "")
-    user_obj.setdefault("location",    user_obj.get("location") or "")
-    user_obj.setdefault("people",      user_obj.get("people") or user_obj.get("teamSize") or "")
-    user_obj.setdefault("logo",        user_obj.get("logo") or "")
+# Optional: quick debug endpoint to verify storage wiring without the frontend
+@app.route("/api/profile/debug", methods=["GET"])
+def api_profile_debug():
+    email = (request.args.get("email") or "").strip().lower()
+    ok = True
+    msg = "ok"
+    try:
+        u = get_user(email) if email else None
+    except Exception as ex:
+        ok = False
+        msg = f"get_user raised: {ex}"
 
-    return jsonify(user_obj), 200
-
-# ----------------------------
-# END of DROP-IN replacement
-# ----------------------------
-
+    return jsonify({
+        "ok": ok,
+        "message": msg,
+        "email": email,
+        "USE_SQLITE": bool(USE_SQLITE),
+        "SQLITE_PATH": SQLITE_PATH,
+        "DATA_ROOT": DATA_ROOT,
+        "exists": bool(u) if email else None,
+        "user_sample": u if (ok and u and isinstance(u, dict)) else None
+    }), 200 if ok else 500
+    
 # ----------------------------
 # Blueprints (import AFTER helpers so app_imports can import load_leads/save_leads)
 # ----------------------------
