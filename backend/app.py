@@ -220,8 +220,32 @@ def _get_user_by_email(email: str):
 def _normalize_email(e: str) -> str:
     return (e or "").strip().lower()
 
+def _to_dict(obj):
+    """Coerce SQLAlchemy rows / namedtuples / tuples / mappings into a plain dict."""
+    if obj is None:
+        return {}
+    # common: storage returns (record, created) or similar
+    if isinstance(obj, tuple) and obj:
+        obj = obj[0]
+    # SQLAlchemy Row / RowMapping
+    try:
+        # RowMapping behaves like mapping -> dict() works
+        return dict(obj)
+    except Exception:
+        pass
+    # namedtuple / has _asdict
+    if hasattr(obj, "_asdict"):
+        return dict(obj._asdict())
+    # generic objects with __dict__
+    if hasattr(obj, "__dict__"):
+        try:
+            return dict(obj.__dict__)
+        except Exception:
+            pass
+    # last resort
+    return {} if not isinstance(obj, dict) else dict(obj)
+
 def _merge_profile(existing: dict, patch: dict) -> dict:
-    """Keep existing values unless explicitly provided in patch."""
     out = dict(existing or {})
     for k, v in (patch or {}).items():
         if v is not None:
@@ -235,13 +259,13 @@ def api_profile_get():
         if not email:
             return jsonify({"error": "email_required"}), 400
 
-        # Try to fetch; if missing, create a minimal record so UI never 500s
-        u = get_user(email)
+        u = _to_dict(get_user(email))
         if not u:
-            u = create_user(email=email, name="", businessName="", businessType="", people=0, location="")
-            current_app.logger.info(f"[profile] created placeholder for {email}")
+            # create a minimal record so first load never 500s
+            created = create_user(email=email, name="", businessName="", businessType="", people=0, location="")
+            u = _to_dict(created) or {"email": email}
 
-        # Normalize common keys that your frontend expects
+        # Normalize keys the frontend expects
         u.setdefault("email", email)
         u.setdefault("name", u.get("name") or "")
         u.setdefault("business", u.get("business") or u.get("businessName") or "")
@@ -260,8 +284,8 @@ def api_profile_get():
 @app.post("/api/oauth/google/complete")
 def api_profile_save():
     """
-    Used by Settings.jsx 'Save' button.
     Accepts: { email, name, businessName, businessType, people, location, logo }
+    Upserts via storage layer (JSON or SQLite).
     """
     try:
         data = request.get_json(force=True, silent=False) or {}
@@ -269,14 +293,9 @@ def api_profile_save():
         if not email:
             return jsonify({"error": "email_required"}), 400
 
-        # Load current -> merge -> save
-        users = load_users()
-        curr = users.get(email) if isinstance(users, dict) else None
+        curr = _to_dict(get_user(email))
         if not curr:
-            curr = create_user(email=email, name="", businessName="", businessType="", people=0, location="")
-            # If create_user wrote to storage itself, refresh the dict
-            users = load_users()
-            curr = users.get(email, curr)
+            curr = {"email": email}
 
         patch = {
             "email": email,
@@ -289,15 +308,19 @@ def api_profile_save():
             "teamSize": data.get("people") if data.get("people") not in (None, "") else curr.get("teamSize", 0),
             "logo": data.get("logo") or curr.get("logo") or "",
         }
-
         merged = _merge_profile(curr, patch)
 
-        # If your storage layer is dict-backed:
-        if isinstance(users, dict):
-            users[email] = merged
-            save_users(users)
-        else:
-            # If your storage abstractions handle SQL, fall back to create_user to upsert-like behavior
+        # If your storage.py supports JSON dicts:
+        try:
+            users = load_users()
+            if isinstance(users, dict):
+                users[email] = merged
+                save_users(users)
+            else:
+                # If load_users isn't dict (e.g., SQLite mode), fall back to create_user as an UPSERT
+                create_user(**merged)
+        except Exception:
+            # SQLite path: rely on create_user as UPSERT
             create_user(**merged)
 
         return jsonify({"ok": True, "user": merged}), 200
@@ -305,13 +328,13 @@ def api_profile_save():
         current_app.logger.exception("POST /api/oauth/google/complete failed")
         return jsonify({"error": "profile_save_failed", "detail": str(e)}), 500
 
-# Optional: JSON 404 for /api/* so the frontend never sees HTML
+# JSON 404 for /api/* so the frontend never sees HTML
 @app.errorhandler(404)
 def json_404(err):
     if request.path.startswith("/api/"):
         return jsonify({"error": "not_found", "path": request.path}), 404
     return err
-    
+
 @app.route("/api/profile", methods=["GET", "OPTIONS"])
 def api_profile():
     if request.method == "OPTIONS":
