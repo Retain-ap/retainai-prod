@@ -130,7 +130,7 @@ export default function Settings({
     if (params.get("stripe_connected") === "1") loadProfile();
   }, [search]);
 
-  /** Save profile (POST /api/oauth/google/complete) */
+  /** Save profile (POST /api/profile) */
   const handleSave = async () => {
     setSaving(true);
     try {
@@ -144,15 +144,14 @@ export default function Settings({
         people: form.teamSize,
         teamSize: form.teamSize,
       };
-      const data = await fetchJSONWithBaseDiscovery(
-        `/api/profile`,
-        {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(payload),
-        },
-        apiBaseRef
-      );
+
+      const url = apiUrl("profile"); // -> /api/profile (or https://.../api/profile if VITE_API_BASE set)
+      const data = await fetchJSON(url, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+
       setProfile(data);
       setEditMode(false);
     } catch (e) {
