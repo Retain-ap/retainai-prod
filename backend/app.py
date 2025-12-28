@@ -221,40 +221,41 @@ def _normalize_email(e: str) -> str:
     return (e or "").strip().lower()
 
 def _to_dict(obj):
-    """Coerce storage return values into a plain dict.
-    Handles (Response, status), Response, SQLAlchemy Row, namedtuple, mapping, object.
+    """
+    Coerce storage return values into a plain dict.
+    Handles (obj, status), objects with get_json(), SQLAlchemy rows, namedtuple,
+    mapping, and generic objects with __dict__.
     """
     if obj is None:
         return {}
 
     # If storage returned (something, status) or similar, peel layers
     if isinstance(obj, tuple) and obj:
-        # Prefer the first element that can become a dict/json
         for part in obj:
             d = _to_dict(part)
             if d:
                 return d
         return {}
 
-    # If someone returned a Flask Response, try to parse JSON body
-    if isinstance(obj, FlaskResponse):
+    # If it's a Flask-like response (or any object) that exposes get_json()
+    # don't import or depend on Flask types—duck-type instead.
+    if hasattr(obj, "get_json") and callable(getattr(obj, "get_json")):
         try:
             j = obj.get_json(silent=True)
             if isinstance(j, dict):
                 return j
         except Exception:
             pass
-        # No JSON body → ignore Response internals
         return {}
 
-    # SQLAlchemy Row/RowMapping
+    # Try SQLAlchemy Row / RowMapping
     try:
-        return dict(obj)
+        return dict(obj)  # works for Row, RowMapping, and plain mappings
     except Exception:
         pass
 
     # namedtuple
-    if hasattr(obj, "_asdict"):
+    if hasattr(obj, "_asdict") and callable(getattr(obj, "_asdict")):
         try:
             return dict(obj._asdict())
         except Exception:
@@ -264,10 +265,10 @@ def _to_dict(obj):
     if isinstance(obj, dict):
         return dict(obj)
 
-    # object with __dict__
+    # generic object with __dict__
     if hasattr(obj, "__dict__"):
         try:
-            return {k: v for k, v in obj.__dict__.items()}
+            return {k: v for k, v in vars(obj).items()}
         except Exception:
             return {}
 
@@ -369,26 +370,80 @@ def _clean_user_dict(u: dict, email: str) -> dict:
     u.setdefault("logo", u.get("logo") or "")
     return u
 
-@app.get("/api/profile")
+def _normalize_profile(u: dict) -> dict:
+    """Return a safe, flat JSON profile payload."""
+    u = u or {}
+    return {
+        "email": (u.get("email") or "").strip().lower(),
+        "name": u.get("name") or "",
+        "logo": u.get("logo") or "",
+        "business": u.get("business") or u.get("businessName") or "",
+        "businessName": u.get("businessName") or u.get("business") or "",
+        "businessType": u.get("businessType") or "",
+        "location": u.get("location") or "",
+        "people": int(u.get("people") or 0),
+        "teamSize": int(u.get("teamSize") or u.get("people") or 0),
+    }
+
+@app.route("/api/profile", methods=["GET"])
 def api_profile_get():
+    # never serialize request.headers; just read inputs
+    email = (request.args.get("email") or "").strip().lower()
+    if not email:
+        return jsonify({"error": "email_required"}), 400
+
     try:
-        email = _normalize_email(request.args.get("email"))
-        if not email:
-            return jsonify({"error": "email_required"}), 400
-
-        u = get_user(email)
-        u = _clean_user_dict(u, email)
-
-        if not u or not u.get("email"):
-            # create minimal record so first load succeeds
-            created = create_user(email=email, name="", businessName="", businessType="", people=0, location="")
-            u = _clean_user_dict(created, email)
-
-        # sanitize before jsonify to avoid "not JSON serializable"
-        return jsonify(_json_sanitize(u)), 200
+        u = get_user(email)  # from storage adapter
     except Exception as e:
-        current_app.logger.exception("GET /api/profile failed")
         return jsonify({"error": "profile_get_failed", "detail": str(e)}), 500
+
+    if not u:
+        # return an empty profile shell (don't auto-create on GET)
+        return jsonify(_normalize_profile({"email": email})), 200
+
+    return jsonify(_normalize_profile(u)), 200
+
+
+@app.route("/api/profile", methods=["POST"])
+def api_profile_post():
+    """
+    Upsert a user profile. Body JSON:
+    { email, name, logo, businessName, businessType, location, people/teamSize }
+    """
+    try:
+        body = request.get_json(force=True, silent=True) or {}
+    except Exception as e:
+        return jsonify({"error": "bad_json", "detail": str(e)}), 400
+
+    email = (body.get("email") or "").strip().lower()
+    if not email:
+        return jsonify({"error": "email_required"}), 400
+
+    # Load full users map, upsert, then save atomically via storage helpers
+    try:
+        users = load_users()  # dict keyed by email
+        existing = users.get(email, {"email": email})
+        # Merge incoming fields
+        for k in ["name", "logo", "business", "businessName", "businessType", "location"]:
+            v = body.get(k)
+            if v is not None:
+                existing[k] = v
+
+        # people/teamSize normalization
+        people = body.get("people", body.get("teamSize"))
+        if people is not None:
+            try:
+                existing["people"] = int(people)
+                existing["teamSize"] = int(people)
+            except Exception:
+                pass
+
+        users[email] = existing
+        save_users(users)
+        return jsonify({"ok": True, "user": _normalize_profile(existing)}), 200
+
+    except Exception as e:
+        return jsonify({"error": "profile_save_failed", "detail": str(e)}), 500
 
 @app.post("/api/oauth/google/complete")
 def api_profile_save():
