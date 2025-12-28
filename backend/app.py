@@ -223,13 +223,12 @@ def _normalize_email(e: str) -> str:
 def _to_dict(obj):
     """
     Coerce storage return values into a plain dict.
-    Handles (obj, status), objects with get_json(), SQLAlchemy rows, namedtuple,
-    mapping, and generic objects with __dict__.
+    No Flask type imports; duck-type only.
     """
     if obj is None:
         return {}
 
-    # If storage returned (something, status) or similar, peel layers
+    # (obj, status) or (obj, headers, status)
     if isinstance(obj, tuple) and obj:
         for part in obj:
             d = _to_dict(part)
@@ -237,8 +236,7 @@ def _to_dict(obj):
                 return d
         return {}
 
-    # If it's a Flask-like response (or any object) that exposes get_json()
-    # don't import or depend on Flask types—duck-type instead.
+    # Objects that expose get_json() (duck-typed Response)
     if hasattr(obj, "get_json") and callable(getattr(obj, "get_json")):
         try:
             j = obj.get_json(silent=True)
@@ -248,9 +246,9 @@ def _to_dict(obj):
             pass
         return {}
 
-    # Try SQLAlchemy Row / RowMapping
+    # SQLAlchemy Row/RowMapping or plain mappings
     try:
-        return dict(obj)  # works for Row, RowMapping, and plain mappings
+        return dict(obj)
     except Exception:
         pass
 
@@ -265,7 +263,7 @@ def _to_dict(obj):
     if isinstance(obj, dict):
         return dict(obj)
 
-    # generic object with __dict__
+    # plain object
     if hasattr(obj, "__dict__"):
         try:
             return {k: v for k, v in vars(obj).items()}
@@ -370,39 +368,123 @@ def _clean_user_dict(u: dict, email: str) -> dict:
     u.setdefault("logo", u.get("logo") or "")
     return u
 
-def _normalize_profile(u: dict) -> dict:
-    """Return a safe, flat JSON profile payload."""
-    u = u or {}
-    return {
-        "email": (u.get("email") or "").strip().lower(),
-        "name": u.get("name") or "",
-        "logo": u.get("logo") or "",
-        "business": u.get("business") or u.get("businessName") or "",
-        "businessName": u.get("businessName") or u.get("business") or "",
-        "businessType": u.get("businessType") or "",
-        "location": u.get("location") or "",
-        "people": int(u.get("people") or 0),
-        "teamSize": int(u.get("teamSize") or u.get("people") or 0),
+    if hasattr(obj, "__dict__"):
+        try:
+            return {k: v for k, v in vars(obj).items()}
+        except Exception:
+            return {}
+
+    return {}
+
+
+def _normalize_profile(email: str, raw: dict | None) -> dict:
+    """Return a clean, JSON-serializable profile dict for the frontend."""
+    r = _to_dict(raw) if raw is not None else {}
+    email = (email or r.get("email") or "").strip()
+
+    # Accept both legacy and new keys; keep both for compatibility
+    name          = (r.get("name") or "").strip()
+    logo          = (r.get("logo") or "").strip()
+    business      = (r.get("business") or r.get("businessName") or "").strip()
+    business_type = (r.get("businessType") or r.get("type") or "").strip()
+    location      = (r.get("location") or "").strip()
+
+    # Numbers: coerce safely
+    def _int(v, default=0):
+        try:
+            return int(v)
+        except Exception:
+            return default
+
+    people   = _int(r.get("people"), 0)
+    teamSize = _int(r.get("teamSize"), people)
+
+    clean = {
+        "name": name,
+        "email": email,
+        "logo": logo,
+        "business": business,
+        "businessName": business,     # duplicate for FE compatibility
+        "businessType": business_type,
+        "location": location,
+        "people": people,
+        "teamSize": teamSize,
     }
+    return clean
 
 @app.route("/api/profile", methods=["GET"])
-def api_profile_get():
-    # never serialize request.headers; just read inputs
-    email = (request.args.get("email") or "").strip().lower()
-    if not email:
-        return jsonify({"error": "email_required"}), 400
-
+def api_get_profile():
+    """
+    GET /api/profile?email=...
+    Always returns 200 with a normalized JSON object (even if user not found).
+    """
     try:
-        u = get_user(email)  # from storage adapter
+        email = (request.args.get("email") or "").strip()
+        if not email:
+            # Allow X-User-Email (same as other endpoints you have)
+            email = (request.headers.get("X-User-Email") or "").strip()
+
+        raw = None
+        if email:
+            try:
+                raw = get_user(email)  # from storage.py (may return dict/tuple/Row/None)
+            except Exception:
+                raw = None
+
+        profile = _normalize_profile(email, raw)
+        return jsonify(profile), 200
+
     except Exception as e:
+        # Final fallback—never leak non-JSON objects
         return jsonify({"error": "profile_get_failed", "detail": str(e)}), 500
 
-    if not u:
-        # return an empty profile shell (don't auto-create on GET)
-        return jsonify(_normalize_profile({"email": email})), 200
+@app.route("/api/profile", methods=["POST"])
+def api_update_profile():
+    """
+    POST /api/profile
+    Body: { email, name?, logo?, businessName?/business?, businessType?, location?, people?/teamSize? }
+    Upserts the user then returns the normalized profile.
+    """
+    try:
+        data = request.get_json(silent=True) or {}
+        email = (data.get("email") or request.headers.get("X-User-Email") or "").strip()
+        if not email:
+            return jsonify({"error": "missing_email"}), 400
 
-    return jsonify(_normalize_profile(u)), 200
+        # Load existing to preserve unknown fields if needed
+        existing = _to_dict(get_user(email))
+        payload = {
+            **existing,
+            "email": email,
+            "name": (data.get("name") or existing.get("name") or "").strip(),
+            "logo": (data.get("logo") or existing.get("logo") or "").strip(),
+            "business": (data.get("business") or data.get("businessName") or existing.get("business") or existing.get("businessName") or "").strip(),
+            "businessName": (data.get("businessName") or data.get("business") or existing.get("businessName") or existing.get("business") or "").strip(),
+            "businessType": (data.get("businessType") or existing.get("businessType") or "").strip(),
+            "location": (data.get("location") or existing.get("location") or "").strip(),
+        }
 
+        # numeric coercion
+        def _int(v, default=0):
+            try:
+                return int(v)
+            except Exception:
+                return default
+
+        people   = _int(data.get("people", existing.get("people", 0)), 0)
+        teamSize = _int(data.get("teamSize", existing.get("teamSize", people)), people)
+        payload["people"]   = people
+        payload["teamSize"] = teamSize
+
+        # Persist via your storage adapter
+        users = load_users()
+        users[email] = payload
+        save_users(users)
+
+        return jsonify(_normalize_profile(email, payload)), 200
+
+    except Exception as e:
+        return jsonify({"error": "profile_update_failed", "detail": str(e)}), 500
 
 @app.route("/api/profile", methods=["POST"])
 def api_profile_post():
