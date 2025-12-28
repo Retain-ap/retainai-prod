@@ -28,24 +28,28 @@ from storage import (
     DATA_ROOT, USE_SQLITE, SQLITE_PATH
 )
 
+# ----------------------------
+# BOOT + CONFIG + CORS + CORE API
+# (DROP-IN REPLACEMENT: paste over your existing block down to the
+#  "Blueprints" import lines)
+# ----------------------------
+
 # Kick off one-time JSON -> SQLite migration if needed
 migrate_json_to_sqlite_if_needed()
 print(f"[storage] USE_SQLITE={USE_SQLITE} DATA_ROOT={DATA_ROOT} SQLITE_PATH={SQLITE_PATH}")
-
 print(f"[BOOT] RetainAI started (PID: {os.getpid()})")
 
 class Config:
     SCHEDULER_API_ENABLED = True
 
 load_dotenv()
+
 app = Flask(__name__)
 app.config.from_object(Config())
-CORS(app)
 
-# 1) Allowed frontends from env (Render Env Group)
+# ---- CORS (Render-friendly, credentials) ----
 ALLOWED = [o.strip() for o in os.getenv("ALLOWED_ORIGINS", "").split(",") if o.strip()]
 
-# 2) Flask-CORS: allow credentials and common headers/methods
 CORS(
     app,
     origins=ALLOWED if ALLOWED else "*",
@@ -55,13 +59,13 @@ CORS(
     expose_headers=["Content-Type"],
 )
 
-# 3) Cookie/session flags if you use cookies
+# Cookies (if you use them)
 app.config.update(
     SESSION_COOKIE_SAMESITE="None",
     SESSION_COOKIE_SECURE=True,
 )
 
-# 4) Generic after_request to keep preflight happy
+# Keep preflight happy even if a specific route doesn’t define OPTIONS
 @app.after_request
 def add_cors_headers(resp):
     origin = request.headers.get("Origin")
@@ -73,63 +77,189 @@ def add_cors_headers(resp):
         resp.headers["Access-Control-Allow-Headers"] = "Content-Type, Authorization, X-Requested-With"
     return resp
 
-# 5) OPTIONAL: explicit preflight handler (helps if a route returns 404 to OPTIONS)
+# Generic OPTIONS responder for /api/* (helps when proxies send OPTIONS first)
+@app.route("/api/<path:_any>", methods=["OPTIONS"])
+def api_options(_any):
+    return ("", 204)
+
+# Keep your existing preflight for signup too
 @app.route("/api/auth/signup", methods=["OPTIONS"])
 def signup_preflight():
     return ("", 204)
 
-# healthcheck (ensure you have this)
-@app.route("/healthz")
+# Health endpoints
+@app.route("/healthz", methods=["GET"])
 def healthz():
     return jsonify(ok=True), 200
 
+@app.route("/api/health", methods=["GET"])
+def api_health():
+    return jsonify(ok=True), 200
+
+
 # ----------------------------
-# Storage (flat JSON files)  ← MOVED ABOVE BLUEPRINT IMPORTS
+# Storage-related paths & legacy file helpers
+# NOTE:
+# - We DO NOT redefine load_users/save_users/load_leads/save_leads here
+#   because those come from the `storage` adapter you imported above.
+# - We keep legacy JSON helpers only for other files (notifications, chats, etc.).
 # ----------------------------
 SUBSCRIPTIONS = {}
-LEADS_FILE = os.getenv("LEADS_FILE", "leads.json")   # ← allow overriding via env
-USERS_FILE = "users.json"
+
+LEADS_FILE = os.getenv("LEADS_FILE", "leads.json")   # still respected by storage adapter when in JSON mode
+USERS_FILE = "users.json"                            # legacy JSON file (fallback only)
+
 NOTIFICATIONS_FILE = "notifications.json"
 APPOINTMENTS_FILE = "appointments.json"
 CHAT_FILE = "whatsapp_chats.json"
 STATUS_FILE = "whatsapp_status.json"    # per-message delivery/read status
+
 ICS_DIR = os.path.abspath("ics_files")
 os.makedirs(ICS_DIR, exist_ok=True)
+
 CHANNEL_EMAIL = "email"
 CHANNEL_WHATSAPP = "whatsapp"
 
 # ---------- Persistent storage (atomic JSON) ----------
 BASE_DIR = os.path.dirname(os.path.abspath(__file__)) if "__file__" in globals() else os.getcwd()
 FILE_AUTOMATIONS = os.path.join(BASE_DIR, "automations.json")
-FILE_STATE = os.path.join(BASE_DIR, "automation_state.json")
+FILE_STATE       = os.path.join(BASE_DIR, "automation_state.json")
 FILE_NOTIFICATIONS = os.path.join(BASE_DIR, "notifications.json")
-FILE_USERS = os.path.join(BASE_DIR, "users_profiles.json")  # per-user automation profile (business_name, booking_link, quiet hours)
+FILE_USERS_FALLBACK = os.path.join(BASE_DIR, "users_profiles.json")  # older per-user profiles JSON (fallback only)
 
-# ----------------------------
-# Helpers: JSON storage  ← MOVED ABOVE BLUEPRINT IMPORTS
-# ----------------------------
-def load_json(file_path):
-    if not os.path.exists(file_path): return {}
-    with open(file_path, "r", encoding="utf-8") as f:
-        try: return json.load(f)
-        except Exception: return {}
+def _legacy_load_json(file_path):
+    if not os.path.exists(file_path):
+        return {}
+    try:
+        with open(file_path, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except Exception:
+        return {}
 
-def save_json(file_path, data):
+def _legacy_save_json(file_path, data):
     with open(file_path, "w", encoding="utf-8") as f:
         json.dump(data, f, indent=2)
 
-def load_leads(): return load_json(LEADS_FILE)
-def save_leads(data): save_json(LEADS_FILE, data)
-def load_users(): return load_json(USERS_FILE)
-def save_users(users): save_json(USERS_FILE, users)
-def load_notifications(): return load_json(NOTIFICATIONS_FILE)
-def save_notifications(data): save_json(NOTIFICATIONS_FILE, data)
-def load_appointments(): return load_json(APPOINTMENTS_FILE)
-def save_appointments(data): save_json(APPOINTMENTS_FILE, data)
-def load_chats(): return load_json(CHAT_FILE)
-def save_chats(data): save_json(CHAT_FILE, data)
-def load_statuses(): return load_json(STATUS_FILE)
-def save_statuses(data): save_json(STATUS_FILE, data)
+def load_notifications():  # used elsewhere in your code
+    return _legacy_load_json(NOTIFICATIONS_FILE)
+
+def save_notifications(data):
+    _legacy_save_json(NOTIFICATIONS_FILE, data)
+
+def load_appointments():
+    return _legacy_load_json(APPOINTMENTS_FILE)
+
+def save_appointments(data):
+    _legacy_save_json(APPOINTMENTS_FILE, data)
+
+def load_chats():
+    return _legacy_load_json(CHAT_FILE)
+
+def save_chats(data):
+    _legacy_save_json(CHAT_FILE, data)
+
+def load_statuses():
+    return _legacy_load_json(STATUS_FILE)
+
+def save_statuses(data):
+    _legacy_save_json(STATUS_FILE, data)
+
+
+# ----------------------------
+# /api/profile  (JSON, used by Settings.jsx)
+# ----------------------------
+def _get_user_by_email(email: str):
+    """
+    Primary: use storage adapter (SQLite when USE_SQLITE=1, JSON otherwise).
+    Fallback: look in legacy JSON files if present.
+    """
+    if not email:
+        return None
+    email = email.strip().lower()
+
+    # 1) storage adapter (authoritative)
+    try:
+        if callable(get_user):
+            u = get_user(email)
+            if u:
+                return u  # already dict-like from the adapter
+    except Exception:
+        pass
+
+    # 2) legacy users.json (flat list/dict)
+    try:
+        raw = _legacy_load_json(USERS_FILE)
+        if isinstance(raw, dict):
+            cand = raw.get(email)
+            if cand:
+                return cand
+        elif isinstance(raw, list):
+            for u in raw:
+                if (u.get("email") or "").strip().lower() == email:
+                    return u
+    except Exception:
+        pass
+
+    # 3) legacy users_profiles.json
+    try:
+        raw = _legacy_load_json(FILE_USERS_FALLBACK)
+        if isinstance(raw, dict):
+            cand = raw.get(email)
+            if cand:
+                return cand
+        elif isinstance(raw, list):
+            for u in raw:
+                if (u.get("email") or "").strip().lower() == email:
+                    return u
+    except Exception:
+        pass
+
+    return None
+
+@app.route("/api/profile", methods=["GET"])
+def api_profile():
+    """
+    Returns the user profile as JSON for Settings.jsx
+    GET /api/profile?email=<email>
+    """
+    email = (request.args.get("email") or "").strip().lower()
+    if not email:
+        return jsonify({"error": "email required"}), 400
+
+    user_obj = _get_user_by_email(email)
+
+    if not user_obj:
+        # Return a minimal, stable object so UI renders gracefully
+        return jsonify({
+            "email": email,
+            "name": "",
+            "business": "",
+            "businessName": "",
+            "businessType": "",
+            "location": "",
+            "people": "",
+            "logo": ""
+        }), 200
+
+    # Normalize ORM/Row → dict if needed
+    if hasattr(user_obj, "to_dict"):
+        user_obj = user_obj.to_dict()
+
+    # Ensure expected keys exist so frontend fields don’t show 'undefined'
+    user_obj.setdefault("email", email)
+    user_obj.setdefault("name",        user_obj.get("name") or "")
+    user_obj.setdefault("business",    user_obj.get("business") or user_obj.get("businessName") or "")
+    user_obj.setdefault("businessName",user_obj.get("businessName") or user_obj.get("business") or "")
+    user_obj.setdefault("businessType",user_obj.get("businessType") or "")
+    user_obj.setdefault("location",    user_obj.get("location") or "")
+    user_obj.setdefault("people",      user_obj.get("people") or user_obj.get("teamSize") or "")
+    user_obj.setdefault("logo",        user_obj.get("logo") or "")
+
+    return jsonify(user_obj), 200
+
+# ----------------------------
+# END of DROP-IN replacement
+# ----------------------------
 
 # ----------------------------
 # Blueprints (import AFTER helpers so app_imports can import load_leads/save_leads)
