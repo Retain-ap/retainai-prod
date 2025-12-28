@@ -7,13 +7,17 @@ import { FaUser, FaPlug, FaQuestionCircle, FaUsers, FaSearch, FaTrash } from "re
 import { SiInstagram } from "react-icons/si";
 import "./settings.css";
 
-// top of Settings.jsx
-const RAW_BASE =
+// --- API base normalization (no trailing slash, no trailing /api) ---
+const RAW_API_BASE =
   (typeof import.meta !== "undefined" && import.meta.env && import.meta.env.VITE_API_BASE) ||
   (typeof process !== "undefined" && process.env && process.env.REACT_APP_API_BASE) ||
   "";
 
-const API_BASE = RAW_BASE.replace(/\/+$/, ""); // no trailing slash
+const API_BASE = RAW_API_BASE
+  .replace(/\s+/g, "")                // trim accidental spaces
+  .replace(/\/+$/, "")                // drop trailing slash(es)
+  .replace(/\/api$/i, "");            // drop trailing /api if present
+
 
 /* ───────────────────────────────────────────────────────────────
    API base auto-detection (prod safe)
