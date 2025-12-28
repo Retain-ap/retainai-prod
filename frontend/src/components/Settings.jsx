@@ -24,11 +24,9 @@ const ENV_BASE =
 function cleanOrigin(s) {
   return (s || "").trim().replace(/\/+$/g, "").replace(/\/api$/i, "");
 }
-
 function siblingRenderOrigin() {
   try {
     const o = window.location.origin;
-    // e.g. https://retainai-prod-1-frontend.onrender.com -> https://retainai-prod.onrender.com
     return o
       .replace(/-frontend(\.onrender\.com)$/i, "$1")
       .replace(/-\d+(\.onrender\.com)$/i, "$1");
@@ -36,7 +34,6 @@ function siblingRenderOrigin() {
     return "";
   }
 }
-
 async function probe(origin) {
   if (!origin) return null;
   const url = `${origin.replace(/\/+$/,"")}/api/health`;
@@ -44,39 +41,28 @@ async function probe(origin) {
     const r = await fetch(url, { credentials: "include" });
     const ct = (r.headers.get("content-type") || "").toLowerCase();
     if (!r.ok || !ct.includes("application/json")) return null;
-    await r.json(); // ensure it’s JSON
+    await r.json();
     return origin.replace(/\/+$/,"");
   } catch {
     return null;
   }
 }
-
 async function getWorkingApiOrigin() {
   const cached = sessionStorage.getItem("__api_origin__");
   if (cached) return cached;
-
   const candidates = [
     cleanOrigin(ENV_BASE),
-    // same-origin first (works when frontend serves via proxy)
     (() => { try { return window.location.origin; } catch { return ""; } })(),
     siblingRenderOrigin(),
   ].filter(Boolean);
-
   for (const c of candidates) {
     const ok = await probe(c);
-    if (ok) {
-      sessionStorage.setItem("__api_origin__",
-        ok); 
-      return ok;
-    }
+    if (ok) { sessionStorage.setItem("__api_origin__", ok); return ok; }
   }
-
-  // fallback to same-origin (may 404 but keeps UI error readable)
   const fallback = (() => { try { return window.location.origin; } catch { return ""; } })();
   sessionStorage.setItem("__api_origin__", fallback);
   return fallback;
 }
-
 async function apiFetchJSON(path, opts = {}) {
   const origin = await getWorkingApiOrigin();
   const p = String(path).replace(/^\/+/, "");
@@ -85,7 +71,7 @@ async function apiFetchJSON(path, opts = {}) {
 }
 
 /* ───────────────────────────────────────────────────────────────
-   Robust fetcher: must receive JSON (prevents SPA index.html)
+   Robust fetcher: must receive JSON (protects against SPA HTML)
    ─────────────────────────────────────────────────────────────── */
 async function fetchJSON(url, opts = {}) {
   const res = await fetch(url, {
@@ -93,28 +79,19 @@ async function fetchJSON(url, opts = {}) {
     headers: { Accept: "application/json", ...(opts.headers || {}) },
     ...opts,
   });
-
   const ct = (res.headers.get("content-type") || "").toLowerCase();
   const raw = await res.text();
-
-  if (!res.ok) {
-    throw new Error(`HTTP ${res.status} ${res.statusText} @ ${url}\n${raw.slice(0, 400)}`);
-  }
+  if (!res.ok) throw new Error(`HTTP ${res.status} ${res.statusText} @ ${url}\n${raw.slice(0, 400)}`);
   if (!ct.includes("application/json")) {
     if (raw.includes("<!doctype html") || raw.includes("</html>")) {
       throw new Error(
-        `Expected JSON but got HTML (SPA fallback) @ ${url}\n` +
-        `Likely wrong API base. Check VITE_API_BASE/REACT_APP_API_BASE or proxy.`
+        `Expected JSON but got HTML (SPA fallback) @ ${url}\nLikely wrong API base.`
       );
     }
     throw new Error(`Expected JSON but got ${ct || "unknown content-type"} @ ${url}\n${raw.slice(0, 200)}`);
   }
-
-  try {
-    return JSON.parse(raw);
-  } catch (e) {
-    throw new Error(`Failed to parse JSON @ ${url}: ${e}\n${raw.slice(0, 200)}`);
-  }
+  try { return JSON.parse(raw); }
+  catch (e) { throw new Error(`Failed to parse JSON @ ${url}: ${e}\n${raw.slice(0, 200)}`); }
 }
 
 /* ─────────────────────────────────────────────────────────────── */
@@ -149,14 +126,12 @@ export default function Settings({
     if (initialTab && TABS.some(t => t.key === initialTab)) setTab(initialTab);
   }, [initialTab]);
 
-  /** Load profile (GET /api/profile?email=...) */
+  // Load profile
   const loadProfile = async () => {
     try {
       setBootError("");
       if (!user?.email) return;
-
       const data = await apiFetchJSON(`profile?email=${encodeURIComponent(user.email)}`);
-
       setProfile(data);
       setForm({
         name: data.name || "",
@@ -173,16 +148,15 @@ export default function Settings({
       setProfile(null);
     }
   };
-
   useEffect(() => { loadProfile(); }, [user?.email]);
 
-  // If Stripe redirected back with ?stripe_connected=1, refresh the user
+  // Stripe callback refresh
   useEffect(() => {
     const params = new URLSearchParams(search);
     if (params.get("stripe_connected") === "1") loadProfile();
   }, [search]);
 
-  /** Save profile (POST /api/profile) */
+  // Save profile
   const handleSave = async () => {
     setSaving(true);
     try {
@@ -196,13 +170,11 @@ export default function Settings({
         people: form.teamSize,
         teamSize: form.teamSize,
       };
-
       const data = await apiFetchJSON("profile", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(payload),
       });
-
       setProfile(data);
       setEditMode(false);
     } catch (e) {
@@ -382,9 +354,8 @@ function TeamTab({ ownerEmail, maxWidth }) {
     if (!ownerEmail) return;
     setLoading(true);
     try {
-      const data = await apiFetchJSON("team/members", {
-        headers: { "X-User-Email": ownerEmail },
-      });
+      // no custom headers → avoid CORS preflight issues
+      const data = await apiFetchJSON(`team/members?ownerEmail=${encodeURIComponent(ownerEmail)}`);
       if (data.members) setMembers(data.members);
     } catch (e) {
       console.error("Load members failed:", e);
@@ -412,11 +383,9 @@ function TeamTab({ ownerEmail, maxWidth }) {
     try {
       await apiFetchJSON("team/role", {
         method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          "X-User-Email": ownerEmail,
-        },
-        body: JSON.stringify({ email, role }),
+        headers: { "Content-Type": "application/json" },
+        // include ownerEmail in the body instead of a custom header
+        body: JSON.stringify({ email, role, ownerEmail }),
       });
     } catch (e) {
       alert("Could not change role. Make sure /api/team/role exists on backend.");
@@ -434,11 +403,8 @@ function TeamTab({ ownerEmail, maxWidth }) {
     try {
       await apiFetchJSON("team/remove", {
         method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          "X-User-Email": ownerEmail,
-        },
-        body: JSON.stringify({ email }),
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email, ownerEmail }),
       });
     } catch (e) {
       alert("Could not remove. Make sure /api/team/remove exists on backend.");
