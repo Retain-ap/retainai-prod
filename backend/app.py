@@ -221,36 +221,126 @@ def _normalize_email(e: str) -> str:
     return (e or "").strip().lower()
 
 def _to_dict(obj):
-    """Coerce SQLAlchemy rows / namedtuples / tuples / mappings into a plain dict."""
+    """Coerce SQLAlchemy rows / tuples / namedtuples / objects into a plain dict."""
     if obj is None:
         return {}
-    # common: storage returns (record, created) or similar
+    # If storage returns (record, created_flag) or similar, take first
     if isinstance(obj, tuple) and obj:
         obj = obj[0]
-    # SQLAlchemy Row / RowMapping
+    # SQLAlchemy Row/RowMapping -> dict() works
     try:
-        # RowMapping behaves like mapping -> dict() works
         return dict(obj)
     except Exception:
         pass
-    # namedtuple / has _asdict
+    # namedtuple
     if hasattr(obj, "_asdict"):
         return dict(obj._asdict())
-    # generic objects with __dict__
+    # plain mapping
+    if isinstance(obj, dict):
+        return dict(obj)
+    # object with __dict__
     if hasattr(obj, "__dict__"):
         try:
-            return dict(obj.__dict__)
+            return {k: v for k, v in obj.__dict__.items()}
         except Exception:
-            pass
-    # last resort
-    return {} if not isinstance(obj, dict) else dict(obj)
+            return {}
+    return {}
+
+# keys we never want to persist/return
+_BAD_KEYS = {
+    "_sa_instance_state", "headers", "request", "cookies", "environ",
+    "wsgi", "response", "session", "files", "form", "args", "json",
+}
+
+def _json_sanitize(val):
+    """
+    Recursively convert to JSON-safe types.
+    - dict: sanitize entries, drop _BAD_KEYS, drop unserializable values
+    - list/tuple/set: sanitize each, convert tuple/set -> list
+    - datetime/date: isoformat
+    - bytes: base64
+    - other unknown objects: str() as last resort
+    """
+    import datetime as _dt
+    import base64 as _b64
+
+    # primitives pass through
+    if val is None or isinstance(val, (bool, int, float, str)):
+        return val
+
+    # datetime
+    if isinstance(val, (_dt.datetime, _dt.date)):
+        try:
+            return val.isoformat()
+        except Exception:
+            return str(val)
+
+    # bytes
+    if isinstance(val, (bytes, bytearray, memoryview)):
+        try:
+            return _b64.b64encode(bytes(val)).decode("ascii")
+        except Exception:
+            return str(val)
+
+    # dict-like
+    if isinstance(val, dict):
+        out = {}
+        for k, v in val.items():
+            if k in _BAD_KEYS:
+                continue
+            try:
+                out[str(k)] = _json_sanitize(v)
+            except Exception:
+                # drop anything that fails sanitation
+                continue
+        return out
+
+    # iterable -> list
+    if isinstance(val, (list, tuple, set)):
+        out = []
+        for x in val:
+            try:
+                out.append(_json_sanitize(x))
+            except Exception:
+                continue
+        return out
+
+    # fallback
+    try:
+        return str(val)
+    except Exception:
+        return None
 
 def _merge_profile(existing: dict, patch: dict) -> dict:
     out = dict(existing or {})
     for k, v in (patch or {}).items():
         if v is not None:
             out[k] = v
+    # normalize keys the frontend expects
+    out.setdefault("businessName", out.get("business") or "")
+    out.setdefault("business", out.get("businessName") or "")
+    out.setdefault("teamSize", out.get("people") or 0)
+    out.setdefault("people", out.get("teamSize") or 0)
+    out.setdefault("logo", out.get("logo") or "")
     return out
+
+def _clean_user_dict(u: dict, email: str) -> dict:
+    u = _to_dict(u)
+    # hard-drop bad keys if they slipped in
+    for k in list(u.keys()):
+        if k in _BAD_KEYS:
+            u.pop(k, None)
+    # enforce required keys
+    u.setdefault("email", email)
+    u.setdefault("name", u.get("name") or "")
+    u.setdefault("business", u.get("business") or u.get("businessName") or "")
+    u.setdefault("businessName", u.get("businessName") or u.get("business") or "")
+    u.setdefault("businessType", u.get("businessType") or "")
+    u.setdefault("location", u.get("location") or "")
+    u.setdefault("people", u.get("people") or u.get("teamSize") or 0)
+    u.setdefault("teamSize", u.get("teamSize") or u.get("people") or 0)
+    u.setdefault("logo", u.get("logo") or "")
+    return u
 
 @app.get("/api/profile")
 def api_profile_get():
@@ -259,24 +349,16 @@ def api_profile_get():
         if not email:
             return jsonify({"error": "email_required"}), 400
 
-        u = _to_dict(get_user(email))
-        if not u:
-            # create a minimal record so first load never 500s
+        u = get_user(email)
+        u = _clean_user_dict(u, email)
+
+        if not u or not u.get("email"):
+            # create minimal record so first load succeeds
             created = create_user(email=email, name="", businessName="", businessType="", people=0, location="")
-            u = _to_dict(created) or {"email": email}
+            u = _clean_user_dict(created, email)
 
-        # Normalize keys the frontend expects
-        u.setdefault("email", email)
-        u.setdefault("name", u.get("name") or "")
-        u.setdefault("business", u.get("business") or u.get("businessName") or "")
-        u.setdefault("businessName", u.get("businessName") or u.get("business") or "")
-        u.setdefault("businessType", u.get("businessType") or "")
-        u.setdefault("location", u.get("location") or "")
-        u.setdefault("people", u.get("people") or u.get("teamSize") or 0)
-        u.setdefault("teamSize", u.get("teamSize") or u.get("people") or 0)
-        u.setdefault("logo", u.get("logo") or "")
-
-        return jsonify(u), 200
+        # sanitize before jsonify to avoid "not JSON serializable"
+        return jsonify(_json_sanitize(u)), 200
     except Exception as e:
         current_app.logger.exception("GET /api/profile failed")
         return jsonify({"error": "profile_get_failed", "detail": str(e)}), 500
@@ -284,8 +366,8 @@ def api_profile_get():
 @app.post("/api/oauth/google/complete")
 def api_profile_save():
     """
-    Accepts: { email, name, businessName, businessType, people, location, logo }
-    Upserts via storage layer (JSON or SQLite).
+    Accepts: { email, name, businessName|business, businessType, people|teamSize, location, logo }
+    Upserts via storage layer (works with JSON or SQLite adapters).
     """
     try:
         data = request.get_json(force=True, silent=False) or {}
@@ -293,37 +375,34 @@ def api_profile_save():
         if not email:
             return jsonify({"error": "email_required"}), 400
 
-        curr = _to_dict(get_user(email))
-        if not curr:
-            curr = {"email": email}
+        curr = _clean_user_dict(get_user(email), email)
 
         patch = {
             "email": email,
-            "name": data.get("name") or curr.get("name") or "",
-            "businessName": data.get("businessName") or data.get("business") or curr.get("businessName") or "",
-            "business": data.get("business") or data.get("businessName") or curr.get("business") or "",
-            "businessType": data.get("businessType") or curr.get("businessType") or "",
-            "location": data.get("location") or curr.get("location") or "",
-            "people": data.get("people") if data.get("people") not in (None, "") else curr.get("people", 0),
-            "teamSize": data.get("people") if data.get("people") not in (None, "") else curr.get("teamSize", 0),
-            "logo": data.get("logo") or curr.get("logo") or "",
+            "name": data.get("name", curr.get("name")),
+            "businessName": data.get("businessName", data.get("business", curr.get("businessName"))),
+            "business": data.get("business", data.get("businessName", curr.get("business"))),
+            "businessType": data.get("businessType", curr.get("businessType")),
+            "location": data.get("location", curr.get("location")),
+            "people": data.get("people", curr.get("people", 0)),
+            "teamSize": data.get("teamSize", data.get("people", curr.get("teamSize", 0))),
+            "logo": data.get("logo", curr.get("logo", "")),
         }
+
         merged = _merge_profile(curr, patch)
 
-        # If your storage.py supports JSON dicts:
+        # Persist (JSON or SQLite adapter). If JSON path fails, fall back to create_user as UPSERT.
         try:
             users = load_users()
             if isinstance(users, dict):
                 users[email] = merged
                 save_users(users)
             else:
-                # If load_users isn't dict (e.g., SQLite mode), fall back to create_user as an UPSERT
                 create_user(**merged)
         except Exception:
-            # SQLite path: rely on create_user as UPSERT
             create_user(**merged)
 
-        return jsonify({"ok": True, "user": merged}), 200
+        return jsonify({"ok": True, "user": _json_sanitize(merged)}), 200
     except Exception as e:
         current_app.logger.exception("POST /api/oauth/google/complete failed")
         return jsonify({"error": "profile_save_failed", "detail": str(e)}), 500
