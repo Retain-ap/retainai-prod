@@ -217,6 +217,101 @@ def _get_user_by_email(email: str):
 
     return None
 
+def _normalize_email(e: str) -> str:
+    return (e or "").strip().lower()
+
+def _merge_profile(existing: dict, patch: dict) -> dict:
+    """Keep existing values unless explicitly provided in patch."""
+    out = dict(existing or {})
+    for k, v in (patch or {}).items():
+        if v is not None:
+            out[k] = v
+    return out
+
+@app.get("/api/profile")
+def api_profile_get():
+    try:
+        email = _normalize_email(request.args.get("email"))
+        if not email:
+            return jsonify({"error": "email_required"}), 400
+
+        # Try to fetch; if missing, create a minimal record so UI never 500s
+        u = get_user(email)
+        if not u:
+            u = create_user(email=email, name="", businessName="", businessType="", people=0, location="")
+            current_app.logger.info(f"[profile] created placeholder for {email}")
+
+        # Normalize common keys that your frontend expects
+        u.setdefault("email", email)
+        u.setdefault("name", u.get("name") or "")
+        u.setdefault("business", u.get("business") or u.get("businessName") or "")
+        u.setdefault("businessName", u.get("businessName") or u.get("business") or "")
+        u.setdefault("businessType", u.get("businessType") or "")
+        u.setdefault("location", u.get("location") or "")
+        u.setdefault("people", u.get("people") or u.get("teamSize") or 0)
+        u.setdefault("teamSize", u.get("teamSize") or u.get("people") or 0)
+        u.setdefault("logo", u.get("logo") or "")
+
+        return jsonify(u), 200
+    except Exception as e:
+        current_app.logger.exception("GET /api/profile failed")
+        return jsonify({"error": "profile_get_failed", "detail": str(e)}), 500
+
+@app.post("/api/oauth/google/complete")
+def api_profile_save():
+    """
+    Used by Settings.jsx 'Save' button.
+    Accepts: { email, name, businessName, businessType, people, location, logo }
+    """
+    try:
+        data = request.get_json(force=True, silent=False) or {}
+        email = _normalize_email(data.get("email"))
+        if not email:
+            return jsonify({"error": "email_required"}), 400
+
+        # Load current -> merge -> save
+        users = load_users()
+        curr = users.get(email) if isinstance(users, dict) else None
+        if not curr:
+            curr = create_user(email=email, name="", businessName="", businessType="", people=0, location="")
+            # If create_user wrote to storage itself, refresh the dict
+            users = load_users()
+            curr = users.get(email, curr)
+
+        patch = {
+            "email": email,
+            "name": data.get("name") or curr.get("name") or "",
+            "businessName": data.get("businessName") or data.get("business") or curr.get("businessName") or "",
+            "business": data.get("business") or data.get("businessName") or curr.get("business") or "",
+            "businessType": data.get("businessType") or curr.get("businessType") or "",
+            "location": data.get("location") or curr.get("location") or "",
+            "people": data.get("people") if data.get("people") not in (None, "") else curr.get("people", 0),
+            "teamSize": data.get("people") if data.get("people") not in (None, "") else curr.get("teamSize", 0),
+            "logo": data.get("logo") or curr.get("logo") or "",
+        }
+
+        merged = _merge_profile(curr, patch)
+
+        # If your storage layer is dict-backed:
+        if isinstance(users, dict):
+            users[email] = merged
+            save_users(users)
+        else:
+            # If your storage abstractions handle SQL, fall back to create_user to upsert-like behavior
+            create_user(**merged)
+
+        return jsonify({"ok": True, "user": merged}), 200
+    except Exception as e:
+        current_app.logger.exception("POST /api/oauth/google/complete failed")
+        return jsonify({"error": "profile_save_failed", "detail": str(e)}), 500
+
+# Optional: JSON 404 for /api/* so the frontend never sees HTML
+@app.errorhandler(404)
+def json_404(err):
+    if request.path.startswith("/api/"):
+        return jsonify({"error": "not_found", "path": request.path}), 404
+    return err
+    
 @app.route("/api/profile", methods=["GET", "OPTIONS"])
 def api_profile():
     if request.method == "OPTIONS":
@@ -297,7 +392,7 @@ def api_profile_debug():
         "exists": bool(u) if email else None,
         "user_sample": u if (ok and u and isinstance(u, dict)) else None
     }), 200 if ok else 500
-    
+
 # ----------------------------
 # Blueprints (import AFTER helpers so app_imports can import load_leads/save_leads)
 # ----------------------------
