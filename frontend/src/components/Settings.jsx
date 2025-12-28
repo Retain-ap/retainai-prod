@@ -8,27 +8,80 @@ import { SiInstagram } from "react-icons/si";
 import "./settings.css";
 
 /* ───────────────────────────────────────────────────────────────
-   API ORIGIN + URL BUILDER (bullet-proof)
-   - Accepts VITE_API_BASE or REACT_APP_API_BASE (no trailing /api)
-   - Ensures EXACTLY ONE /api/ prefix
-   - Falls back to same origin (/api/...) for dev/proxy setups
+   RUNTIME API BASE AUTO-DISCOVERY (prod-safe)
+   Order:
+     1) ENV (VITE_API_BASE or REACT_APP_API_BASE) without trailing /api
+     2) Same-origin (for dev/proxy)
+     3) Render “sibling” origin by stripping "-<digits>-frontend" or "-frontend"
+   We verify each candidate with GET <origin>/api/health expecting JSON.
+   Cache winning origin in sessionStorage.
    ─────────────────────────────────────────────────────────────── */
-const RAW_ENV_ORIGIN =
+const ENV_BASE =
   (typeof import.meta !== "undefined" && import.meta.env && import.meta.env.VITE_API_BASE) ||
   (typeof process !== "undefined" && process.env && process.env.REACT_APP_API_BASE) ||
   "";
 
-const API_ORIGIN = (RAW_ENV_ORIGIN || "")
-  .trim()
-  .replace(/\/+$/g, "")   // drop trailing slash
-  .replace(/\/api$/i, ""); // drop trailing /api if someone set it
+function cleanOrigin(s) {
+  return (s || "").trim().replace(/\/+$/g, "").replace(/\/api$/i, "");
+}
 
-function apiUrl(path) {
-  const p = String(path).replace(/^\/+/, ""); // drop leading slashes
-  // If an explicit backend origin is provided, use it
-  if (API_ORIGIN) return `${API_ORIGIN}/api/${p}`;
-  // Otherwise, same-origin (dev proxy / Render nginx)
-  return `/api/${p}`;
+function siblingRenderOrigin() {
+  try {
+    const o = window.location.origin;
+    // e.g. https://retainai-prod-1-frontend.onrender.com -> https://retainai-prod.onrender.com
+    return o
+      .replace(/-frontend(\.onrender\.com)$/i, "$1")
+      .replace(/-\d+(\.onrender\.com)$/i, "$1");
+  } catch {
+    return "";
+  }
+}
+
+async function probe(origin) {
+  if (!origin) return null;
+  const url = `${origin.replace(/\/+$/,"")}/api/health`;
+  try {
+    const r = await fetch(url, { credentials: "include" });
+    const ct = (r.headers.get("content-type") || "").toLowerCase();
+    if (!r.ok || !ct.includes("application/json")) return null;
+    await r.json(); // ensure it’s JSON
+    return origin.replace(/\/+$/,"");
+  } catch {
+    return null;
+  }
+}
+
+async function getWorkingApiOrigin() {
+  const cached = sessionStorage.getItem("__api_origin__");
+  if (cached) return cached;
+
+  const candidates = [
+    cleanOrigin(ENV_BASE),
+    // same-origin first (works when frontend serves via proxy)
+    (() => { try { return window.location.origin; } catch { return ""; } })(),
+    siblingRenderOrigin(),
+  ].filter(Boolean);
+
+  for (const c of candidates) {
+    const ok = await probe(c);
+    if (ok) {
+      sessionStorage.setItem("__api_origin__",
+        ok); 
+      return ok;
+    }
+  }
+
+  // fallback to same-origin (may 404 but keeps UI error readable)
+  const fallback = (() => { try { return window.location.origin; } catch { return ""; } })();
+  sessionStorage.setItem("__api_origin__", fallback);
+  return fallback;
+}
+
+async function apiFetchJSON(path, opts = {}) {
+  const origin = await getWorkingApiOrigin();
+  const p = String(path).replace(/^\/+/, "");
+  const url = `${origin}/api/${p}`;
+  return fetchJSON(url, opts);
 }
 
 /* ───────────────────────────────────────────────────────────────
@@ -102,8 +155,7 @@ export default function Settings({
       setBootError("");
       if (!user?.email) return;
 
-      const url = apiUrl(`profile?email=${encodeURIComponent(user.email)}`);
-      const data = await fetchJSON(url);
+      const data = await apiFetchJSON(`profile?email=${encodeURIComponent(user.email)}`);
 
       setProfile(data);
       setForm({
@@ -145,8 +197,7 @@ export default function Settings({
         teamSize: form.teamSize,
       };
 
-      const url = apiUrl("profile"); // -> /api/profile (or https://.../api/profile if VITE_API_BASE set)
-      const data = await fetchJSON(url, {
+      const data = await apiFetchJSON("profile", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(payload),
@@ -331,8 +382,7 @@ function TeamTab({ ownerEmail, maxWidth }) {
     if (!ownerEmail) return;
     setLoading(true);
     try {
-      const url = apiUrl("team/members");
-      const data = await fetchJSON(url, {
+      const data = await apiFetchJSON("team/members", {
         headers: { "X-User-Email": ownerEmail },
       });
       if (data.members) setMembers(data.members);
@@ -360,8 +410,7 @@ function TeamTab({ ownerEmail, maxWidth }) {
     setBusyEmail(email);
     setMembers(ms => ms.map(m => (m.email === email ? { ...m, role } : m)));
     try {
-      const url = apiUrl("team/role");
-      await fetchJSON(url, {
+      await apiFetchJSON("team/role", {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
@@ -383,8 +432,7 @@ function TeamTab({ ownerEmail, maxWidth }) {
     const prev = members;
     setMembers(ms => ms.filter(m => m.email !== email));
     try {
-      const url = apiUrl("team/remove");
-      await fetchJSON(url, {
+      await apiFetchJSON("team/remove", {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
