@@ -1,5 +1,5 @@
-// File: src/components/Settings.jsx
-import React, { useState, useEffect, useMemo, useRef } from "react";
+// File: frontend/src/components/Settings.jsx
+import React, { useState, useEffect, useMemo } from "react";
 import { useLocation } from "react-router-dom";
 import GoogleCalendarEvents from "./GoogleCalendarEvents";
 import StripeConnectCard from "./StripeConnectCard";
@@ -7,108 +7,64 @@ import { FaUser, FaPlug, FaQuestionCircle, FaUsers, FaSearch, FaTrash } from "re
 import { SiInstagram } from "react-icons/si";
 import "./settings.css";
 
-// --- API base normalization (no trailing slash, no trailing /api) ---
-const RAW_API_BASE =
+/* ───────────────────────────────────────────────────────────────
+   API ORIGIN + URL BUILDER (bullet-proof)
+   - Accepts VITE_API_BASE or REACT_APP_API_BASE (no trailing /api)
+   - Ensures EXACTLY ONE /api/ prefix
+   - Falls back to same origin (/api/...) for dev/proxy setups
+   ─────────────────────────────────────────────────────────────── */
+const RAW_ENV_ORIGIN =
   (typeof import.meta !== "undefined" && import.meta.env && import.meta.env.VITE_API_BASE) ||
   (typeof process !== "undefined" && process.env && process.env.REACT_APP_API_BASE) ||
   "";
 
-const API_BASE = RAW_API_BASE
-  .replace(/\s+/g, "")                // trim accidental spaces
-  .replace(/\/+$/, "")                // drop trailing slash(es)
-  .replace(/\/api$/i, "");            // drop trailing /api if present
+const API_ORIGIN = (RAW_ENV_ORIGIN || "")
+  .trim()
+  .replace(/\/+$/g, "")   // drop trailing slash
+  .replace(/\/api$/i, ""); // drop trailing /api if someone set it
 
+function apiUrl(path) {
+  const p = String(path).replace(/^\/+/, ""); // drop leading slashes
+  // If an explicit backend origin is provided, use it
+  if (API_ORIGIN) return `${API_ORIGIN}/api/${p}`;
+  // Otherwise, same-origin (dev proxy / Render nginx)
+  return `/api/${p}`;
+}
 
 /* ───────────────────────────────────────────────────────────────
-   API base auto-detection (prod safe)
-   Tries envs first, then same-origin /api variations.
-   Caches the first base that returns application/json.
+   Robust fetcher: must receive JSON (prevents SPA index.html)
    ─────────────────────────────────────────────────────────────── */
-function norm(u) {
-  if (!u) return "";
-  // Remove trailing slashes
-  return u.replace(/\/+$/, "");
-}
+async function fetchJSON(url, opts = {}) {
+  const res = await fetch(url, {
+    credentials: "include",
+    headers: { Accept: "application/json", ...(opts.headers || {}) },
+    ...opts,
+  });
 
-function candidatesFromEnv() {
-  const v1 = (typeof import.meta !== "undefined" && import.meta.env && import.meta.env.VITE_API_BASE) || "";
-  const v2 = (typeof process !== "undefined" && process.env && process.env.REACT_APP_API_BASE) || "";
-  const origin = typeof window !== "undefined" ? window.location.origin : "";
-  return [
-    norm(v1),
-    norm(v2),
-    // same-origin API prefix patterns
-    norm("/api"),
-    norm(`${origin}/api`),
-  ].filter(Boolean);
-}
-
-/** Robust JSON fetcher that surfaces HTML/500s clearly and retries with other bases */
-async function fetchJSONExpecting(url, opts = {}) {
-  const res = await fetch(url, opts);
-  const ct = res.headers.get("content-type") || "";
-  const body = await res.text();
+  const ct = (res.headers.get("content-type") || "").toLowerCase();
+  const raw = await res.text();
 
   if (!res.ok) {
-    throw new Error(`HTTP ${res.status} ${res.statusText} @ ${url}\n${body.slice(0, 400)}`);
+    throw new Error(`HTTP ${res.status} ${res.statusText} @ ${url}\n${raw.slice(0, 400)}`);
   }
-  if (!ct.toLowerCase().includes("application/json")) {
-    // If server sent HTML, likely the SPA index or a proxy miss.
-    if (/<\/html>/i.test(body) || /<!doctype html>/i.test(body)) {
-      throw new Error(`Expected JSON but got HTML (likely SPA fallback) @ ${url}\nCheck API base / proxy.`);
+  if (!ct.includes("application/json")) {
+    if (raw.includes("<!doctype html") || raw.includes("</html>")) {
+      throw new Error(
+        `Expected JSON but got HTML (SPA fallback) @ ${url}\n` +
+        `Likely wrong API base. Check VITE_API_BASE/REACT_APP_API_BASE or proxy.`
+      );
     }
-    throw new Error(`Expected JSON but got ${ct} @ ${url}\n${body.slice(0, 400)}`);
+    throw new Error(`Expected JSON but got ${ct || "unknown content-type"} @ ${url}\n${raw.slice(0, 200)}`);
   }
 
   try {
-    return JSON.parse(body);
+    return JSON.parse(raw);
   } catch (e) {
-    throw new Error(`Failed to parse JSON @ ${url}: ${e}\n${body.slice(0, 400)}`);
+    throw new Error(`Failed to parse JSON @ ${url}: ${e}\n${raw.slice(0, 200)}`);
   }
 }
 
-/** Try multiple bases until one returns JSON. Remember the working one in memory + sessionStorage. */
-async function fetchJSONWithBaseDiscovery(path, opts = {}, stickyBaseRef) {
-  // Allow absolute URLs
-  if (/^https?:\/\//i.test(path)) {
-    return fetchJSONExpecting(path, opts);
-  }
-
-  // If we already discovered a working base this session, use it first
-  const cached = stickyBaseRef.current || sessionStorage.getItem("__api_base__");
-  const bases = [];
-  if (cached) bases.push(cached);
-  for (const c of candidatesFromEnv()) {
-    if (!bases.includes(c)) bases.push(c);
-  }
-
-  const tried = [];
-  let lastErr = null;
-
-  for (const base of bases) {
-    const url = `${base}${path.startsWith("/") ? "" : "/"}${path}`;
-    try {
-      const data = await fetchJSONExpecting(url, {
-        credentials: "include",
-        headers: { Accept: "application/json", ...(opts.headers || {}) },
-        ...opts,
-      });
-      // Cache the working base
-      stickyBaseRef.current = base;
-      sessionStorage.setItem("__api_base__", base);
-      return data;
-    } catch (e) {
-      lastErr = e;
-      tried.push(`${base}${path}`);
-    }
-  }
-
-  const msg = `All API base candidates failed for ${path}.
-Tried:
-- ${tried.join("\n- ")}
-Last error: ${lastErr}`;
-  throw new Error(msg);
-}
+/* ─────────────────────────────────────────────────────────────── */
 
 const TABS = [
   { key: "profile",      label: "Profile",        icon: <FaUser /> },
@@ -135,22 +91,20 @@ export default function Settings({
   const [editMode, setEditMode] = useState(false);
   const [saving, setSaving] = useState(false);
   const [bootError, setBootError] = useState("");
-  const apiBaseRef = useRef(null); // sticky working base for this component
 
   useEffect(() => {
     if (initialTab && TABS.some(t => t.key === initialTab)) setTab(initialTab);
   }, [initialTab]);
 
-  /** Load profile from backend (GET /api/profile?email=...) */
+  /** Load profile (GET /api/profile?email=...) */
   const loadProfile = async () => {
     try {
       setBootError("");
       if (!user?.email) return;
-      const data = await fetchJSONWithBaseDiscovery(
-        `/api/profile?email=${encodeURIComponent(user.email)}`,
-        { method: "GET" },
-        apiBaseRef
-      );
+
+      const url = apiUrl(`profile?email=${encodeURIComponent(user.email)}`);
+      const data = await fetchJSON(url);
+
       setProfile(data);
       setForm({
         name: data.name || "",
@@ -163,21 +117,20 @@ export default function Settings({
       localStorage.setItem("user", JSON.stringify(data));
     } catch (err) {
       console.error("Failed to load profile:", err);
-      setBootError(String(err).slice(0, 600));
+      setBootError(String(err).slice(0, 800));
       setProfile(null);
     }
   };
 
-  // Load when user email is available
   useEffect(() => { loadProfile(); }, [user?.email]);
 
-  // If Stripe redirect param is present, refresh profile
+  // If Stripe redirected back with ?stripe_connected=1, refresh the user
   useEffect(() => {
     const params = new URLSearchParams(search);
     if (params.get("stripe_connected") === "1") loadProfile();
-  }, [search, user?.email]);
+  }, [search]);
 
-  /** Save profile. Uses your existing route /api/oauth/google/complete */
+  /** Save profile (POST /api/oauth/google/complete) */
   const handleSave = async () => {
     setSaving(true);
     try {
@@ -187,22 +140,22 @@ export default function Settings({
         logo: profile?.logo || "",
         businessType: form.type,
         businessName: form.business,
-        people: form.teamSize
+        people: form.teamSize,
       };
-      const data = await fetchJSONWithBaseDiscovery(
-        `/api/oauth/google/complete`,
-        {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(payload),
-        },
-        apiBaseRef
-      );
+
+      const url = apiUrl("oauth/google/complete");
+      const data = await fetchJSON(url, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+
       if (data.user) {
         await loadProfile();
         setEditMode(false);
       } else {
         console.error("Save error payload:", data);
+        alert("Profile save returned unexpected payload. See console.");
       }
     } catch (e) {
       console.error("Failed to save profile:", e);
@@ -216,7 +169,6 @@ export default function Settings({
   const settingsWidth = `calc(100vw - ${leftOffset}px)`;
   const MAX_W = 1000;
 
-  // Boot errors (like wrong API base / proxy) should render clearly
   if (!profile) {
     return (
       <div className="settings-layout" style={{ left: leftOffset, width: settingsWidth }}>
@@ -320,7 +272,7 @@ export default function Settings({
 
         {/* TEAM */}
         {tab === "team" && (
-          <TeamTab ownerEmail={profile.email} maxWidth={MAX_W} apiBaseRef={apiBaseRef} />
+          <TeamTab ownerEmail={profile.email} maxWidth={MAX_W} />
         )}
 
         {/* INTEGRATIONS */}
@@ -370,7 +322,7 @@ export default function Settings({
 /* ─────────────────────────────────────────────────────────────── */
 /* Team tab                                                        */
 /* ─────────────────────────────────────────────────────────────── */
-function TeamTab({ ownerEmail, maxWidth, apiBaseRef }) {
+function TeamTab({ ownerEmail, maxWidth }) {
   const [members, setMembers] = useState([]);
   const [search, setSearch] = useState("");
   const [loading, setLoading] = useState(true);
@@ -382,17 +334,14 @@ function TeamTab({ ownerEmail, maxWidth, apiBaseRef }) {
     if (!ownerEmail) return;
     setLoading(true);
     try {
-      const data = await fetchJSONWithBaseDiscovery(
-        `/api/team/members`,
-        {
-          headers: { "X-User-Email": ownerEmail },
-        },
-        apiBaseRef
-      );
+      const url = apiUrl("team/members");
+      const data = await fetchJSON(url, {
+        headers: { "X-User-Email": ownerEmail },
+      });
       if (data.members) setMembers(data.members);
     } catch (e) {
       console.error("Load members failed:", e);
-      alert("Could not load team members. Check API base / backend routes.");
+      alert("Could not load team members. Check backend routes.");
     } finally {
       setLoading(false);
     }
@@ -414,15 +363,15 @@ function TeamTab({ ownerEmail, maxWidth, apiBaseRef }) {
     setBusyEmail(email);
     setMembers(ms => ms.map(m => (m.email === email ? { ...m, role } : m)));
     try {
-      await fetchJSONWithBaseDiscovery(
-        `/api/team/role`,
-        {
-          method: "POST",
-          headers: { "Content-Type": "application/json", "X-User-Email": ownerEmail },
-          body: JSON.stringify({ email, role }),
+      const url = apiUrl("team/role");
+      await fetchJSON(url, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "X-User-Email": ownerEmail,
         },
-        apiBaseRef
-      );
+        body: JSON.stringify({ email, role }),
+      });
     } catch (e) {
       alert("Could not change role. Make sure /api/team/role exists on backend.");
       loadMembers();
@@ -437,15 +386,15 @@ function TeamTab({ ownerEmail, maxWidth, apiBaseRef }) {
     const prev = members;
     setMembers(ms => ms.filter(m => m.email !== email));
     try {
-      await fetchJSONWithBaseDiscovery(
-        `/api/team/remove`,
-        {
-          method: "POST",
-          headers: { "Content-Type": "application/json", "X-User-Email": ownerEmail },
-          body: JSON.stringify({ email }),
+      const url = apiUrl("team/remove");
+      await fetchJSON(url, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "X-User-Email": ownerEmail,
         },
-        apiBaseRef
-      );
+        body: JSON.stringify({ email }),
+      });
     } catch (e) {
       alert("Could not remove. Make sure /api/team/remove exists on backend.");
       setMembers(prev);
