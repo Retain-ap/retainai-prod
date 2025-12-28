@@ -3,7 +3,14 @@ import React, { useState, useEffect, useMemo } from "react";
 import { useLocation } from "react-router-dom";
 import GoogleCalendarEvents from "./GoogleCalendarEvents";
 import StripeConnectCard from "./StripeConnectCard";
-import { FaUser, FaPlug, FaQuestionCircle, FaUsers, FaSearch, FaTrash } from "react-icons/fa";
+import {
+  FaUser,
+  FaPlug,
+  FaQuestionCircle,
+  FaUsers,
+  FaSearch,
+  FaTrash,
+} from "react-icons/fa";
 import { SiInstagram } from "react-icons/si";
 import "./settings.css";
 
@@ -17,13 +24,18 @@ import "./settings.css";
    Cache winning origin in sessionStorage.
    ─────────────────────────────────────────────────────────────── */
 const ENV_BASE =
-  (typeof import.meta !== "undefined" && import.meta.env && import.meta.env.VITE_API_BASE) ||
-  (typeof process !== "undefined" && process.env && process.env.REACT_APP_API_BASE) ||
+  (typeof import.meta !== "undefined" &&
+    import.meta.env &&
+    import.meta.env.VITE_API_BASE) ||
+  (typeof process !== "undefined" &&
+    process.env &&
+    process.env.REACT_APP_API_BASE) ||
   "";
 
 function cleanOrigin(s) {
   return (s || "").trim().replace(/\/+$/g, "").replace(/\/api$/i, "");
 }
+
 function siblingRenderOrigin() {
   try {
     const o = window.location.origin;
@@ -34,39 +46,75 @@ function siblingRenderOrigin() {
     return "";
   }
 }
+
 async function probe(origin) {
   if (!origin) return null;
-  const url = `${origin.replace(/\/+$/,"")}/api/health`;
+  const url = `${origin.replace(/\/+$/, "")}/api/health`;
   try {
     const r = await fetch(url, { credentials: "include" });
     const ct = (r.headers.get("content-type") || "").toLowerCase();
     if (!r.ok || !ct.includes("application/json")) return null;
     await r.json();
-    return origin.replace(/\/+$/,"");
+    return origin.replace(/\/+$/, "");
   } catch {
     return null;
   }
 }
+
 async function getWorkingApiOrigin() {
-  const cached = sessionStorage.getItem("__api_origin__");
-  if (cached) return cached;
+  try {
+    const cached = sessionStorage.getItem("__api_origin__");
+    if (cached) return cached;
+  } catch {
+    // ignore sessionStorage issues
+  }
+
   const candidates = [
     cleanOrigin(ENV_BASE),
-    (() => { try { return window.location.origin; } catch { return ""; } })(),
+    (() => {
+      try {
+        return window.location.origin;
+      } catch {
+        return "";
+      }
+    })(),
     siblingRenderOrigin(),
   ].filter(Boolean);
+
   for (const c of candidates) {
     const ok = await probe(c);
-    if (ok) { sessionStorage.setItem("__api_origin__", ok); return ok; }
+    if (ok) {
+      try {
+        sessionStorage.setItem("__api_origin__", ok);
+      } catch {
+        // ignore
+      }
+      return ok;
+    }
   }
-  const fallback = (() => { try { return window.location.origin; } catch { return ""; } })();
-  sessionStorage.setItem("__api_origin__", fallback);
+
+  const fallback = (() => {
+    try {
+      return window.location.origin;
+    } catch {
+      return "";
+    }
+  })();
+  try {
+    sessionStorage.setItem("__api_origin__", fallback);
+  } catch {
+    // ignore
+  }
   return fallback;
 }
+
 async function apiFetchJSON(path, opts = {}) {
   const origin = await getWorkingApiOrigin();
+
+  // If someone ever passes a full URL, respect it.
+  const isAbsolute = /^https?:\/\//i.test(path);
   const p = String(path).replace(/^\/+/, "");
-  const url = `${origin}/api/${p}`;
+  const url = isAbsolute ? path : `${origin}/api/${p}`;
   return fetchJSON(url, opts);
 }
 
@@ -76,31 +124,82 @@ async function apiFetchJSON(path, opts = {}) {
 async function fetchJSON(url, opts = {}) {
   const res = await fetch(url, {
     credentials: "include",
-    headers: { Accept: "application/json", ...(opts.headers || {}) },
+    headers: {
+      Accept: "application/json",
+      ...(opts.headers || {}),
+    },
     ...opts,
   });
+
   const ct = (res.headers.get("content-type") || "").toLowerCase();
   const raw = await res.text();
-  if (!res.ok) throw new Error(`HTTP ${res.status} ${res.statusText} @ ${url}\n${raw.slice(0, 400)}`);
+
+  if (!res.ok) {
+    throw new Error(
+      `HTTP ${res.status} ${res.statusText} @ ${url}\n${raw.slice(0, 400)}`
+    );
+  }
+
   if (!ct.includes("application/json")) {
-    if (raw.includes("<!doctype html") || raw.includes("</html>")) {
+    if (raw.toLowerCase().includes("<!doctype html") || raw.includes("</html>")) {
       throw new Error(
         `Expected JSON but got HTML (SPA fallback) @ ${url}\nLikely wrong API base.`
       );
     }
-    throw new Error(`Expected JSON but got ${ct || "unknown content-type"} @ ${url}\n${raw.slice(0, 200)}`);
+    throw new Error(
+      `Expected JSON but got ${ct || "unknown content-type"} @ ${url}\n${raw.slice(
+        0,
+        200
+      )}`
+    );
   }
-  try { return JSON.parse(raw); }
-  catch (e) { throw new Error(`Failed to parse JSON @ ${url}: ${e}\n${raw.slice(0, 200)}`); }
+
+  try {
+    return JSON.parse(raw);
+  } catch (e) {
+    throw new Error(
+      `Failed to parse JSON @ ${url}: ${e}\n${raw.slice(0, 200)}`
+    );
+  }
 }
 
-/* ─────────────────────────────────────────────────────────────── */
+/* ───────────────────────────────────────────────────────────────
+   Helpers
+   ─────────────────────────────────────────────────────────────── */
+
+// Normalize whatever the backend returns for profile:
+//   { name, email, ... }
+//   OR { profile: { ... } }
+//   OR { user: { ... } }
+function normalizeProfileResponse(raw, fallbackEmail) {
+  const base =
+    (raw && (raw.profile || raw.user || raw)) ||
+    {};
+
+  const out = {
+    ...base,
+  };
+
+  if (!out.email && fallbackEmail) {
+    out.email = fallbackEmail;
+  }
+
+  // Friendly compatibility: some backends call it businessName vs business
+  if (!out.business && out.businessName) {
+    out.business = out.businessName;
+  }
+  if (!out.businessName && out.business) {
+    out.businessName = out.business;
+  }
+
+  return out;
+}
 
 const TABS = [
-  { key: "profile",      label: "Profile",        icon: <FaUser /> },
-  { key: "team",         label: "Team",           icon: <FaUsers /> },
-  { key: "integrations", label: "Integrations",   icon: <FaPlug /> },
-  { key: "help",         label: "Help & Support", icon: <FaQuestionCircle /> },
+  { key: "profile", label: "Profile", icon: <FaUser /> },
+  { key: "team", label: "Team", icon: <FaUsers /> },
+  { key: "integrations", label: "Integrations", icon: <FaPlug /> },
+  { key: "help", label: "Help & Support", icon: <FaQuestionCircle /> },
 ];
 
 export default function Settings({
@@ -113,47 +212,68 @@ export default function Settings({
   initialTab,
 }) {
   const { search } = useLocation();
+
   const [tab, setTab] = useState(initialTab || "profile");
   const [profile, setProfile] = useState(null);
   const [form, setForm] = useState({
-    name: "", email: "", business: "", type: "", location: "", teamSize: ""
+    name: "",
+    email: "",
+    business: "",
+    type: "",
+    location: "",
+    teamSize: "",
   });
   const [editMode, setEditMode] = useState(false);
   const [saving, setSaving] = useState(false);
   const [bootError, setBootError] = useState("");
 
   useEffect(() => {
-    if (initialTab && TABS.some(t => t.key === initialTab)) setTab(initialTab);
+    if (initialTab && TABS.some((t) => t.key === initialTab)) {
+      setTab(initialTab);
+    }
   }, [initialTab]);
 
-  // Load profile
+  // Load profile from backend
   const loadProfile = async () => {
     try {
       setBootError("");
       if (!user?.email) return;
-      const data = await apiFetchJSON(`profile?email=${encodeURIComponent(user.email)}`);
-      setProfile(data);
+
+      const raw = await apiFetchJSON(
+        `profile?email=${encodeURIComponent(user.email)}`
+      );
+      const prof = normalizeProfileResponse(raw, user.email);
+
+      setProfile(prof);
       setForm({
-        name: data.name || "",
-        email: data.email || "",
-        business: data.business || data.businessName || "",
-        type: data.businessType || "",
-        location: data.location || "",
-        teamSize: data.people || data.teamSize || ""
+        name: prof.name || "",
+        email: prof.email || "",
+        business: prof.business || prof.businessName || "",
+        type: prof.businessType || "",
+        location: prof.location || "",
+        teamSize: prof.people || prof.teamSize || "",
       });
-      localStorage.setItem("user", JSON.stringify(data));
+
+      localStorage.setItem("user", JSON.stringify(prof));
     } catch (err) {
       console.error("Failed to load profile:", err);
       setBootError(String(err).slice(0, 800));
       setProfile(null);
     }
   };
-  useEffect(() => { loadProfile(); }, [user?.email]);
+
+  useEffect(() => {
+    loadProfile();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [user?.email]);
 
   // Stripe callback refresh
   useEffect(() => {
     const params = new URLSearchParams(search);
-    if (params.get("stripe_connected") === "1") loadProfile();
+    if (params.get("stripe_connected") === "1") {
+      loadProfile();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [search]);
 
   // Save profile
@@ -165,17 +285,31 @@ export default function Settings({
         name: form.name,
         logo: profile?.logo || "",
         businessType: form.type,
+        // send both keys so backend can pick either
+        business: form.business,
         businessName: form.business,
         location: form.location,
         people: form.teamSize,
         teamSize: form.teamSize,
       };
-      const data = await apiFetchJSON("profile", {
+
+      const raw = await apiFetchJSON("profile", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(payload),
       });
-      setProfile(data);
+
+      const prof = normalizeProfileResponse(raw, form.email);
+      setProfile(prof);
+      setForm((f) => ({
+        ...f,
+        name: prof.name || f.name,
+        email: prof.email || f.email,
+        business: prof.business || prof.businessName || f.business,
+        type: prof.businessType || f.type,
+        location: prof.location || f.location,
+        teamSize: prof.people || prof.teamSize || f.teamSize,
+      }));
       setEditMode(false);
     } catch (e) {
       console.error("Failed to save profile:", e);
@@ -191,7 +325,10 @@ export default function Settings({
 
   if (!profile) {
     return (
-      <div className="settings-layout" style={{ left: leftOffset, width: settingsWidth }}>
+      <div
+        className="settings-layout"
+        style={{ left: leftOffset, width: settingsWidth }}
+      >
         <div style={{ padding: 16 }}>
           <div style={{ fontWeight: 800, marginBottom: 8 }}>Loading…</div>
           {bootError && (
@@ -208,7 +345,7 @@ export default function Settings({
                 maxWidth: 800,
               }}
             >
-{bootError}
+              {bootError}
             </pre>
           )}
         </div>
@@ -217,13 +354,19 @@ export default function Settings({
   }
 
   return (
-    <div className="settings-layout" style={{ left: leftOffset, width: settingsWidth }}>
+    <div
+      className="settings-layout"
+      style={{ left: leftOffset, width: settingsWidth }}
+    >
       <nav className="settings-nav">
-        {TABS.map(t => (
+        {TABS.map((t) => (
           <button
             key={t.key}
             className={tab === t.key ? "active" : ""}
-            onClick={() => { setTab(t.key); setEditMode(false); }}
+            onClick={() => {
+              setTab(t.key);
+              setEditMode(false);
+            }}
           >
             <span className="settings-icon">{t.icon}</span>
             <span className="settings-label">{t.label}</span>
@@ -234,20 +377,27 @@ export default function Settings({
       <main className="settings-content fade-in">
         {/* PROFILE */}
         {tab === "profile" && (
-          <div className="profile-tab" style={{ maxWidth: MAX_W, margin: "0 auto" }}>
+          <div
+            className="profile-tab"
+            style={{ maxWidth: MAX_W, margin: "0 auto" }}
+          >
             <h2>Profile</h2>
             <div className="profile-card">
               <div className="avatar">
-                {profile.logo ? <img src={profile.logo} alt="logo" /> : (profile.name?.[0]?.toUpperCase() || "?")}
+                {profile.logo ? (
+                  <img src={profile.logo} alt="logo" />
+                ) : (
+                  profile.name?.[0]?.toUpperCase() || "?"
+                )}
               </div>
               <div className="profile-fields">
                 {[
-                  { label: "Name",      name: "name"     },
-                  { label: "Email",     name: "email"    },
-                  { label: "Business",  name: "business" },
-                  { label: "Type",      name: "type"     },
-                  { label: "Location",  name: "location" },
-                  { label: "Team Size", name: "teamSize" }
+                  { label: "Name", name: "name" },
+                  { label: "Email", name: "email" },
+                  { label: "Business", name: "business" },
+                  { label: "Type", name: "type" },
+                  { label: "Location", name: "location" },
+                  { label: "Team Size", name: "teamSize" },
                 ].map(({ label, name }) => (
                   <div key={name} className="field-row">
                     <div className="field-label">{label}</div>
@@ -256,11 +406,15 @@ export default function Settings({
                         className="field-input"
                         type="text"
                         value={form[name]}
-                        onChange={e => setForm(f => ({ ...f, [name]: e.target.value }))}
+                        onChange={(e) =>
+                          setForm((f) => ({ ...f, [name]: e.target.value }))
+                        }
                         disabled={name === "email"}
                       />
                     ) : (
-                      <div className="field-value">{form[name] || "—"}</div>
+                      <div className="field-value">
+                        {form[name] || "—"}
+                      </div>
                     )}
                   </div>
                 ))}
@@ -270,17 +424,27 @@ export default function Settings({
                     <>
                       <button
                         className="btn btn-cancel"
-                        onClick={() => { setEditMode(false); loadProfile(); }}
+                        onClick={() => {
+                          setEditMode(false);
+                          loadProfile();
+                        }}
                         disabled={saving}
                       >
                         Cancel
                       </button>
-                      <button className="btn btn-save" onClick={handleSave} disabled={saving}>
+                      <button
+                        className="btn btn-save"
+                        onClick={handleSave}
+                        disabled={saving}
+                      >
                         {saving ? "Saving…" : "Save"}
                       </button>
                     </>
                   ) : (
-                    <button className="btn btn-edit" onClick={() => setEditMode(true)}>
+                    <button
+                      className="btn btn-edit"
+                      onClick={() => setEditMode(true)}
+                    >
                       Edit Profile
                     </button>
                   )}
@@ -299,7 +463,10 @@ export default function Settings({
         {tab === "integrations" && (
           <div style={{ maxWidth: MAX_W, margin: "0 auto" }}>
             <h2>Integrations</h2>
-            <div className="integration-row" style={{ justifyContent: "center" }}>
+            <div
+              className="integration-row"
+              style={{ justifyContent: "center" }}
+            >
               <div className="integration-card">
                 <GoogleCalendarEvents
                   user={profile}
@@ -327,10 +494,16 @@ export default function Settings({
             <h2>Help & Support</h2>
             <p className="help-line">
               If you need anything, email{" "}
-              <a href="mailto:owner@retainai.ca">owner@retainai.ca</a> or see our{" "}
-              <a href="https://docs.retainai.ca" target="_blank" rel="noreferrer">
+              <a href="mailto:owner@retainai.ca">owner@retainai.ca</a> or see
+              our{" "}
+              <a
+                href="https://docs.retainai.ca"
+                target="_blank"
+                rel="noreferrer"
+              >
                 documentation
-              </a>.
+              </a>
+              .
             </p>
           </div>
         )}
@@ -354,9 +527,15 @@ function TeamTab({ ownerEmail, maxWidth }) {
     if (!ownerEmail) return;
     setLoading(true);
     try {
-      // no custom headers → avoid CORS preflight issues
-      const data = await apiFetchJSON(`team/members?ownerEmail=${encodeURIComponent(ownerEmail)}`);
-      if (data.members) setMembers(data.members);
+      const data = await apiFetchJSON(
+        `team/members?ownerEmail=${encodeURIComponent(ownerEmail)}`
+      );
+      if (Array.isArray(data.members)) {
+        setMembers(data.members);
+      } else if (Array.isArray(data)) {
+        // defensive fallback if backend ever returns a bare array
+        setMembers(data);
+      }
     } catch (e) {
       console.error("Load members failed:", e);
       alert("Could not load team members. Check backend routes.");
@@ -365,30 +544,36 @@ function TeamTab({ ownerEmail, maxWidth }) {
     }
   };
 
-  useEffect(() => { if (ownerEmail) loadMembers(); }, [ownerEmail]);
+  useEffect(() => {
+    if (ownerEmail) loadMembers();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [ownerEmail]);
 
   const filtered = useMemo(() => {
     const q = search.trim().toLowerCase();
     if (!q) return members;
-    return members.filter(m =>
-      (m.name || "").toLowerCase().includes(q) ||
-      (m.email || "").toLowerCase().includes(q) ||
-      (m.role || "").toLowerCase().includes(q)
+    return members.filter(
+      (m) =>
+        (m.name || "").toLowerCase().includes(q) ||
+        (m.email || "").toLowerCase().includes(q) ||
+        (m.role || "").toLowerCase().includes(q)
     );
   }, [members, search]);
 
   const changeRole = async (email, role) => {
     setBusyEmail(email);
-    setMembers(ms => ms.map(m => (m.email === email ? { ...m, role } : m)));
+    setMembers((ms) =>
+      ms.map((m) => (m.email === email ? { ...m, role } : m))
+    );
     try {
       await apiFetchJSON("team/role", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        // include ownerEmail in the body instead of a custom header
+        // include ownerEmail in the body instead of custom auth headers
         body: JSON.stringify({ email, role, ownerEmail }),
       });
     } catch (e) {
-      alert("Could not change role. Make sure /api/team/role exists on backend.");
+      alert("Could not change role. Make sure /api/team/role exists.");
       loadMembers();
     } finally {
       setBusyEmail("");
@@ -399,7 +584,7 @@ function TeamTab({ ownerEmail, maxWidth }) {
     if (!window.confirm("Remove this member?")) return;
     setBusyEmail(email);
     const prev = members;
-    setMembers(ms => ms.filter(m => m.email !== email));
+    setMembers((ms) => ms.filter((m) => m.email !== email));
     try {
       await apiFetchJSON("team/remove", {
         method: "POST",
@@ -407,7 +592,7 @@ function TeamTab({ ownerEmail, maxWidth }) {
         body: JSON.stringify({ email, ownerEmail }),
       });
     } catch (e) {
-      alert("Could not remove. Make sure /api/team/remove exists on backend.");
+      alert("Could not remove. Make sure /api/team/remove exists.");
       setMembers(prev);
     } finally {
       setBusyEmail("");
@@ -426,26 +611,43 @@ function TeamTab({ ownerEmail, maxWidth }) {
           gap: 12,
           margin: "0 auto 14px",
           maxWidth: maxWidth,
-          width: "100%"
+          width: "100%",
         }}
       >
-        <div style={{
-          display: "flex", alignItems: "center", gap: 8,
-          background: "#232325", borderRadius: 10,
-          padding: "10px 12px", border: "1px solid #2c2c2f", flex: 1
-        }}>
+        <div
+          style={{
+            display: "flex",
+            alignItems: "center",
+            gap: 8,
+            background: "#232325",
+            borderRadius: 10,
+            padding: "10px 12px",
+            border: "1px solid #2c2c2f",
+            flex: 1,
+          }}
+        >
           <FaSearch style={{ color: "#aaa" }} />
           <input
             placeholder="Search by name, email, or role…"
             value={search}
-            onChange={e => setSearch(e.target.value)}
-            style={{ background: "transparent", border: "none", outline: "none", color: "#fff", width: "100%" }}
+            onChange={(e) => setSearch(e.target.value)}
+            style={{
+              background: "transparent",
+              border: "none",
+              outline: "none",
+              color: "#fff",
+              width: "100%",
+            }}
           />
         </div>
         <button
           className="btn"
           onClick={loadMembers}
-          style={{ background: "#232323", color: "#fff", border: "1px solid #444" }}
+          style={{
+            background: "#232323",
+            color: "#fff",
+            border: "1px solid #444",
+          }}
         >
           Refresh
         </button>
@@ -461,7 +663,7 @@ function TeamTab({ ownerEmail, maxWidth }) {
           boxShadow: "0 2px 12px #0002",
           maxWidth: maxWidth,
           width: "100%",
-          margin: "0 auto"
+          margin: "0 auto",
         }}
       >
         <div
@@ -472,7 +674,7 @@ function TeamTab({ ownerEmail, maxWidth }) {
             padding: "14px 16px",
             background: "#1f1f23",
             color: "#bbb",
-            fontWeight: 800
+            fontWeight: 800,
           }}
         >
           <div>Name</div>
@@ -487,7 +689,7 @@ function TeamTab({ ownerEmail, maxWidth }) {
         ) : filtered.length === 0 ? (
           <div style={{ padding: 18, color: "#bbb" }}>No members found.</div>
         ) : (
-          filtered.map(m => (
+          filtered.map((m) => (
             <div
               key={m.email}
               style={{
@@ -496,16 +698,18 @@ function TeamTab({ ownerEmail, maxWidth }) {
                 gap: 8,
                 padding: "14px 16px",
                 borderTop: "1px solid #2b2b2f",
-                alignItems: "center"
+                alignItems: "center",
               }}
             >
-              <div style={{ color: "#fff", fontWeight: 700 }}>{m.name || "—"}</div>
+              <div style={{ color: "#fff", fontWeight: 700 }}>
+                {m.name || "—"}
+              </div>
               <div style={{ color: "#ddd" }}>{m.email}</div>
               <div>
                 <select
                   disabled={busyEmail === m.email || m.email === ownerEmail}
                   value={m.role || "member"}
-                  onChange={e => changeRole(m.email, e.target.value)}
+                  onChange={(e) => changeRole(m.email, e.target.value)}
                   style={{
                     background: "#18181b",
                     color: "#fff",
@@ -513,16 +717,27 @@ function TeamTab({ ownerEmail, maxWidth }) {
                     borderRadius: 8,
                     padding: "8px 10px",
                     fontWeight: 700,
-                    minWidth: 120
+                    minWidth: 120,
                   }}
                 >
-                  {roles.map(r => <option key={r} value={r}>{r}</option>)}
+                  {roles.map((r) => (
+                    <option key={r} value={r}>
+                      {r}
+                    </option>
+                  ))}
                 </select>
               </div>
               <div style={{ color: "#bbb" }}>
-                {m.last_login ? new Date(m.last_login).toLocaleString() : "—"}
+                {m.last_login
+                  ? new Date(m.last_login).toLocaleString()
+                  : "—"}
               </div>
-              <div style={{ display: "flex", justifyContent: "flex-end" }}>
+              <div
+                style={{
+                  display: "flex",
+                  justifyContent: "flex-end",
+                }}
+              >
                 <button
                   className="btn"
                   title="Remove"
@@ -534,7 +749,7 @@ function TeamTab({ ownerEmail, maxWidth }) {
                     border: "1px solid #3a3a3a",
                     display: "flex",
                     alignItems: "center",
-                    gap: 8
+                    gap: 8,
                   }}
                 >
                   <FaTrash />
