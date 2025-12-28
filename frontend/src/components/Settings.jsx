@@ -7,6 +7,14 @@ import { FaUser, FaPlug, FaQuestionCircle, FaUsers, FaSearch, FaTrash } from "re
 import { SiInstagram } from "react-icons/si";
 import "./settings.css";
 
+// top of Settings.jsx
+const RAW_BASE =
+  (typeof import.meta !== "undefined" && import.meta.env && import.meta.env.VITE_API_BASE) ||
+  (typeof process !== "undefined" && process.env && process.env.REACT_APP_API_BASE) ||
+  "";
+
+const API_BASE = RAW_BASE.replace(/\/+$/, ""); // no trailing slash
+
 /* ───────────────────────────────────────────────────────────────
    API base auto-detection (prod safe)
    Tries envs first, then same-origin /api variations.
