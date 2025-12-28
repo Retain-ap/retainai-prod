@@ -221,29 +221,56 @@ def _normalize_email(e: str) -> str:
     return (e or "").strip().lower()
 
 def _to_dict(obj):
-    """Coerce SQLAlchemy rows / tuples / namedtuples / objects into a plain dict."""
+    """Coerce storage return values into a plain dict.
+    Handles (Response, status), Response, SQLAlchemy Row, namedtuple, mapping, object.
+    """
     if obj is None:
         return {}
-    # If storage returns (record, created_flag) or similar, take first
+
+    # If storage returned (something, status) or similar, peel layers
     if isinstance(obj, tuple) and obj:
-        obj = obj[0]
-    # SQLAlchemy Row/RowMapping -> dict() works
+        # Prefer the first element that can become a dict/json
+        for part in obj:
+            d = _to_dict(part)
+            if d:
+                return d
+        return {}
+
+    # If someone returned a Flask Response, try to parse JSON body
+    if isinstance(obj, FlaskResponse):
+        try:
+            j = obj.get_json(silent=True)
+            if isinstance(j, dict):
+                return j
+        except Exception:
+            pass
+        # No JSON body → ignore Response internals
+        return {}
+
+    # SQLAlchemy Row/RowMapping
     try:
         return dict(obj)
     except Exception:
         pass
+
     # namedtuple
     if hasattr(obj, "_asdict"):
-        return dict(obj._asdict())
-    # plain mapping
+        try:
+            return dict(obj._asdict())
+        except Exception:
+            return {}
+
+    # mapping
     if isinstance(obj, dict):
         return dict(obj)
+
     # object with __dict__
     if hasattr(obj, "__dict__"):
         try:
             return {k: v for k, v in obj.__dict__.items()}
         except Exception:
             return {}
+
     return {}
 
 # keys we never want to persist/return
