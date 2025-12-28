@@ -140,23 +140,21 @@ export default function Settings({
         logo: profile?.logo || "",
         businessType: form.type,
         businessName: form.business,
+        location: form.location,
         people: form.teamSize,
+        teamSize: form.teamSize,
       };
-
-      const url = apiUrl("oauth/google/complete");
-      const data = await fetchJSON(url, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(payload),
-      });
-
-      if (data.user) {
-        await loadProfile();
-        setEditMode(false);
-      } else {
-        console.error("Save error payload:", data);
-        alert("Profile save returned unexpected payload. See console.");
-      }
+      const data = await fetchJSONWithBaseDiscovery(
+        `/api/profile`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(payload),
+        },
+        apiBaseRef
+      );
+      setProfile(data);
+      setEditMode(false);
     } catch (e) {
       console.error("Failed to save profile:", e);
       alert("Could not save profile. See console for details.");
