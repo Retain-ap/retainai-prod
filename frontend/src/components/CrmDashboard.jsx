@@ -18,6 +18,9 @@ import { useSettings } from "./SettingsContext";
 import Automations from "./Automations";
 import InviteTeamModal from "./InviteTeamModal";
 
+// ✅ NEW: one source of truth for backend API URLs
+import { apiUrl } from "../apiBase";
+
 const DEFAULT_TAGS = [
   "VIP","New","Repeat","Upsell","Needs Attention","Appointment Set",
   "Waiting on Reply","Invoice Sent","Birthday","Long Term","Happy","Upset"
@@ -122,12 +125,16 @@ function CrmDashboard() {
   const [quickAddDate, setQuickAddDate] = useState(null);
   const [showInviteModal, setShowInviteModal] = useState(false);
 
-  // Load leads
+  // ✅ Load leads (fixed: always hit backend origin via apiUrl)
   useEffect(() => {
     if (user && user.email) {
       setLoadingLeads(true);
-      fetch(`/api/leads/${encodeURIComponent(user.email)}`)
-        .then(res => res.json())
+
+      fetch(apiUrl(`leads/${encodeURIComponent(user.email)}`), { credentials: "include" })
+        .then(async (res) => {
+          if (!res.ok) throw new Error(`HTTP ${res.status}`);
+          return res.json();
+        })
         .then(data => {
           const ls = Array.isArray(data.leads) ? data.leads : [];
           setLeads(ls);
@@ -142,13 +149,15 @@ function CrmDashboard() {
     }
   }, [user, userTags]);
 
+  // ✅ Save leads (fixed)
   const saveLeadsToBackend = (newLeads) => {
     if (user && user.email) {
-      fetch(`/api/leads/${encodeURIComponent(user.email)}`, {
+      fetch(apiUrl(`leads/${encodeURIComponent(user.email)}`), {
         method: "POST",
+        credentials: "include",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ leads: newLeads }),
-      });
+      }).catch(() => {});
       localStorage.setItem("leads", JSON.stringify(newLeads));
       setTags(extractTags(newLeads, userTags));
     }
@@ -161,7 +170,7 @@ function CrmDashboard() {
       const match = (a, b) =>
         String(a?.id ?? a?.email) === String(b?.id ?? b?.email);
 
-    const exists = prev.some(l => match(l, updated));
+      const exists = prev.some(l => match(l, updated));
       const next = exists
         ? prev.map(l => (match(l, updated) ? { ...l, ...updated } : l))
         : [updated, ...prev];
@@ -217,15 +226,23 @@ function CrmDashboard() {
     saveLeadsToBackend(newLeads);
   };
 
+  // ✅ Lead contacted (fixed)
   const handleLeadContacted = async (lead) => {
     if (!user || !user.email || !lead.id) return;
-    await fetch(`/api/leads/${encodeURIComponent(user.email)}/${lead.id}/contacted`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" }
-    });
-    fetch(`/api/leads/${encodeURIComponent(user.email)}`)
+
+    await fetch(
+      apiUrl(`leads/${encodeURIComponent(user.email)}/${lead.id}/contacted`),
+      {
+        method: "POST",
+        credentials: "include",
+        headers: { "Content-Type": "application/json" }
+      }
+    ).catch(() => {});
+
+    fetch(apiUrl(`leads/${encodeURIComponent(user.email)}`), { credentials: "include" })
       .then(res => res.json())
-      .then(data => setLeads(Array.isArray(data.leads) ? data.leads : []));
+      .then(data => setLeads(Array.isArray(data.leads) ? data.leads : []))
+      .catch(() => {});
   };
 
   const handleLogout = () => {
@@ -251,7 +268,13 @@ function CrmDashboard() {
     setSection("messages");
   }
 
-  async function handleSendAIPromptEmail(lead, aiResponse, aiSubject = "Message from RetainAI", promptType = "") {
+  // ✅ Send AI prompt email (fixed)
+  async function handleSendAIPromptEmail(
+    lead,
+    aiResponse,
+    aiSubject = "Message from RetainAI",
+    promptType = ""
+  ) {
     if (!lead || !lead.email || !aiResponse) {
       alert("Missing recipient or message");
       return;
@@ -265,8 +288,9 @@ function CrmDashboard() {
       promptType: promptType || "",
     };
     try {
-      const res = await fetch("/api/send-ai-message", {
+      const res = await fetch(apiUrl("send-ai-message"), {
         method: "POST",
+        credentials: "include",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(body)
       });
@@ -274,7 +298,8 @@ function CrmDashboard() {
         setHighlightLeadIds([lead.id]);
         alert("AI prompt email sent!");
       } else {
-        const err = await res.json();
+        let err = {};
+        try { err = await res.json(); } catch { err = { error: await res.text().catch(() => "") }; }
         alert("Failed to send: " + (err.error || "Unknown error"));
       }
     } catch (e) {
@@ -282,9 +307,14 @@ function CrmDashboard() {
     }
   }
 
+  // ✅ Refresh user (fixed)
   const handleRefreshUser = useCallback(async () => {
     if (!user || !user.email) return;
-    const res = await fetch(`/api/user/${encodeURIComponent(user.email)}`);
+
+    const res = await fetch(apiUrl(`user/${encodeURIComponent(user.email)}`), {
+      credentials: "include"
+    });
+
     if (res.ok) {
       const data = await res.json();
       setUserState(prev =>
@@ -311,11 +341,13 @@ function CrmDashboard() {
   const crmAppointments = getAppointmentsFromLeads(leads);
   const SIDEBAR_WIDTH = sidebarCollapsed ? 60 : 245;
 
-  // --- Check if Google Calendar is connected BEFORE fetching events
+  // ✅ Check Google connection (fixed)
   const checkGoogleConnection = useCallback(async () => {
     if (!user || !user.email) return false;
     try {
-      const res = await fetch(`/api/google/status/${encodeURIComponent(user.email)}`);
+      const res = await fetch(apiUrl(`google/status/${encodeURIComponent(user.email)}`), {
+        credentials: "include"
+      });
       if (!res.ok) {
         setGcalConnected(false);
         setGcalStatus("unavailable");
@@ -338,10 +370,13 @@ function CrmDashboard() {
     setSection("settings");
   }, []);
 
+  // ✅ Fetch Google events (fixed)
   const getGoogleEvents = useCallback(async () => {
     if (!user || !user.email) return;
     try {
-      const res = await fetch(`/api/google/events/${encodeURIComponent(user.email)}`);
+      const res = await fetch(apiUrl(`google/events/${encodeURIComponent(user.email)}`), {
+        credentials: "include"
+      });
       if (!res.ok) {
         let msg = "";
         try {
@@ -350,7 +385,6 @@ function CrmDashboard() {
         } catch {
           try { msg = await res.text(); } catch { msg = ""; }
         }
-        // If unauthorized, mark as such and don't keep retrying blindly
         if (res.status === 401) {
           setGcalStatus("unauthorized");
           setGoogleEvents([]);
