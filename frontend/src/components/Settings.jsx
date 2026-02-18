@@ -20,8 +20,15 @@ import "./settings.css";
      1) ENV (VITE_API_BASE or REACT_APP_API_BASE) without trailing /api
      2) Same-origin (for dev/proxy)
      3) Render “sibling” origin by stripping "-<digits>-frontend" or "-frontend"
+
    We verify each candidate with GET <origin>/api/health expecting JSON.
    Cache winning origin in sessionStorage.
+
+   IMPORTANT HARDENING:
+   - Health probe uses credentials: "omit" to avoid CORS/credentials failures.
+   - If ENV is present, NEVER cache the frontend origin as fallback.
+   - If ENV is present and probing fails, still return ENV as final fallback
+     (because in prod you explicitly know where the API is).
    ─────────────────────────────────────────────────────────────── */
 const ENV_BASE =
   (typeof import.meta !== "undefined" &&
@@ -51,7 +58,8 @@ async function probe(origin) {
   if (!origin) return null;
   const url = `${origin.replace(/\/+$/, "")}/api/health`;
   try {
-    const r = await fetch(url, { credentials: "include" });
+    // IMPORTANT: omit credentials here to avoid CORS/credential blocking
+    const r = await fetch(url, { credentials: "omit" });
     const ct = (r.headers.get("content-type") || "").toLowerCase();
     if (!r.ok || !ct.includes("application/json")) return null;
     await r.json();
@@ -62,6 +70,9 @@ async function probe(origin) {
 }
 
 async function getWorkingApiOrigin() {
+  const env = cleanOrigin(ENV_BASE);
+
+  // If we already found a working origin in this tab session, reuse it.
   try {
     const cached = sessionStorage.getItem("__api_origin__");
     if (cached) return cached;
@@ -69,17 +80,16 @@ async function getWorkingApiOrigin() {
     // ignore sessionStorage issues
   }
 
-  const candidates = [
-    cleanOrigin(ENV_BASE),
-    (() => {
-      try {
-        return window.location.origin;
-      } catch {
-        return "";
-      }
-    })(),
-    siblingRenderOrigin(),
-  ].filter(Boolean);
+  // Build candidate list
+  const sameOrigin = (() => {
+    try {
+      return window.location.origin;
+    } catch {
+      return "";
+    }
+  })();
+
+  const candidates = [env, sameOrigin, siblingRenderOrigin()].filter(Boolean);
 
   for (const c of candidates) {
     const ok = await probe(c);
@@ -93,19 +103,13 @@ async function getWorkingApiOrigin() {
     }
   }
 
-  const fallback = (() => {
-    try {
-      return window.location.origin;
-    } catch {
-      return "";
-    }
-  })();
-  try {
-    sessionStorage.setItem("__api_origin__", fallback);
-  } catch {
-    // ignore
-  }
-  return fallback;
+  // HARDENING:
+  // If ENV is set, do NOT cache or return the frontend origin fallback.
+  // Return ENV as the most truthful fallback in production.
+  if (env) return env;
+
+  // Dev fallback (proxy/same-origin)
+  return sameOrigin || "";
 }
 
 /* ───────────────────────────────────────────────────────────────
@@ -165,7 +169,10 @@ async function fetchJSON(url, opts = {}) {
   }
 
   if (!ct.includes("application/json")) {
-    if (raw.toLowerCase().includes("<!doctype html") || raw.includes("</html>")) {
+    if (
+      raw.toLowerCase().includes("<!doctype html") ||
+      raw.includes("</html>")
+    ) {
       throw new Error(
         `Expected JSON but got HTML (SPA fallback) @ ${url}\nLikely wrong API base.`
       );
@@ -619,8 +626,6 @@ function TeamTab({ ownerEmail, userEmail, maxWidth }) {
     } catch (e) {
       console.error("Load members failed:", e);
       setError(String(e).slice(0, 800));
-
-      // Don’t hard-alert in prod; keep UI steady.
       setMembers([]);
     } finally {
       setLoading(false);

@@ -151,12 +151,13 @@ GOOGLE_SCOPES = [
 # ----------------------------
 SUBSCRIPTIONS: Dict[str, Any] = {}
 
-NOTIFICATIONS_FILE = "notifications.json"
-APPOINTMENTS_FILE = "appointments.json"
-CHAT_FILE = "whatsapp_chats.json"
-STATUS_FILE = "whatsapp_status.json"
+NOTIFICATIONS_FILE = os.path.join(DATA_ROOT, "notifications.json")
+APPOINTMENTS_FILE  = os.path.join(DATA_ROOT, "appointments.json")
+CHAT_FILE          = os.path.join(DATA_ROOT, "whatsapp_chats.json")
+STATUS_FILE        = os.path.join(DATA_ROOT, "whatsapp_status.json")
 
-ICS_DIR = os.path.abspath("ics_files")
+ICS_DIR = os.path.join(DATA_ROOT, "ics_files")
+
 os.makedirs(ICS_DIR, exist_ok=True)
 
 def _legacy_load_json(file_path: str):
@@ -656,7 +657,7 @@ def check_for_lead_reminders():
 
     for user_email, leads in (leads_by_user.items() if isinstance(leads_by_user, dict) else []):
         user = users_by_email.get(user_email, {}) if isinstance(users_by_email, dict) else {}
-        business_type = (user.get("business", "") or "").lower()
+        business_type = (user.get("businessType") or user.get("business") or "").lower().strip()
         interval = BUSINESS_TYPE_INTERVALS.get(business_type, 14)
 
         warning_leads = []
@@ -2715,6 +2716,7 @@ def generate_prompt_compat():
 
     return jsonify({"prompt": txt, "meta": meta, "used": "fallback"}), 200
 
+
 @app.post("/api/ai-prompt")
 def ai_prompt():
     import re as _re
@@ -2773,24 +2775,18 @@ def ai_prompt():
         f"Reply as if you were {user_name or 'the business owner'} at {business}."
     )
 
-    try:
-        r = requests.post(
-            "https://openrouter.ai/api/v1/chat/completions",
-            headers={
-                "Authorization": f"Bearer {OPENROUTER_API_KEY}",
-                "Content-Type": "application/json",
-            },
-            json={
-                "model": "openai/gpt-4o",
-                "messages": [
-                    {"role": "system", "content": sys_msg},
-                    {"role": "user", "content": user_msg},
-                ],
-                "max_tokens": 220,
-                "temperature": 0.7,
-            },
-            timeout=30,
-        )
+    ok, txt, meta = _complete_openrouter_prompt(
+        [{"role": "system", "content": sys_msg}, {"role": "user", "content": user_msg}],
+        max_tokens=220,
+        temperature=0.7,
+        timeout=30
+    )
+
+    if not ok or not txt:
+        return jsonify({"error": "ai_failed", "detail": meta}), 502
+
+    return jsonify({"prompt": txt, "meta": meta}), 200
+
 
         j = r.json() if r.ok else {}
         prompt = ((j.get("choices") or [{}])[0].get("message", {}) or {}).get("content", "").strip()
@@ -3691,6 +3687,14 @@ def json_404(err):
 # ----------------------------
 scheduler = APScheduler()
 scheduler.init_app(app)
+# every 10 minutes (automations engine)
+scheduler.add_job(
+    id="automations_tick",
+    func=engine_tick,
+    trigger="interval",
+    minutes=10,
+    replace_existing=True
+)
 
 def _start_scheduler_once():
     try:
@@ -3707,9 +3711,12 @@ def _start_scheduler_once():
     except Exception as e:
         print("[Scheduler] failed to start:", e)
 
+SCHEDULER_ENABLED = (os.getenv("RUN_SCHEDULER", "0") == "1")
+
 @app.before_request
 def _bootstrap_scheduler():
-    # Start scheduler lazily on first request (avoids double-start in some hosts)
+    if not SCHEDULER_ENABLED:
+        return
     _start_scheduler_once()
 
 # ----------------------------
