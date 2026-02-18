@@ -49,12 +49,26 @@ app.config.from_object(Config())
 # ----------------------------
 ALLOWED = [o.strip() for o in os.getenv("ALLOWED_ORIGINS", "").split(",") if o.strip()]
 
+if not ALLOWED:
+    # Safe fallback for dev if env missing
+    ALLOWED = [
+        "http://localhost:3000",
+        "https://retainai-prod-1-frontend.onrender.com"
+    ]
+
 CORS(
     app,
-    origins=ALLOWED if ALLOWED else "*",
+    resources={r"/api/*": {"origins": ALLOWED}},
     supports_credentials=True,
     methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
-    allow_headers=["Content-Type", "Authorization", "X-Requested-With", "X-User-Email"],
+    allow_headers=[
+        "Content-Type",
+        "Authorization",
+        "X-Requested-With",
+        "X-User-Email",
+        "X-Owner-Email",
+        "X-Auth-Email",
+    ],
     expose_headers=["Content-Type"],
 )
 
@@ -66,12 +80,15 @@ app.config.update(
 @app.after_request
 def add_cors_headers(resp):
     origin = request.headers.get("Origin")
-    if origin and (not ALLOWED or origin in ALLOWED):
+    if origin and origin in ALLOWED:
         resp.headers["Access-Control-Allow-Origin"] = origin
         resp.headers["Vary"] = "Origin"
         resp.headers["Access-Control-Allow-Credentials"] = "true"
         resp.headers["Access-Control-Allow-Methods"] = "GET,POST,PUT,PATCH,DELETE,OPTIONS"
-        resp.headers["Access-Control-Allow-Headers"] = "Content-Type, Authorization, X-Requested-With, X-User-Email"
+        resp.headers["Access-Control-Allow-Headers"] = (
+            "Content-Type, Authorization, X-Requested-With, "
+            "X-User-Email, X-Owner-Email, X-Auth-Email"
+        )
     return resp
 
 @app.route("/api/<path:_any>", methods=["OPTIONS"])
