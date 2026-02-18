@@ -2593,6 +2593,122 @@ def generate_prompt_alias():
     # forward to the new canonical endpoint logic
     return ai_prompt()
 
+@app.route("/api/generate_prompt", methods=["POST", "OPTIONS"])
+def generate_prompt_compat():
+    if request.method == "OPTIONS":
+        return ("", 204)
+
+    data = request.get_json(silent=True) or {}
+
+    # Accept lots of frontend shapes
+    user_email = (
+        (data.get("user_email") or "")
+        or (data.get("email") or "")
+        or (data.get("userEmail") or "")
+        or (request.headers.get("X-User-Email") or "")
+        or (request.args.get("user_email") or "")
+        or (request.args.get("email") or "")
+    ).strip().lower()
+
+    lead_id = (
+        str(data.get("lead_id") or "")
+        or str(data.get("leadId") or "")
+        or str(data.get("id") or "")
+        or str((data.get("lead") or {}).get("id") or "")
+        or str(request.args.get("lead_id") or "")
+        or str(request.args.get("leadId") or "")
+    ).strip()
+
+    # If frontend didn't pass lead_id, allow prompt generation from notes/tags directly
+    lead = data.get("lead") if isinstance(data.get("lead"), dict) else {}
+    notes = (data.get("notes") or lead.get("notes") or "").strip()
+    tags = data.get("tags") or lead.get("tags") or []
+    if isinstance(tags, str):
+        tags = [t.strip() for t in tags.split(",") if t.strip()]
+    if not isinstance(tags, list):
+        tags = []
+
+    # Case 1: you did provide user_email + lead_id -> use your canonical ai_prompt() logic
+    if user_email and lead_id:
+        # Reuse /api/ai-prompt logic by calling it directly
+        # Build a fake request payload for ai_prompt()
+        # (Simplest: just call the internal generator right here)
+        users = load_users() or {}
+        leads_by_user = load_leads() or {}
+        chats_by_user = load_chats() or {}
+
+        user = (users.get(user_email, {}) or {}) if isinstance(users, dict) else {}
+        user_name = (user.get("name") or "").strip()
+        business  = (user.get("business") or user.get("businessType") or "business").strip()
+
+        found_lead = None
+        for ld in (leads_by_user.get(user_email, []) or []):
+            if str(ld.get("id")) == str(lead_id):
+                found_lead = ld
+                break
+
+        lead_name = ((found_lead or {}).get("name") or "")
+        lead_tags = ", ".join(((found_lead or {}).get("tags") or []))
+        lead_notes = ((found_lead or {}).get("notes") or "-")
+
+        last_inbound = ""
+        thread = (chats_by_user.get(user_email, {}) or {}).get(str(lead_id), []) or []
+        for m in reversed(thread):
+            if m.get("from") == "lead":
+                t = m.get("text")
+                if isinstance(t, str) and t.strip():
+                    last_inbound = t.strip()
+                    break
+
+        if not OPENROUTER_API_KEY:
+            return jsonify({"error": "OPENROUTER_API_KEY is not configured"}), 500
+
+        sys_msg = "You are a CRM messaging assistant. Output only the message body (no greetings or signatures)."
+        user_msg = (
+            f"You are a professional, emotionally intelligent assistant for a {business} business. "
+            f"Write ONLY a direct, warm reply that could be sent in chat. "
+            f"Do NOT include greeting lines or sign-offs.\n\n"
+            f"Lead Name: {lead_name}\n"
+            f"Tags: {lead_tags}\n"
+            f"Notes: {lead_notes}\n"
+            f"Most recent message from the lead: \"{last_inbound}\"\n"
+            f"Reply as if you were {user_name or 'the business owner'} at {business}."
+        )
+
+        ok, txt, meta = _complete_openrouter_prompt(
+            [{"role": "system", "content": sys_msg}, {"role": "user", "content": user_msg}],
+            max_tokens=220,
+            temperature=0.7,
+            timeout=30,
+        )
+        if not ok or not txt:
+            return jsonify({"error": "ai_failed", "detail": meta}), 502
+
+        return jsonify({"prompt": txt, "meta": meta}), 200
+
+    # Case 2: no lead_id provided -> generate a generic follow-up from notes/tags
+    if not OPENROUTER_API_KEY:
+        return jsonify({"error": "OPENROUTER_API_KEY is not configured"}), 500
+
+    sys_msg = "You are a CRM messaging assistant. Output only the message body (no greetings or signatures)."
+    user_msg = (
+        "Write a short, warm follow-up message that could be sent in chat. "
+        "No greeting line, no sign-off. 1-2 sentences.\n\n"
+        f"Tags: {', '.join([str(t) for t in tags])}\n"
+        f"Notes: {notes or '-'}\n"
+    )
+
+    ok, txt, meta = _complete_openrouter_prompt(
+        [{"role": "system", "content": sys_msg}, {"role": "user", "content": user_msg}],
+        max_tokens=160,
+        temperature=0.7,
+        timeout=30,
+    )
+    if not ok or not txt:
+        return jsonify({"error": "ai_failed", "detail": meta}), 502
+
+    return jsonify({"prompt": txt, "meta": meta}), 200
+
 @app.post("/api/ai-prompt")
 def ai_prompt():
     import re as _re
