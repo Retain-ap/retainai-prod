@@ -2586,6 +2586,13 @@ def whatsapp_webhook():
 # ============================================================
 # AI: lightweight prompt for chat composer
 # ============================================================
+@app.route("/api/generate_prompt", methods=["POST", "OPTIONS"])
+def generate_prompt_alias():
+    if request.method == "OPTIONS":
+        return ("", 204)
+    # forward to the new canonical endpoint logic
+    return ai_prompt()
+
 @app.post("/api/ai-prompt")
 def ai_prompt():
     import re as _re
