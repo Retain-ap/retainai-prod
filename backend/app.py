@@ -2809,7 +2809,6 @@ def ai_prompt():
             pass
         return jsonify({"error": "Failed to get AI response"}), 502
 
-
 # =================================================================
 # AUTOMATIONS (INLINE) — Blueprint + Engine (prod-ready routes)
 # =================================================================
