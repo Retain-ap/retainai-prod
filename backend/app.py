@@ -2727,7 +2727,7 @@ def ai_prompt():
         data = {}
 
     user_email = (data.get("user_email") or "").strip().lower()
-    lead_id    = str(data.get("lead_id") or "").strip()
+    lead_id = str(data.get("lead_id") or "").strip()
 
     if not user_email or not lead_id:
         return jsonify({"error": "user_email and lead_id are required"}), 400
@@ -2738,7 +2738,7 @@ def ai_prompt():
 
     user = users.get(user_email, {}) or {}
     user_name = (user.get("name") or "").strip()
-    business  = (user.get("business") or user.get("businessType") or "business").strip()
+    business = (user.get("business") or user.get("businessType") or "business").strip()
 
     lead = None
     for ld in (leads_by_user.get(user_email, []) or []):
@@ -2775,23 +2775,16 @@ def ai_prompt():
         f"Reply as if you were {user_name or 'the business owner'} at {business}."
     )
 
-    ok, txt, meta = _complete_openrouter_prompt(
-        [{"role": "system", "content": sys_msg}, {"role": "user", "content": user_msg}],
-        max_tokens=220,
-        temperature=0.7,
-        timeout=30
-    )
+    try:
+        ok, txt, meta = _complete_openrouter_prompt(
+            [{"role": "system", "content": sys_msg}, {"role": "user", "content": user_msg}],
+            max_tokens=220,
+            temperature=0.7,
+            timeout=30,
+        )
 
-    if not ok or not txt:
-        return jsonify({"error": "ai_failed", "detail": meta}), 502
-
-    return jsonify({"prompt": txt, "meta": meta}), 200
-
-
-        j = r.json() if r.ok else {}
-        prompt = ((j.get("choices") or [{}])[0].get("message", {}) or {}).get("content", "").strip()
-        if not prompt:
-            return jsonify({"error": (j.get("error", {}) or {}).get("message", "AI response was empty")}), 502
+        if not ok or not txt:
+            return jsonify({"error": "ai_failed", "detail": meta}), 502
 
         def _clean(t: str) -> str:
             s = str(t or "")
@@ -2800,7 +2793,7 @@ def ai_prompt():
             s = _re.sub(r"^\s*\n+", "", s)
             return s.strip()
 
-        return jsonify({"prompt": _clean(prompt)}), 200
+        return jsonify({"prompt": _clean(txt), "meta": meta}), 200
 
     except Exception as e:
         try:
