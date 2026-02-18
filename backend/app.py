@@ -3728,6 +3728,10 @@ def _bootstrap_scheduler():
         return
     _start_scheduler_once()
 
+@app.get("/api/health")
+def health():
+    return jsonify({"ok": True, "ts": int(time.time())}), 200
+    
 # ----------------------------
 # Run local
 # ----------------------------
