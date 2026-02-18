@@ -108,33 +108,57 @@ async function getWorkingApiOrigin() {
   return fallback;
 }
 
-async function apiFetchJSON(path, opts = {}) {
-  const origin = await getWorkingApiOrigin();
-
-  // If someone ever passes a full URL, respect it.
-  const isAbsolute = /^https?:\/\//i.test(path);
-  const p = String(path).replace(/^\/+/, "");
-  const url = isAbsolute ? path : `${origin}/api/${p}`;
-  return fetchJSON(url, opts);
-}
-
 /* ───────────────────────────────────────────────────────────────
    Robust fetcher: must receive JSON (protects against SPA HTML)
+   + Auth helpers / 401 retry for inconsistent backend protections.
    ─────────────────────────────────────────────────────────────── */
+
+function getStoredToken() {
+  // Support a few common storage patterns without breaking anything.
+  try {
+    const ls = window.localStorage;
+    const direct =
+      ls.getItem("token") ||
+      ls.getItem("access_token") ||
+      ls.getItem("auth_token");
+    if (direct) return direct;
+
+    const userRaw = ls.getItem("user");
+    if (userRaw) {
+      const u = JSON.parse(userRaw);
+      return u?.token || u?.access_token || u?.auth_token || "";
+    }
+  } catch {
+    // ignore
+  }
+  return "";
+}
+
+function baseHeaders(extra = {}) {
+  const token = getStoredToken();
+  const h = {
+    Accept: "application/json",
+    ...(extra || {}),
+  };
+  // If you ever store a token, we’ll attach it automatically.
+  if (token && !h.Authorization) {
+    h.Authorization = `Bearer ${token}`;
+  }
+  return h;
+}
+
 async function fetchJSON(url, opts = {}) {
   const res = await fetch(url, {
     credentials: "include",
-    headers: {
-      Accept: "application/json",
-      ...(opts.headers || {}),
-    },
     ...opts,
+    headers: baseHeaders(opts.headers || {}),
   });
 
   const ct = (res.headers.get("content-type") || "").toLowerCase();
   const raw = await res.text();
 
   if (!res.ok) {
+    // Keep payload short to avoid nuking the UI
     throw new Error(
       `HTTP ${res.status} ${res.statusText} @ ${url}\n${raw.slice(0, 400)}`
     );
@@ -163,6 +187,41 @@ async function fetchJSON(url, opts = {}) {
   }
 }
 
+// One place to do API calls.
+// - Builds /api/* URL from a working origin
+// - On 401, retries with common legacy headers some backends use
+async function apiFetchJSON(path, opts = {}, authContext = {}) {
+  const origin = await getWorkingApiOrigin();
+
+  const isAbsolute = /^https?:\/\//i.test(path);
+  const p = String(path).replace(/^\/+/, "");
+  const url = isAbsolute ? path : `${origin}/api/${p}`;
+
+  try {
+    return await fetchJSON(url, opts);
+  } catch (err) {
+    const msg = String(err || "");
+    // If backend team routes demand headers, retry once with common ones
+    if (msg.includes("HTTP 401") || msg.includes("HTTP 403")) {
+      const ownerEmail = authContext?.ownerEmail || "";
+      const userEmail = authContext?.userEmail || ownerEmail || "";
+      const retryHeaders = {
+        ...(opts.headers || {}),
+        // Common patterns seen in custom Flask apps:
+        "X-User-Email": userEmail || "",
+        "X-Owner-Email": ownerEmail || userEmail || "",
+        "X-Auth-Email": userEmail || "",
+      };
+
+      // Only retry if we actually have something to send
+      if (ownerEmail || userEmail) {
+        return await fetchJSON(url, { ...opts, headers: retryHeaders });
+      }
+    }
+    throw err;
+  }
+}
+
 /* ───────────────────────────────────────────────────────────────
    Helpers
    ─────────────────────────────────────────────────────────────── */
@@ -172,25 +231,17 @@ async function fetchJSON(url, opts = {}) {
 //   OR { profile: { ... } }
 //   OR { user: { ... } }
 function normalizeProfileResponse(raw, fallbackEmail) {
-  const base =
-    (raw && (raw.profile || raw.user || raw)) ||
-    {};
+  const base = (raw && (raw.profile || raw.user || raw)) || {};
 
-  const out = {
-    ...base,
-  };
+  const out = { ...base };
 
   if (!out.email && fallbackEmail) {
     out.email = fallbackEmail;
   }
 
   // Friendly compatibility: some backends call it businessName vs business
-  if (!out.business && out.businessName) {
-    out.business = out.businessName;
-  }
-  if (!out.businessName && out.business) {
-    out.businessName = out.business;
-  }
+  if (!out.business && out.businessName) out.business = out.businessName;
+  if (!out.businessName && out.business) out.businessName = out.business;
 
   return out;
 }
@@ -226,22 +277,28 @@ export default function Settings({
   const [editMode, setEditMode] = useState(false);
   const [saving, setSaving] = useState(false);
   const [bootError, setBootError] = useState("");
+  const [booting, setBooting] = useState(true);
 
   useEffect(() => {
-    if (initialTab && TABS.some((t) => t.key === initialTab)) {
-      setTab(initialTab);
-    }
+    if (initialTab && TABS.some((t) => t.key === initialTab)) setTab(initialTab);
   }, [initialTab]);
 
   // Load profile from backend
   const loadProfile = async () => {
     try {
       setBootError("");
-      if (!user?.email) return;
+      setBooting(true);
+
+      if (!user?.email) {
+        setProfile(null);
+        setBootError("No user email found. Please sign in again.");
+        return;
+      }
 
       const raw = await apiFetchJSON(
         `profile?email=${encodeURIComponent(user.email)}`
       );
+
       const prof = normalizeProfileResponse(raw, user.email);
 
       setProfile(prof);
@@ -254,11 +311,17 @@ export default function Settings({
         teamSize: prof.people || prof.teamSize || "",
       });
 
-      localStorage.setItem("user", JSON.stringify(prof));
+      try {
+        localStorage.setItem("user", JSON.stringify(prof));
+      } catch {
+        // ignore
+      }
     } catch (err) {
       console.error("Failed to load profile:", err);
-      setBootError(String(err).slice(0, 800));
+      setBootError(String(err).slice(0, 900));
       setProfile(null);
+    } finally {
+      setBooting(false);
     }
   };
 
@@ -270,9 +333,7 @@ export default function Settings({
   // Stripe callback refresh
   useEffect(() => {
     const params = new URLSearchParams(search);
-    if (params.get("stripe_connected") === "1") {
-      loadProfile();
-    }
+    if (params.get("stripe_connected") === "1") loadProfile();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [search]);
 
@@ -323,26 +384,49 @@ export default function Settings({
   const settingsWidth = `calc(100vw - ${leftOffset}px)`;
   const MAX_W = 1000;
 
-  if (!profile) {
+  // Boot screen (profile missing / loading / error)
+  if (booting || !profile) {
     return (
       <div
         className="settings-layout"
         style={{ left: leftOffset, width: settingsWidth }}
       >
-        <div style={{ padding: 16 }}>
-          <div style={{ fontWeight: 800, marginBottom: 8 }}>Loading…</div>
+        <div style={{ padding: 16, maxWidth: 900 }}>
+          <div style={{ fontWeight: 900, marginBottom: 8, color: "#fff" }}>
+            {booting ? "Loading Settings…" : "Settings couldn’t load"}
+          </div>
+
+          <div style={{ color: "#bbb", lineHeight: 1.5 }}>
+            {booting
+              ? "Fetching your profile and workspace data."
+              : "Your profile request failed. This is usually a session/auth or API base issue."}
+          </div>
+
+          <div style={{ display: "flex", gap: 10, marginTop: 14 }}>
+            <button
+              className="btn"
+              onClick={loadProfile}
+              style={{
+                background: "#232323",
+                color: "#fff",
+                border: "1px solid #444",
+              }}
+            >
+              Retry
+            </button>
+          </div>
+
           {bootError && (
             <pre
               style={{
-                marginTop: 10,
+                marginTop: 14,
                 padding: 12,
                 background: "#2a2a2e",
-                borderRadius: 8,
+                borderRadius: 10,
                 border: "1px solid #3a3a3f",
                 color: "#ddd",
                 whiteSpace: "pre-wrap",
                 wordBreak: "break-word",
-                maxWidth: 800,
               }}
             >
               {bootError}
@@ -412,9 +496,7 @@ export default function Settings({
                         disabled={name === "email"}
                       />
                     ) : (
-                      <div className="field-value">
-                        {form[name] || "—"}
-                      </div>
+                      <div className="field-value">{form[name] || "—"}</div>
                     )}
                   </div>
                 ))}
@@ -456,17 +538,18 @@ export default function Settings({
 
         {/* TEAM */}
         {tab === "team" && (
-          <TeamTab ownerEmail={profile.email} maxWidth={MAX_W} />
+          <TeamTab
+            ownerEmail={profile.email}
+            userEmail={user?.email || profile.email}
+            maxWidth={MAX_W}
+          />
         )}
 
         {/* INTEGRATIONS */}
         {tab === "integrations" && (
           <div style={{ maxWidth: MAX_W, margin: "0 auto" }}>
             <h2>Integrations</h2>
-            <div
-              className="integration-row"
-              style={{ justifyContent: "center" }}
-            >
+            <div className="integration-row" style={{ justifyContent: "center" }}>
               <div className="integration-card">
                 <GoogleCalendarEvents
                   user={profile}
@@ -494,13 +577,8 @@ export default function Settings({
             <h2>Help & Support</h2>
             <p className="help-line">
               If you need anything, email{" "}
-              <a href="mailto:owner@retainai.ca">owner@retainai.ca</a> or see
-              our{" "}
-              <a
-                href="https://docs.retainai.ca"
-                target="_blank"
-                rel="noreferrer"
-              >
+              <a href="mailto:owner@retainai.ca">owner@retainai.ca</a> or see our{" "}
+              <a href="https://docs.retainai.ca" target="_blank" rel="noreferrer">
                 documentation
               </a>
               .
@@ -515,30 +593,35 @@ export default function Settings({
 /* ─────────────────────────────────────────────────────────────── */
 /* Team tab                                                        */
 /* ─────────────────────────────────────────────────────────────── */
-function TeamTab({ ownerEmail, maxWidth }) {
+function TeamTab({ ownerEmail, userEmail, maxWidth }) {
   const [members, setMembers] = useState([]);
   const [search, setSearch] = useState("");
   const [loading, setLoading] = useState(true);
   const [busyEmail, setBusyEmail] = useState("");
+  const [error, setError] = useState("");
 
   const roles = ["owner", "manager", "member"];
 
   const loadMembers = async () => {
     if (!ownerEmail) return;
     setLoading(true);
+    setError("");
     try {
       const data = await apiFetchJSON(
-        `team/members?ownerEmail=${encodeURIComponent(ownerEmail)}`
+        `team/members?ownerEmail=${encodeURIComponent(ownerEmail)}`,
+        {},
+        { ownerEmail, userEmail }
       );
-      if (Array.isArray(data.members)) {
-        setMembers(data.members);
-      } else if (Array.isArray(data)) {
-        // defensive fallback if backend ever returns a bare array
-        setMembers(data);
-      }
+
+      if (Array.isArray(data?.members)) setMembers(data.members);
+      else if (Array.isArray(data)) setMembers(data);
+      else setMembers([]);
     } catch (e) {
       console.error("Load members failed:", e);
-      alert("Could not load team members. Check backend routes.");
+      setError(String(e).slice(0, 800));
+
+      // Don’t hard-alert in prod; keep UI steady.
+      setMembers([]);
     } finally {
       setLoading(false);
     }
@@ -562,16 +645,18 @@ function TeamTab({ ownerEmail, maxWidth }) {
 
   const changeRole = async (email, role) => {
     setBusyEmail(email);
-    setMembers((ms) =>
-      ms.map((m) => (m.email === email ? { ...m, role } : m))
-    );
+    setMembers((ms) => ms.map((m) => (m.email === email ? { ...m, role } : m)));
+
     try {
-      await apiFetchJSON("team/role", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        // include ownerEmail in the body instead of custom auth headers
-        body: JSON.stringify({ email, role, ownerEmail }),
-      });
+      await apiFetchJSON(
+        "team/role",
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ email, role, ownerEmail }),
+        },
+        { ownerEmail, userEmail }
+      );
     } catch (e) {
       alert("Could not change role. Make sure /api/team/role exists.");
       loadMembers();
@@ -583,14 +668,20 @@ function TeamTab({ ownerEmail, maxWidth }) {
   const removeMember = async (email) => {
     if (!window.confirm("Remove this member?")) return;
     setBusyEmail(email);
+
     const prev = members;
     setMembers((ms) => ms.filter((m) => m.email !== email));
+
     try {
-      await apiFetchJSON("team/remove", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ email, ownerEmail }),
-      });
+      await apiFetchJSON(
+        "team/remove",
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ email, ownerEmail }),
+        },
+        { ownerEmail, userEmail }
+      );
     } catch (e) {
       alert("Could not remove. Make sure /api/team/remove exists.");
       setMembers(prev);
@@ -640,6 +731,7 @@ function TeamTab({ ownerEmail, maxWidth }) {
             }}
           />
         </div>
+
         <button
           className="btn"
           onClick={loadMembers}
@@ -652,6 +744,31 @@ function TeamTab({ ownerEmail, maxWidth }) {
           Refresh
         </button>
       </div>
+
+      {error && (
+        <div
+          style={{
+            maxWidth,
+            margin: "0 auto 14px",
+            padding: 12,
+            background: "#2a2a2e",
+            border: "1px solid #3a3a3f",
+            borderRadius: 10,
+            color: "#ddd",
+            whiteSpace: "pre-wrap",
+            wordBreak: "break-word",
+          }}
+        >
+          <div style={{ fontWeight: 900, marginBottom: 6 }}>
+            Team API error (this is why you saw 401)
+          </div>
+          <div style={{ color: "#bbb", marginBottom: 10 }}>
+            This usually means the backend team endpoints require auth headers or
+            session auth that profile doesn’t.
+          </div>
+          <pre style={{ margin: 0 }}>{error}</pre>
+        </div>
+      )}
 
       {/* Members table */}
       <div
@@ -687,7 +804,9 @@ function TeamTab({ ownerEmail, maxWidth }) {
         {loading ? (
           <div style={{ padding: 18, color: "#ddd" }}>Loading members…</div>
         ) : filtered.length === 0 ? (
-          <div style={{ padding: 18, color: "#bbb" }}>No members found.</div>
+          <div style={{ padding: 18, color: "#bbb" }}>
+            No members found (or access blocked).
+          </div>
         ) : (
           filtered.map((m) => (
             <div
@@ -728,16 +847,9 @@ function TeamTab({ ownerEmail, maxWidth }) {
                 </select>
               </div>
               <div style={{ color: "#bbb" }}>
-                {m.last_login
-                  ? new Date(m.last_login).toLocaleString()
-                  : "—"}
+                {m.last_login ? new Date(m.last_login).toLocaleString() : "—"}
               </div>
-              <div
-                style={{
-                  display: "flex",
-                  justifyContent: "flex-end",
-                }}
-              >
+              <div style={{ display: "flex", justifyContent: "flex-end" }}>
                 <button
                   className="btn"
                   title="Remove"
