@@ -1,13 +1,13 @@
-// src/apiBase.js
-// Works in BOTH CRA and Vite builds safely
+// frontend/src/apiBase.js
 
-const envApi =
-  (typeof import.meta !== "undefined" &&
-    import.meta.env &&
-    import.meta.env.VITE_API_BASE) ||
-  (typeof process !== "undefined" &&
-    process.env &&
-    process.env.REACT_APP_API_BASE) ||
-  "";
+const API_BASE =
+  window.__ENV__?.REACT_APP_API_BASE ||
+  process.env.REACT_APP_API_BASE ||
+  "https://retainai-prod.onrender.com";
 
-export const API_BASE = envApi.replace(/\/+$/, "");
+export function apiUrl(path = "") {
+  const cleanPath = path.startsWith("/") ? path : `/${path}`;
+  return `${API_BASE}${cleanPath}`;
+}
+
+export default API_BASE;
