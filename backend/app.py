@@ -364,6 +364,58 @@ def _upsert_user(email: str, patch: dict) -> dict:
 # ----------------------------
 # /api/profile (SINGLE SOURCE OF TRUTH)
 # ----------------------------
+@app.get("/api/health")
+def health():
+    return jsonify({"ok": True}), 200
+
+@app.get("/api/profile")
+def api_profile_get():
+    email = (request.args.get("email") or "").strip().lower()
+    if not email:
+        return jsonify({"error": "missing_email"}), 400
+
+    users = load_users() or {}
+    u = users.get(email) or {}
+    if not u:
+        # IMPORTANT: JSON even when missing
+        return jsonify({"error": "user_not_found", "email": email}), 404
+
+    # return profile flat (your Settings.jsx supports flat/profile/user)
+    return jsonify({
+        "email": email,
+        "name": u.get("name", ""),
+        "business": u.get("business") or u.get("businessType") or "",
+        "businessType": u.get("businessType") or u.get("type") or "",
+        "location": u.get("location", ""),
+        "teamSize": u.get("teamSize") or u.get("people") or "",
+        "logo": u.get("logo", ""),
+    }), 200
+
+@app.post("/api/profile")
+def api_profile_post():
+    data = request.get_json(silent=True) or {}
+    email = (data.get("email") or "").strip().lower()
+    if not email:
+        return jsonify({"error": "missing_email"}), 400
+
+    users = load_users() or {}
+    u = users.get(email) or {}
+
+    u.update({
+        "email": email,
+        "name": data.get("name") or u.get("name") or "",
+        "business": data.get("business") or data.get("businessName") or u.get("business") or "",
+        "businessType": data.get("businessType") or u.get("businessType") or "",
+        "location": data.get("location") or u.get("location") or "",
+        "teamSize": data.get("teamSize") or data.get("people") or u.get("teamSize") or "",
+        "logo": data.get("logo") or u.get("logo") or "",
+    })
+
+    users[email] = u
+    save_users(users)
+
+    return jsonify(u), 200
+
 @app.route("/api/profile", methods=["GET", "POST", "OPTIONS"])
 def api_profile():
     if request.method == "OPTIONS":
@@ -3731,7 +3783,7 @@ def _bootstrap_scheduler():
 @app.get("/api/health")
 def health():
     return jsonify({"ok": True, "ts": int(time.time())}), 200
-    
+
 # ----------------------------
 # Run local
 # ----------------------------
