@@ -364,9 +364,6 @@ def _upsert_user(email: str, patch: dict) -> dict:
 # ----------------------------
 # /api/profile (SINGLE SOURCE OF TRUTH)
 # ----------------------------
-@app.get("/api/health")
-def health():
-    return jsonify({"ok": True}), 200
 
 @app.get("/api/profile")
 def api_profile_get():
