@@ -17,9 +17,6 @@ import { useNavigate, useLocation } from "react-router-dom";
 import { useSettings } from "./SettingsContext";
 import Automations from "./Automations";
 import InviteTeamModal from "./InviteTeamModal";
-import { API_BASE } from "../apiBase";
-
-fetch(`${API_BASE}/api/leads/${email}`)
 
 // ✅ NEW: one source of truth for backend API URLs
 import { apiUrl } from "../apiBase";

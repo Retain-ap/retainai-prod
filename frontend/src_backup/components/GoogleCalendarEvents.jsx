@@ -1,9 +1,6 @@
 // src/components/GoogleCalendarEvents.jsx
 import React, { useState, useEffect, useRef, useCallback } from "react";
 import { SiGooglecalendar } from "react-icons/si";
-import { API_BASE } from "../apiBase";
-
-fetch(`${API_BASE}/api/leads/${email}`)
 
 // ✅ NEW: use backend-safe API builder (prevents HTML/SPA fallback issues on Render)
 import { apiUrl } from "../apiBase";

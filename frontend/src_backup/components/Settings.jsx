@@ -13,9 +13,6 @@ import {
 } from "react-icons/fa";
 import { SiInstagram } from "react-icons/si";
 import "./settings.css";
-import { API_BASE } from "../apiBase";
-
-fetch(`${API_BASE}/api/leads/${email}`)
 
 /* ───────────────────────────────────────────────────────────────
    RUNTIME API BASE AUTO-DISCOVERY (PROD-SAFE)
