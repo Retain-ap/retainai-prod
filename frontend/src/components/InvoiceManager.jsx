@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from "react";
+﻿import React, { useState, useEffect } from "react";
 import "./InvoiceManager.css";
 
 export default function InvoiceManager({ userEmail }) {
@@ -26,7 +26,7 @@ export default function InvoiceManager({ userEmail }) {
     e.preventDefault();
     setError("");
     try {
-      const res = await fetch("/api/stripe/invoice", {
+      const res = await fetch((process.env.REACT_APP_API_BASE || "") + "/api/stripe/invoice", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ user_email: userEmail, ...form })
@@ -85,7 +85,7 @@ export default function InvoiceManager({ userEmail }) {
       </form>
 
       {loading ? (
-        <p>Loading invoices…</p>
+        <p>Loading invoicesâ€¦</p>
       ) : (
         <table className="invoice-table">
           <thead>

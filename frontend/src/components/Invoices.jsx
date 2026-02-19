@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from "react";
+﻿import React, { useState, useEffect, useCallback } from "react";
 import { EyeIcon, BellIcon, ArrowTopRightOnSquareIcon } from "@heroicons/react/24/outline";
 
 const CURRENCIES = ["usd", "cad", "eur", "gbp", "aud"]; // short list
@@ -109,13 +109,13 @@ export default function Invoices({ user, leads }) {
     const calculatedAmount = price * quantity;
 
     if (!form.customer_name || !form.customer_email || !form.item_name || !form.price || isNaN(calculatedAmount) || calculatedAmount <= 0) {
-      setMessage("❌ Please fill all fields with valid data.");
+      setMessage("âŒ Please fill all fields with valid data.");
       setSending(false);
       return;
     }
 
     try {
-      const res = await fetch("/api/stripe/invoice", {
+      const res = await fetch((process.env.REACT_APP_API_BASE || "") + "/api/stripe/invoice", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -142,7 +142,7 @@ export default function Invoices({ user, leads }) {
 
         const shownAmt = data.amount_total ?? data.amount_due;
         setMessage(
-          `✅ Invoice created${shownAmt ? ` for ${fmt(shownAmt, data.currency)}` : "!"}`
+          `âœ… Invoice created${shownAmt ? ` for ${fmt(shownAmt, data.currency)}` : "!"}`
         );
 
         setShowModal(false);
@@ -158,14 +158,14 @@ export default function Invoices({ user, leads }) {
         const err = String(data.error || "Could not create invoice.");
         if (/combine currencies/i.test(err) || /currency/i.test(err)) {
           const acctCur = (account?.default_currency || "your account currency").toUpperCase();
-          setMessage(`❌ ${err} — Try setting Currency to ${acctCur} to match your Stripe account.`);
+          setMessage(`âŒ ${err} â€” Try setting Currency to ${acctCur} to match your Stripe account.`);
         } else {
-          setMessage(`❌ ${err}`);
+          setMessage(`âŒ ${err}`);
         }
       }
     } catch (e2) {
       console.error(e2);
-      setMessage("❌ Server error");
+      setMessage("âŒ Server error");
     } finally {
       setSending(false);
     }
@@ -178,16 +178,16 @@ export default function Invoices({ user, leads }) {
   const handleResend = async (inv) => {
     setMessage("");
     try {
-      const res = await fetch("/api/stripe/invoice/send", {
+      const res = await fetch((process.env.REACT_APP_API_BASE || "") + "/api/stripe/invoice/send", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ invoice_id: inv.id, user_email: user.email }),
       });
       const data = await res.json();
-      data.success ? setMessage("✅ Invoice email re-sent!") : setMessage(`❌ ${data.error || "Could not resend."}`);
+      data.success ? setMessage("âœ… Invoice email re-sent!") : setMessage(`âŒ ${data.error || "Could not resend."}`);
     } catch (e3) {
       console.error(e3);
-      setMessage("❌ Server error resending");
+      setMessage("âŒ Server error resending");
     }
   };
 
@@ -205,7 +205,7 @@ export default function Invoices({ user, leads }) {
             <div style={styles.accountBadge}>
               <span>Connected account:</span>
               <code style={styles.code}>{account.id}</code>
-              <span>• Currency:</span>
+              <span>â€¢ Currency:</span>
               <code style={styles.code}>{(account.default_currency || "usd").toUpperCase()}</code>
             </div>
           )}
@@ -233,7 +233,7 @@ export default function Invoices({ user, leads }) {
         </div>
       )}
 
-      {message && <div style={message.startsWith("✅") ? styles.successMsg : styles.errorMsg}>{message}</div>}
+      {message && <div style={message.startsWith("âœ…") ? styles.successMsg : styles.errorMsg}>{message}</div>}
 
       <div style={styles.tableWrapper}>
         <table style={styles.table}>
@@ -256,7 +256,7 @@ export default function Invoices({ user, leads }) {
                   )}
                 </td>
                 <td style={styles.td}>
-                  {inv.due_date ? new Date(inv.due_date * 1000).toLocaleDateString() : "—"}
+                  {inv.due_date ? new Date(inv.due_date * 1000).toLocaleDateString() : "â€”"}
                 </td>
                 <td style={{ ...styles.td, color: (inv.status || "").toLowerCase() === "paid" ? "#38ff98" : "#f7cb53", textTransform: "capitalize" }}>
                   {inv.status}
@@ -346,7 +346,7 @@ export default function Invoices({ user, leads }) {
                   Cancel
                 </button>
                 <button type="submit" disabled={sending} style={styles.submitBtn}>
-                  {sending ? "Sending…" : "Send Invoice"}
+                  {sending ? "Sendingâ€¦" : "Send Invoice"}
                 </button>
               </div>
             </form>

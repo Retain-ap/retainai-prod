@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from "react";
+﻿import React, { useEffect, useState } from "react";
 import { SiWhatsapp } from "react-icons/si";
 
 // Add any country codes you want here!
@@ -94,7 +94,7 @@ export default function WhatsAppIntegrationCard({ user }) {
     setLoading(true); setError("");
     const fullNumber = `${country}${number}`;
     try {
-      const res = await fetch("/api/integrations/whatsapp", {
+      const res = await fetch((process.env.REACT_APP_API_BASE || "") + "/api/integrations/whatsapp", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ email: user.email, whatsapp: fullNumber }),
@@ -112,7 +112,7 @@ export default function WhatsAppIntegrationCard({ user }) {
   async function handleDisconnect() {
     setLoading(true); setError("");
     try {
-      const res = await fetch("/api/integrations/whatsapp", {
+      const res = await fetch((process.env.REACT_APP_API_BASE || "") + "/api/integrations/whatsapp", {
         method: "DELETE",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ email: user.email }),
@@ -235,7 +235,7 @@ export default function WhatsAppIntegrationCard({ user }) {
                   style={{ flex: 1, borderColor: "#e66565", color: "#e66565" }}
                   disabled={loading}
                 >
-                  {loading ? "Removing…" : "Disconnect"}
+                  {loading ? "Removingâ€¦" : "Disconnect"}
                 </button>
               </>
             ) : (

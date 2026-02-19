@@ -1,4 +1,4 @@
-// src/index.js
+﻿// src/index.js
 import React from "react";
 import ReactDOM from "react-dom/client";
 import App from "./App";
@@ -23,7 +23,7 @@ export async function promptInstall() {
 
 // Fired when the app becomes installable (Chrome/Edge desktop & Android)
 window.addEventListener("beforeinstallprompt", (e) => {
-  e.preventDefault(); // don’t show the mini-infobar; we’ll trigger it manually
+  e.preventDefault(); // donâ€™t show the mini-infobar; weâ€™ll trigger it manually
   _deferredInstallPrompt = e;
   // Tell any UI (like Sidebar) that install is now available
   window.dispatchEvent(new Event("pwa-install-available"));
@@ -54,7 +54,7 @@ if ("serviceWorker" in navigator) {
         console.log("PushSubscription:", pushSubscription);
 
         // Send to backend
-        await fetch("/api/save-subscription", {
+        await fetch((process.env.REACT_APP_API_BASE || "") + "/api/save-subscription", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({

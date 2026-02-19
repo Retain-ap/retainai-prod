@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from "react";
+﻿import React, { useState, useEffect } from "react";
 
 export default function InviteTeamModal({ user, onClose }) {
   const [email, setEmail] = useState("");
@@ -16,7 +16,7 @@ export default function InviteTeamModal({ user, onClose }) {
     }
     setLoading(true);
     try {
-      const res = await fetch("/api/team/invite", {
+      const res = await fetch((process.env.REACT_APP_API_BASE || "") + "/api/team/invite", {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
@@ -63,7 +63,7 @@ export default function InviteTeamModal({ user, onClose }) {
       <div style={styles.card} onClick={(e) => e.stopPropagation()}>
         <div style={styles.header}>
           <h3 style={styles.title}>Invite a teammate</h3>
-          <button style={styles.close} onClick={onClose} aria-label="Close">×</button>
+          <button style={styles.close} onClick={onClose} aria-label="Close">Ã—</button>
         </div>
 
         {!result && (
@@ -96,7 +96,7 @@ export default function InviteTeamModal({ user, onClose }) {
             {error && <div style={styles.error}>{error}</div>}
 
             <button type="submit" style={styles.primary} disabled={loading}>
-              {loading ? "Creating…" : "Create Invite"}
+              {loading ? "Creatingâ€¦" : "Create Invite"}
             </button>
           </form>
         )}
@@ -105,7 +105,7 @@ export default function InviteTeamModal({ user, onClose }) {
           <div>
             <div style={styles.successBox}>
               <div style={{ color: "#f7cb53", fontWeight: 800, marginBottom: 6 }}>
-                Invite created ✅
+                Invite created âœ…
               </div>
               <div style={{ color: "#ddd", fontSize: "0.98em" }}>
                 Share this link with your teammate:
