@@ -15,55 +15,83 @@ import { SiInstagram } from "react-icons/si";
 import "./settings.css";
 
 /* ───────────────────────────────────────────────────────────────
-   RUNTIME API BASE AUTO-DISCOVERY (prod-safe)
-   Order:
-     1) ENV (VITE_API_BASE or REACT_APP_API_BASE) without trailing /api
-     2) Same-origin (for dev/proxy)
-     3) Render “sibling” origin by stripping "-<digits>-frontend" or "-frontend"
+   RUNTIME API BASE AUTO-DISCOVERY (PROD-SAFE)
 
-   We verify each candidate with GET <origin>/api/health expecting JSON.
-   Cache winning origin in sessionStorage.
+   Key issue you hit:
+   - If the frontend uses relative /api/... OR "sameOrigin" is chosen as API base,
+     you will call the FRONTEND service which returns SPA HTML → "Expected JSON..."
 
-   IMPORTANT HARDENING:
-   - Health probe uses credentials: "omit" to avoid CORS/credentials failures.
-   - If ENV is present, NEVER cache the frontend origin as fallback.
-   - If ENV is present and probing fails, still return ENV as final fallback
-     (because in prod you explicitly know where the API is).
+   Hardening rules:
+   - In production (onrender.com), NEVER choose window.location.origin as API.
+   - Prefer ENV base if present (REACT_APP_API_BASE or VITE_API_BASE).
+   - Try Render "sibling" backend origin (strip -frontend / -<digits>).
+   - Probe /api/health accepting JSON OR text containing "ok".
+   - Cache only a non-frontend origin.
    ─────────────────────────────────────────────────────────────── */
+
 const ENV_BASE =
   (typeof import.meta !== "undefined" &&
     import.meta.env &&
     import.meta.env.VITE_API_BASE) ||
   (typeof process !== "undefined" &&
     process.env &&
-    process.env.REACT_APP_API_BASE) ||
+    (process.env.REACT_APP_API_BASE || process.env.REACT_APP_API_URL)) ||
   "";
 
+// "https://x/api" -> "https://x"
 function cleanOrigin(s) {
   return (s || "").trim().replace(/\/+$/g, "").replace(/\/api$/i, "");
 }
 
+function isOnRenderHost() {
+  try {
+    return String(window.location.hostname || "").toLowerCase().includes("onrender.com");
+  } catch {
+    return false;
+  }
+}
+
+function isFrontendOrigin(origin) {
+  const o = String(origin || "").toLowerCase();
+  // common patterns
+  return o.includes("-frontend.onrender.com") || o.includes("frontend.onrender.com");
+}
+
+// Convert "retainai-prod-1-frontend.onrender.com" -> "retainai-prod.onrender.com" (best effort)
 function siblingRenderOrigin() {
   try {
     const o = window.location.origin;
     return o
+      // remove "-frontend"
       .replace(/-frontend(\.onrender\.com)$/i, "$1")
+      // remove "-<digits>" that some render services append
       .replace(/-\d+(\.onrender\.com)$/i, "$1");
   } catch {
     return "";
   }
 }
 
+// Probe /api/health. Accepts JSON OR text containing "ok".
 async function probe(origin) {
   if (!origin) return null;
-  const url = `${origin.replace(/\/+$/, "")}/api/health`;
+  const base = origin.replace(/\/+$/, "");
+  const url = `${base}/api/health`;
+
   try {
-    // IMPORTANT: omit credentials here to avoid CORS/credential blocking
-    const r = await fetch(url, { credentials: "omit" });
+    const r = await fetch(url, { credentials: "omit" }); // keep simple for probe
+    if (!r.ok) return null;
+
     const ct = (r.headers.get("content-type") || "").toLowerCase();
-    if (!r.ok || !ct.includes("application/json")) return null;
-    await r.json();
-    return origin.replace(/\/+$/, "");
+
+    if (ct.includes("application/json")) {
+      await r.json();
+      return base;
+    }
+
+    const t = await r.text();
+    if (String(t || "").toLowerCase().includes("ok")) return base;
+
+    return null;
   } catch {
     return null;
   }
@@ -71,54 +99,73 @@ async function probe(origin) {
 
 async function getWorkingApiOrigin() {
   const env = cleanOrigin(ENV_BASE);
+  const sib = cleanOrigin(siblingRenderOrigin());
 
-  // If we already found a working origin in this tab session, reuse it.
+  // reuse if cached
   try {
     const cached = sessionStorage.getItem("__api_origin__");
-    if (cached) return cached;
+    if (cached && !isFrontendOrigin(cached)) return cached;
   } catch {
-    // ignore sessionStorage issues
+    // ignore
   }
 
-  // Build candidate list
+  const prod = isOnRenderHost();
+
+  // In prod: DO NOT try same-origin (frontend) as API base.
+  // In dev: allow same-origin for proxy setups.
   const sameOrigin = (() => {
     try {
-      return window.location.origin;
+      return cleanOrigin(window.location.origin);
     } catch {
       return "";
     }
   })();
 
-  const candidates = [env, sameOrigin, siblingRenderOrigin()].filter(Boolean);
+  const candidates = [
+    env,
+    sib,
+    ...(prod ? [] : [sameOrigin]),
+  ].filter(Boolean);
 
   for (const c of candidates) {
     const ok = await probe(c);
     if (ok) {
-      try {
-        sessionStorage.setItem("__api_origin__", ok);
-      } catch {
-        // ignore
+      // never cache frontend origin
+      if (!isFrontendOrigin(ok)) {
+        try {
+          sessionStorage.setItem("__api_origin__", ok);
+        } catch {
+          // ignore
+        }
       }
       return ok;
     }
   }
 
-  // HARDENING:
-  // If ENV is set, do NOT cache or return the frontend origin fallback.
-  // Return ENV as the most truthful fallback in production.
+  // fallback rules:
+  // If ENV is set, prefer it (even if probe failed) — it's explicit.
   if (env) return env;
-
-  // Dev fallback (proxy/same-origin)
+  // else sibling if present
+  if (sib) return sib;
+  // dev-only fallback
   return sameOrigin || "";
 }
 
+// Build full URL for API call
+async function apiUrl(path) {
+  const origin = await getWorkingApiOrigin();
+  const p = String(path || "").replace(/^\/+/, "");
+  if (/^https?:\/\//i.test(p)) return p;
+  return `${origin.replace(/\/+$/, "")}/api/${p}`;
+}
+
 /* ───────────────────────────────────────────────────────────────
-   Robust fetcher: must receive JSON (protects against SPA HTML)
-   + Auth helpers / 401 retry for inconsistent backend protections.
+   Robust JSON fetcher + auth helper
+   - Protects against SPA HTML responses.
+   - Retries once with legacy headers if 401/403.
    ─────────────────────────────────────────────────────────────── */
 
 function getStoredToken() {
-  // Support a few common storage patterns without breaking anything.
   try {
     const ls = window.localStorage;
     const direct =
@@ -140,14 +187,8 @@ function getStoredToken() {
 
 function baseHeaders(extra = {}) {
   const token = getStoredToken();
-  const h = {
-    Accept: "application/json",
-    ...(extra || {}),
-  };
-  // If you ever store a token, we’ll attach it automatically.
-  if (token && !h.Authorization) {
-    h.Authorization = `Bearer ${token}`;
-  }
+  const h = { Accept: "application/json", ...(extra || {}) };
+  if (token && !h.Authorization) h.Authorization = `Bearer ${token}`;
   return h;
 }
 
@@ -162,17 +203,13 @@ async function fetchJSON(url, opts = {}) {
   const raw = await res.text();
 
   if (!res.ok) {
-    // Keep payload short to avoid nuking the UI
     throw new Error(
       `HTTP ${res.status} ${res.statusText} @ ${url}\n${raw.slice(0, 400)}`
     );
   }
 
   if (!ct.includes("application/json")) {
-    if (
-      raw.toLowerCase().includes("<!doctype html") ||
-      raw.includes("</html>")
-    ) {
+    if (raw.toLowerCase().includes("<!doctype html") || raw.includes("</html>")) {
       throw new Error(
         `Expected JSON but got HTML (SPA fallback) @ ${url}\nLikely wrong API base.`
       );
@@ -188,39 +225,29 @@ async function fetchJSON(url, opts = {}) {
   try {
     return JSON.parse(raw);
   } catch (e) {
-    throw new Error(
-      `Failed to parse JSON @ ${url}: ${e}\n${raw.slice(0, 200)}`
-    );
+    throw new Error(`Failed to parse JSON @ ${url}: ${e}\n${raw.slice(0, 200)}`);
   }
 }
 
-// One place to do API calls.
-// - Builds /api/* URL from a working origin
-// - On 401, retries with common legacy headers some backends use
 async function apiFetchJSON(path, opts = {}, authContext = {}) {
-  const origin = await getWorkingApiOrigin();
-
-  const isAbsolute = /^https?:\/\//i.test(path);
-  const p = String(path).replace(/^\/+/, "");
-  const url = isAbsolute ? path : `${origin}/api/${p}`;
+  const url = await apiUrl(path);
 
   try {
     return await fetchJSON(url, opts);
   } catch (err) {
     const msg = String(err || "");
-    // If backend team routes demand headers, retry once with common ones
     if (msg.includes("HTTP 401") || msg.includes("HTTP 403")) {
       const ownerEmail = authContext?.ownerEmail || "";
       const userEmail = authContext?.userEmail || ownerEmail || "";
+
+      // Retry once with common headers some Flask apps expect
       const retryHeaders = {
         ...(opts.headers || {}),
-        // Common patterns seen in custom Flask apps:
         "X-User-Email": userEmail || "",
         "X-Owner-Email": ownerEmail || userEmail || "",
-        "X-Auth-Email": userEmail || "",
+        "X-Auth-Email": userEmail || "", // legacy
       };
 
-      // Only retry if we actually have something to send
       if (ownerEmail || userEmail) {
         return await fetchJSON(url, { ...opts, headers: retryHeaders });
       }
@@ -233,23 +260,12 @@ async function apiFetchJSON(path, opts = {}, authContext = {}) {
    Helpers
    ─────────────────────────────────────────────────────────────── */
 
-// Normalize whatever the backend returns for profile:
-//   { name, email, ... }
-//   OR { profile: { ... } }
-//   OR { user: { ... } }
 function normalizeProfileResponse(raw, fallbackEmail) {
   const base = (raw && (raw.profile || raw.user || raw)) || {};
-
   const out = { ...base };
-
-  if (!out.email && fallbackEmail) {
-    out.email = fallbackEmail;
-  }
-
-  // Friendly compatibility: some backends call it businessName vs business
+  if (!out.email && fallbackEmail) out.email = fallbackEmail;
   if (!out.business && out.businessName) out.business = out.businessName;
   if (!out.businessName && out.business) out.businessName = out.business;
-
   return out;
 }
 
@@ -290,7 +306,6 @@ export default function Settings({
     if (initialTab && TABS.some((t) => t.key === initialTab)) setTab(initialTab);
   }, [initialTab]);
 
-  // Load profile from backend
   const loadProfile = async () => {
     try {
       setBootError("");
@@ -315,7 +330,7 @@ export default function Settings({
         business: prof.business || prof.businessName || "",
         type: prof.businessType || "",
         location: prof.location || "",
-        teamSize: prof.people || prof.teamSize || "",
+        teamSize: prof.people || prof.teamSize || prof.teamSize === 0 ? prof.teamSize : "",
       });
 
       try {
@@ -337,14 +352,12 @@ export default function Settings({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [user?.email]);
 
-  // Stripe callback refresh
   useEffect(() => {
     const params = new URLSearchParams(search);
     if (params.get("stripe_connected") === "1") loadProfile();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [search]);
 
-  // Save profile
   const handleSave = async () => {
     setSaving(true);
     try {
@@ -353,7 +366,6 @@ export default function Settings({
         name: form.name,
         logo: profile?.logo || "",
         businessType: form.type,
-        // send both keys so backend can pick either
         business: form.business,
         businessName: form.business,
         location: form.location,
@@ -391,13 +403,9 @@ export default function Settings({
   const settingsWidth = `calc(100vw - ${leftOffset}px)`;
   const MAX_W = 1000;
 
-  // Boot screen (profile missing / loading / error)
   if (booting || !profile) {
     return (
-      <div
-        className="settings-layout"
-        style={{ left: leftOffset, width: settingsWidth }}
-      >
+      <div className="settings-layout" style={{ left: leftOffset, width: settingsWidth }}>
         <div style={{ padding: 16, maxWidth: 900 }}>
           <div style={{ fontWeight: 900, marginBottom: 8, color: "#fff" }}>
             {booting ? "Loading Settings…" : "Settings couldn’t load"}
@@ -412,12 +420,13 @@ export default function Settings({
           <div style={{ display: "flex", gap: 10, marginTop: 14 }}>
             <button
               className="btn"
-              onClick={loadProfile}
-              style={{
-                background: "#232323",
-                color: "#fff",
-                border: "1px solid #444",
+              onClick={async () => {
+                try {
+                  sessionStorage.removeItem("__api_origin__");
+                } catch {}
+                await loadProfile();
               }}
+              style={{ background: "#232323", color: "#fff", border: "1px solid #444" }}
             >
               Retry
             </button>
@@ -445,10 +454,7 @@ export default function Settings({
   }
 
   return (
-    <div
-      className="settings-layout"
-      style={{ left: leftOffset, width: settingsWidth }}
-    >
+    <div className="settings-layout" style={{ left: leftOffset, width: settingsWidth }}>
       <nav className="settings-nav">
         {TABS.map((t) => (
           <button
@@ -466,12 +472,8 @@ export default function Settings({
       </nav>
 
       <main className="settings-content fade-in">
-        {/* PROFILE */}
         {tab === "profile" && (
-          <div
-            className="profile-tab"
-            style={{ maxWidth: MAX_W, margin: "0 auto" }}
-          >
+          <div className="profile-tab" style={{ maxWidth: MAX_W, margin: "0 auto" }}>
             <h2>Profile</h2>
             <div className="profile-card">
               <div className="avatar">
@@ -530,10 +532,7 @@ export default function Settings({
                       </button>
                     </>
                   ) : (
-                    <button
-                      className="btn btn-edit"
-                      onClick={() => setEditMode(true)}
-                    >
+                    <button className="btn btn-edit" onClick={() => setEditMode(true)}>
                       Edit Profile
                     </button>
                   )}
@@ -543,16 +542,15 @@ export default function Settings({
           </div>
         )}
 
-        {/* TEAM */}
         {tab === "team" && (
           <TeamTab
             ownerEmail={profile.email}
             userEmail={user?.email || profile.email}
             maxWidth={MAX_W}
+            apiFetchJSON={apiFetchJSON}
           />
         )}
 
-        {/* INTEGRATIONS */}
         {tab === "integrations" && (
           <div style={{ maxWidth: MAX_W, margin: "0 auto" }}>
             <h2>Integrations</h2>
@@ -578,7 +576,6 @@ export default function Settings({
           </div>
         )}
 
-        {/* HELP */}
         {tab === "help" && (
           <div style={{ maxWidth: MAX_W, margin: "0 auto" }}>
             <h2>Help & Support</h2>
@@ -600,7 +597,7 @@ export default function Settings({
 /* ─────────────────────────────────────────────────────────────── */
 /* Team tab                                                        */
 /* ─────────────────────────────────────────────────────────────── */
-function TeamTab({ ownerEmail, userEmail, maxWidth }) {
+function TeamTab({ ownerEmail, userEmail, maxWidth, apiFetchJSON }) {
   const [members, setMembers] = useState([]);
   const [search, setSearch] = useState("");
   const [loading, setLoading] = useState(true);
@@ -699,7 +696,6 @@ function TeamTab({ ownerEmail, userEmail, maxWidth }) {
     <div>
       <h2 style={{ maxWidth: maxWidth, margin: "0 auto 14px" }}>Team</h2>
 
-      {/* Search + refresh */}
       <div
         style={{
           display: "flex",
@@ -765,17 +761,16 @@ function TeamTab({ ownerEmail, userEmail, maxWidth }) {
           }}
         >
           <div style={{ fontWeight: 900, marginBottom: 6 }}>
-            Team API error (this is why you saw 401)
+            Team API error (blocked / unauthorized)
           </div>
           <div style={{ color: "#bbb", marginBottom: 10 }}>
-            This usually means the backend team endpoints require auth headers or
-            session auth that profile doesn’t.
+            If profile loads but team fails, your backend likely enforces extra auth
+            on team routes. Our client retries with common headers.
           </div>
           <pre style={{ margin: 0 }}>{error}</pre>
         </div>
       )}
 
-      {/* Members table */}
       <div
         style={{
           background: "#232325",
@@ -825,9 +820,7 @@ function TeamTab({ ownerEmail, userEmail, maxWidth }) {
                 alignItems: "center",
               }}
             >
-              <div style={{ color: "#fff", fontWeight: 700 }}>
-                {m.name || "—"}
-              </div>
+              <div style={{ color: "#fff", fontWeight: 700 }}>{m.name || "—"}</div>
               <div style={{ color: "#ddd" }}>{m.email}</div>
               <div>
                 <select
