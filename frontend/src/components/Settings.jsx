@@ -1,5 +1,5 @@
 // File: frontend/src/components/Settings.jsx
-import React, { useState, useEffect, useMemo } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import { useLocation } from "react-router-dom";
 import GoogleCalendarEvents from "./GoogleCalendarEvents";
 import StripeConnectCard from "./StripeConnectCard";
@@ -13,252 +13,72 @@ import {
 } from "react-icons/fa";
 import { SiInstagram } from "react-icons/si";
 import "./settings.css";
+import { apiUrl } from "../apiBase";
 
 /* ───────────────────────────────────────────────────────────────
-   RUNTIME API BASE AUTO-DISCOVERY (PROD-SAFE)
-
-   Fixes applied for your compile error:
-   ✅ Removed top-level fetch(`${API_BASE}/api/leads/${email}`) which:
-      - referenced `email` (no-undef)
-      - ran at module load (bad) and broke compilation
-   ✅ Removed API_BASE import since it was only used by that stray line.
+   Settings.jsx (Render-safe)
+   - NO top-level fetch calls
+   - Uses apiUrl() from apiBase.js (single source of truth)
+   - Protects against SPA HTML fallback
+   - Fallbacks if backend route differs:
+       GET  /api/profile?email=
+       GET  /api/user/<email>
+       POST /api/profile
+       POST /api/user
    ─────────────────────────────────────────────────────────────── */
 
-const ENV_BASE =
-  (typeof import.meta !== "undefined" &&
-    import.meta.env &&
-    import.meta.env.VITE_API_BASE) ||
-  (typeof process !== "undefined" &&
-    process.env &&
-    (process.env.REACT_APP_API_BASE || process.env.REACT_APP_API_URL)) ||
-  "";
-
-// "https://x/api" -> "https://x"
-function cleanOrigin(s) {
-  return (s || "").trim().replace(/\/+$/g, "").replace(/\/api$/i, "");
+function isProbablyHtml(text) {
+  const t = String(text || "").toLowerCase();
+  return t.includes("<!doctype html") || t.includes("</html>") || t.includes("<head");
 }
 
-function isOnRenderHost() {
-  try {
-    return String(window.location.hostname || "")
-      .toLowerCase()
-      .includes("onrender.com");
-  } catch {
-    return false;
-  }
-}
-
-function isFrontendOrigin(origin) {
-  const o = String(origin || "").toLowerCase();
-  // common patterns
-  return o.includes("-frontend.onrender.com") || o.includes("frontend.onrender.com");
-}
-
-// Convert "retainai-prod-1-frontend.onrender.com" -> "retainai-prod.onrender.com" (best effort)
-function siblingRenderOrigin() {
-  try {
-    const o = window.location.origin;
-    return o
-      // remove "-frontend"
-      .replace(/-frontend(\.onrender\.com)$/i, "$1")
-      // remove "-<digits>" that some render services append
-      .replace(/-\d+(\.onrender\.com)$/i, "$1");
-  } catch {
-    return "";
-  }
-}
-
-// Probe /api/health. Accepts JSON OR text containing "ok".
-async function probe(origin) {
-  if (!origin) return null;
-  const base = origin.replace(/\/+$/, "");
-  const url = `${base}/api/health`;
-
-  try {
-    const r = await fetch(url, { credentials: "omit" }); // keep simple for probe
-    if (!r.ok) return null;
-
-    const ct = (r.headers.get("content-type") || "").toLowerCase();
-
-    if (ct.includes("application/json")) {
-      await r.json();
-      return base;
-    }
-
-    const t = await r.text();
-    if (String(t || "").toLowerCase().includes("ok")) return base;
-
-    return null;
-  } catch {
-    return null;
-  }
-}
-
-async function getWorkingApiOrigin() {
-  const env = cleanOrigin(ENV_BASE);
-  const sib = cleanOrigin(siblingRenderOrigin());
-
-  // reuse if cached
-  try {
-    const cached = sessionStorage.getItem("__api_origin__");
-    if (cached && !isFrontendOrigin(cached)) return cached;
-  } catch {
-    // ignore
-  }
-
-  const prod = isOnRenderHost();
-
-  // In prod: DO NOT try same-origin (frontend) as API base.
-  // In dev: allow same-origin for proxy setups.
-  const sameOrigin = (() => {
-    try {
-      return cleanOrigin(window.location.origin);
-    } catch {
-      return "";
-    }
-  })();
-
-  const candidates = [env, sib, ...(prod ? [] : [sameOrigin])].filter(Boolean);
-
-  for (const c of candidates) {
-    const ok = await probe(c);
-    if (ok) {
-      // never cache frontend origin
-      if (!isFrontendOrigin(ok)) {
-        try {
-          sessionStorage.setItem("__api_origin__", ok);
-        } catch {
-          // ignore
-        }
-      }
-      return ok;
-    }
-  }
-
-  // fallback rules:
-  // If ENV is set, prefer it (even if probe failed) — it's explicit.
-  if (env) return env;
-  // else sibling if present
-  if (sib) return sib;
-  // dev-only fallback
-  return sameOrigin || "";
-}
-
-// Build full URL for API call
-async function apiUrl(path) {
-  const origin = await getWorkingApiOrigin();
-  const p = String(path || "").replace(/^\/+/, "");
-  if (/^https?:\/\//i.test(p)) return p;
-  return `${origin.replace(/\/+$/, "")}/api/${p}`;
-}
-
-/* ───────────────────────────────────────────────────────────────
-   Robust JSON fetcher + auth helper
-   - Protects against SPA HTML responses.
-   - Retries once with legacy headers if 401/403.
-   ─────────────────────────────────────────────────────────────── */
-
-function getStoredToken() {
-  try {
-    const ls = window.localStorage;
-    const direct =
-      ls.getItem("token") ||
-      ls.getItem("access_token") ||
-      ls.getItem("auth_token");
-    if (direct) return direct;
-
-    const userRaw = ls.getItem("user");
-    if (userRaw) {
-      const u = JSON.parse(userRaw);
-      return u?.token || u?.access_token || u?.auth_token || "";
-    }
-  } catch {
-    // ignore
-  }
-  return "";
-}
-
-function baseHeaders(extra = {}) {
-  const token = getStoredToken();
-  const h = { Accept: "application/json", ...(extra || {}) };
-  if (token && !h.Authorization) h.Authorization = `Bearer ${token}`;
-  return h;
-}
-
-async function fetchJSON(url, opts = {}) {
+async function fetchJSONStrict(url, opts = {}) {
   const res = await fetch(url, {
     credentials: "include",
     ...opts,
-    headers: baseHeaders(opts.headers || {}),
+    headers: {
+      Accept: "application/json",
+      ...(opts.headers || {}),
+    },
   });
 
   const ct = (res.headers.get("content-type") || "").toLowerCase();
   const raw = await res.text();
 
   if (!res.ok) {
-    throw new Error(
-      `HTTP ${res.status} ${res.statusText} @ ${url}\n${raw.slice(0, 400)}`
-    );
+    throw new Error(`HTTP ${res.status} ${res.statusText} @ ${url}\n${raw.slice(0, 400)}`);
   }
 
+  // If backend accidentally routes to SPA, we get HTML.
   if (!ct.includes("application/json")) {
-    if (raw.toLowerCase().includes("<!doctype html") || raw.includes("</html>")) {
+    if (isProbablyHtml(raw)) {
       throw new Error(
-        `Expected JSON but got HTML (SPA fallback) @ ${url}\nLikely wrong API base.`
+        `Expected JSON but got HTML (SPA fallback). Wrong API base / route.\nURL: ${url}`
       );
     }
     throw new Error(
-      `Expected JSON but got ${ct || "unknown content-type"} @ ${url}\n${raw.slice(
-        0,
-        200
-      )}`
+      `Expected JSON but got ${ct || "unknown content-type"}.\nURL: ${url}\n${raw.slice(0, 200)}`
     );
   }
 
   try {
     return JSON.parse(raw);
   } catch (e) {
-    throw new Error(`Failed to parse JSON @ ${url}: ${e}\n${raw.slice(0, 200)}`);
+    throw new Error(`Bad JSON @ ${url}: ${e}\n${raw.slice(0, 200)}`);
   }
 }
-
-async function apiFetchJSON(path, opts = {}, authContext = {}) {
-  const url = await apiUrl(path);
-
-  try {
-    return await fetchJSON(url, opts);
-  } catch (err) {
-    const msg = String(err || "");
-    if (msg.includes("HTTP 401") || msg.includes("HTTP 403")) {
-      const ownerEmail = authContext?.ownerEmail || "";
-      const userEmail = authContext?.userEmail || ownerEmail || "";
-
-      // Retry once with common headers some Flask apps expect
-      const retryHeaders = {
-        ...(opts.headers || {}),
-        "X-User-Email": userEmail || "",
-        "X-Owner-Email": ownerEmail || userEmail || "",
-        "X-Auth-Email": userEmail || "", // legacy
-      };
-
-      if (ownerEmail || userEmail) {
-        return await fetchJSON(url, { ...opts, headers: retryHeaders });
-      }
-    }
-    throw err;
-  }
-}
-
-/* ───────────────────────────────────────────────────────────────
-   Helpers
-   ─────────────────────────────────────────────────────────────── */
 
 function normalizeProfileResponse(raw, fallbackEmail) {
   const base = (raw && (raw.profile || raw.user || raw)) || {};
   const out = { ...base };
   if (!out.email && fallbackEmail) out.email = fallbackEmail;
+
+  // Normalize naming variants
   if (!out.business && out.businessName) out.business = out.businessName;
   if (!out.businessName && out.business) out.businessName = out.business;
+
+  if (!out.businessType && out.type) out.businessType = out.type;
+
   return out;
 }
 
@@ -277,6 +97,7 @@ export default function Settings({
   gcalStatus,
   setGcalStatus,
   initialTab,
+  refreshUser,
 }) {
   const { search } = useLocation();
 
@@ -290,6 +111,7 @@ export default function Settings({
     location: "",
     teamSize: "",
   });
+
   const [editMode, setEditMode] = useState(false);
   const [saving, setSaving] = useState(false);
   const [bootError, setBootError] = useState("");
@@ -299,43 +121,72 @@ export default function Settings({
     if (initialTab && TABS.some((t) => t.key === initialTab)) setTab(initialTab);
   }, [initialTab]);
 
+  // --- Load profile with fallback routes ---
   const loadProfile = async () => {
-    try {
-      setBootError("");
-      setBooting(true);
+    setBootError("");
+    setBooting(true);
 
-      if (!user?.email) {
+    try {
+      const email = user?.email || profile?.email || "";
+      if (!email) {
         setProfile(null);
         setBootError("No user email found. Please sign in again.");
         return;
       }
 
-      const raw = await apiFetchJSON(
-        `profile?email=${encodeURIComponent(user.email)}`
-      );
+      // Attempt 1: /api/profile?email=
+      try {
+        const url1 = apiUrl(`profile?email=${encodeURIComponent(email)}`);
+        const raw1 = await fetchJSONStrict(url1);
+        const prof1 = normalizeProfileResponse(raw1, email);
+        setProfile(prof1);
+        setForm({
+          name: prof1.name || "",
+          email: prof1.email || email,
+          business: prof1.business || prof1.businessName || "",
+          type: prof1.businessType || "",
+          location: prof1.location || "",
+          teamSize:
+            prof1.people ?? prof1.teamSize ?? prof1.team_size ?? prof1.teamSize === 0
+              ? String(prof1.people ?? prof1.teamSize ?? prof1.team_size ?? "")
+              : "",
+        });
 
-      const prof = normalizeProfileResponse(raw, user.email);
+        try {
+          localStorage.setItem("user", JSON.stringify(prof1));
+        } catch {}
 
-      setProfile(prof);
+        return;
+      } catch (e1) {
+        // fall through to try /api/user/<email>
+        console.warn("profile?email route failed, trying /user/<email>:", e1);
+      }
+
+      // Attempt 2: /api/user/<email>
+      const url2 = apiUrl(`user/${encodeURIComponent(email)}`);
+      const raw2 = await fetchJSONStrict(url2);
+      const prof2 = normalizeProfileResponse(raw2, email);
+
+      setProfile(prof2);
       setForm({
-        name: prof.name || "",
-        email: prof.email || "",
-        business: prof.business || prof.businessName || "",
-        type: prof.businessType || "",
-        location: prof.location || "",
+        name: prof2.name || "",
+        email: prof2.email || email,
+        business: prof2.business || prof2.businessName || "",
+        type: prof2.businessType || "",
+        location: prof2.location || "",
         teamSize:
-          prof.people || prof.teamSize || prof.teamSize === 0 ? prof.teamSize : "",
+          prof2.people ?? prof2.teamSize ?? prof2.team_size ?? prof2.teamSize === 0
+            ? String(prof2.people ?? prof2.teamSize ?? prof2.team_size ?? "")
+            : "",
       });
 
       try {
-        localStorage.setItem("user", JSON.stringify(prof));
-      } catch {
-        // ignore
-      }
+        localStorage.setItem("user", JSON.stringify(prof2));
+      } catch {}
     } catch (err) {
       console.error("Failed to load profile:", err);
-      setBootError(String(err).slice(0, 900));
       setProfile(null);
+      setBootError(String(err).slice(0, 1200));
     } finally {
       setBooting(false);
     }
@@ -367,24 +218,55 @@ export default function Settings({
         teamSize: form.teamSize,
       };
 
-      const raw = await apiFetchJSON("profile", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(payload),
-      });
+      // Try POST /api/profile first
+      try {
+        const url1 = apiUrl("profile");
+        const raw1 = await fetchJSONStrict(url1, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(payload),
+        });
+        const prof = normalizeProfileResponse(raw1, form.email);
+        setProfile(prof);
+        setForm((f) => ({
+          ...f,
+          name: prof.name || f.name,
+          email: prof.email || f.email,
+          business: prof.business || prof.businessName || f.business,
+          type: prof.businessType || f.type,
+          location: prof.location || f.location,
+          teamSize: String(prof.people ?? prof.teamSize ?? f.teamSize ?? ""),
+        }));
+      } catch (e1) {
+        // Fallback POST /api/user
+        console.warn("POST /profile failed, trying POST /user:", e1);
+        const url2 = apiUrl("user");
+        const raw2 = await fetchJSONStrict(url2, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(payload),
+        });
+        const prof = normalizeProfileResponse(raw2, form.email);
+        setProfile(prof);
+        setForm((f) => ({
+          ...f,
+          name: prof.name || f.name,
+          email: prof.email || f.email,
+          business: prof.business || prof.businessName || f.business,
+          type: prof.businessType || f.type,
+          location: prof.location || f.location,
+          teamSize: String(prof.people ?? prof.teamSize ?? f.teamSize ?? ""),
+        }));
+      }
 
-      const prof = normalizeProfileResponse(raw, form.email);
-      setProfile(prof);
-      setForm((f) => ({
-        ...f,
-        name: prof.name || f.name,
-        email: prof.email || f.email,
-        business: prof.business || prof.businessName || f.business,
-        type: prof.businessType || f.type,
-        location: prof.location || f.location,
-        teamSize: prof.people || prof.teamSize || f.teamSize,
-      }));
       setEditMode(false);
+
+      // Optional: let parent refresh
+      if (typeof refreshUser === "function") {
+        try {
+          await refreshUser();
+        } catch {}
+      }
     } catch (e) {
       console.error("Failed to save profile:", e);
       alert("Could not save profile. See console for details.");
@@ -399,10 +281,7 @@ export default function Settings({
 
   if (booting || !profile) {
     return (
-      <div
-        className="settings-layout"
-        style={{ left: leftOffset, width: settingsWidth }}
-      >
+      <div className="settings-layout" style={{ left: leftOffset, width: settingsWidth }}>
         <div style={{ padding: 16, maxWidth: 900 }}>
           <div style={{ fontWeight: 900, marginBottom: 8, color: "#fff" }}>
             {booting ? "Loading Settings…" : "Settings couldn’t load"}
@@ -411,23 +290,14 @@ export default function Settings({
           <div style={{ color: "#bbb", lineHeight: 1.5 }}>
             {booting
               ? "Fetching your profile and workspace data."
-              : "Your profile request failed. This is usually a session/auth or API base issue."}
+              : "Your profile request failed. This is usually an API routing / backend origin issue."}
           </div>
 
           <div style={{ display: "flex", gap: 10, marginTop: 14 }}>
             <button
               className="btn"
-              onClick={async () => {
-                try {
-                  sessionStorage.removeItem("__api_origin__");
-                } catch {}
-                await loadProfile();
-              }}
-              style={{
-                background: "#232323",
-                color: "#fff",
-                border: "1px solid #444",
-              }}
+              onClick={loadProfile}
+              style={{ background: "#232323", color: "#fff", border: "1px solid #444" }}
             >
               Retry
             </button>
@@ -455,10 +325,7 @@ export default function Settings({
   }
 
   return (
-    <div
-      className="settings-layout"
-      style={{ left: leftOffset, width: settingsWidth }}
-    >
+    <div className="settings-layout" style={{ left: leftOffset, width: settingsWidth }}>
       <nav className="settings-nav">
         {TABS.map((t) => (
           <button
@@ -487,6 +354,7 @@ export default function Settings({
                   profile.name?.[0]?.toUpperCase() || "?"
                 )}
               </div>
+
               <div className="profile-fields">
                 {[
                   { label: "Name", name: "name" },
@@ -502,7 +370,7 @@ export default function Settings({
                       <input
                         className="field-input"
                         type="text"
-                        value={form[name]}
+                        value={form[name] || ""}
                         onChange={(e) =>
                           setForm((f) => ({ ...f, [name]: e.target.value }))
                         }
@@ -551,7 +419,6 @@ export default function Settings({
             ownerEmail={profile.email}
             userEmail={user?.email || profile.email}
             maxWidth={MAX_W}
-            apiFetchJSON={apiFetchJSON}
           />
         )}
 
@@ -585,11 +452,7 @@ export default function Settings({
             <h2>Help & Support</h2>
             <p className="help-line">
               If you need anything, email{" "}
-              <a href="mailto:owner@retainai.ca">owner@retainai.ca</a> or see our{" "}
-              <a href="https://docs.retainai.ca" target="_blank" rel="noreferrer">
-                documentation
-              </a>
-              .
+              <a href="mailto:owner@retainai.ca">owner@retainai.ca</a>.
             </p>
           </div>
         )}
@@ -601,7 +464,8 @@ export default function Settings({
 /* ─────────────────────────────────────────────────────────────── */
 /* Team tab                                                        */
 /* ─────────────────────────────────────────────────────────────── */
-function TeamTab({ ownerEmail, userEmail, maxWidth, apiFetchJSON }) {
+
+function TeamTab({ ownerEmail, userEmail, maxWidth }) {
   const [members, setMembers] = useState([]);
   const [search, setSearch] = useState("");
   const [loading, setLoading] = useState(true);
@@ -615,11 +479,8 @@ function TeamTab({ ownerEmail, userEmail, maxWidth, apiFetchJSON }) {
     setLoading(true);
     setError("");
     try {
-      const data = await apiFetchJSON(
-        `team/members?ownerEmail=${encodeURIComponent(ownerEmail)}`,
-        {},
-        { ownerEmail, userEmail }
-      );
+      const url = apiUrl(`team/members?ownerEmail=${encodeURIComponent(ownerEmail)}`);
+      const data = await fetchJSONStrict(url, {},);
 
       if (Array.isArray(data?.members)) setMembers(data.members);
       else if (Array.isArray(data)) setMembers(data);
@@ -635,7 +496,6 @@ function TeamTab({ ownerEmail, userEmail, maxWidth, apiFetchJSON }) {
 
   useEffect(() => {
     if (ownerEmail) loadMembers();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [ownerEmail]);
 
@@ -655,15 +515,12 @@ function TeamTab({ ownerEmail, userEmail, maxWidth, apiFetchJSON }) {
     setMembers((ms) => ms.map((m) => (m.email === email ? { ...m, role } : m)));
 
     try {
-      await apiFetchJSON(
-        "team/role",
-        {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ email, role, ownerEmail }),
-        },
-        { ownerEmail, userEmail }
-      );
+      const url = apiUrl("team/role");
+      await fetchJSONStrict(url, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email, role, ownerEmail, userEmail }),
+      });
     } catch (e) {
       alert("Could not change role. Make sure /api/team/role exists.");
       loadMembers();
@@ -680,15 +537,12 @@ function TeamTab({ ownerEmail, userEmail, maxWidth, apiFetchJSON }) {
     setMembers((ms) => ms.filter((m) => m.email !== email));
 
     try {
-      await apiFetchJSON(
-        "team/remove",
-        {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ email, ownerEmail }),
-        },
-        { ownerEmail, userEmail }
-      );
+      const url = apiUrl("team/remove");
+      await fetchJSONStrict(url, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email, ownerEmail, userEmail }),
+      });
     } catch (e) {
       alert("Could not remove. Make sure /api/team/remove exists.");
       setMembers(prev);
@@ -766,11 +620,7 @@ function TeamTab({ ownerEmail, userEmail, maxWidth, apiFetchJSON }) {
           }}
         >
           <div style={{ fontWeight: 900, marginBottom: 6 }}>
-            Team API error (blocked / unauthorized)
-          </div>
-          <div style={{ color: "#bbb", marginBottom: 10 }}>
-            If profile loads but team fails, your backend likely enforces extra auth on
-            team routes. Our client retries with common headers.
+            Team API error (blocked / wrong route)
           </div>
           <pre style={{ margin: 0 }}>{error}</pre>
         </div>
