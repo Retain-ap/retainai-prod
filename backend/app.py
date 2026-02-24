@@ -3782,14 +3782,6 @@ def health():
     return jsonify({"ok": True, "ts": int(time.time())}), 200
 
 # ----------------------------
-# API: HEALTH
-# ----------------------------
-@app.route("/api/health", methods=["GET"])
-def api_health():
-    return jsonify({"ok": True}), 200
-
-
-# ----------------------------
 # Helpers
 # ----------------------------
 def _norm_email(e: str) -> str:
