@@ -1,4 +1,4 @@
-// src/components/CrmDashboard.jsx
+// File: src/components/CrmDashboard.jsx
 import React, { useState, useEffect, useCallback } from "react";
 import Sidebar from "./Sidebar";
 import LeadsDashboard from "./LeadsDashboard";
@@ -17,22 +17,152 @@ import { useNavigate, useLocation } from "react-router-dom";
 import { useSettings } from "./SettingsContext";
 import Automations from "./Automations";
 import InviteTeamModal from "./InviteTeamModal";
-import { API_BASE } from "../apiBase";
 
-fetch(`${API_BASE}/api/leads/${email}`)
-
-// ✅ NEW: one source of truth for backend API URLs
-import { apiUrl } from "../apiBase";
+/*
+  ✅ FIXES FOR YOUR ESLINT/COMPILE ERRORS
+  - Removed `import { API_BASE } from "../apiBase";`
+  - Removed the top-level `fetch(`${API_BASE}/api/leads/${email}`)` which:
+      * referenced `email` (no-undef)
+      * ran at module load time (bad)
+      * caused "import/first" because it sat between imports + code in some variants
+  - Added safe `apiUrl()` helper here (same idea as in Settings) so all fetches
+    always target the backend origin in production and avoid SPA HTML responses.
+*/
 
 const DEFAULT_TAGS = [
-  "VIP","New","Repeat","Upsell","Needs Attention","Appointment Set",
-  "Waiting on Reply","Invoice Sent","Birthday","Long Term","Happy","Upset"
+  "VIP",
+  "New",
+  "Repeat",
+  "Upsell",
+  "Needs Attention",
+  "Appointment Set",
+  "Waiting on Reply",
+  "Invoice Sent",
+  "Birthday",
+  "Long Term",
+  "Happy",
+  "Upset",
 ];
+
+// ───────────────────────────────────────────────────────────────
+// API ORIGIN RESOLUTION (prod-safe)
+// ───────────────────────────────────────────────────────────────
+
+const ENV_BASE =
+  (typeof import.meta !== "undefined" &&
+    import.meta.env &&
+    import.meta.env.VITE_API_BASE) ||
+  (typeof process !== "undefined" &&
+    process.env &&
+    (process.env.REACT_APP_API_BASE || process.env.REACT_APP_API_URL)) ||
+  "";
+
+function cleanOrigin(s) {
+  return (s || "").trim().replace(/\/+$/g, "").replace(/\/api$/i, "");
+}
+
+function isOnRenderHost() {
+  try {
+    return String(window.location.hostname || "")
+      .toLowerCase()
+      .includes("onrender.com");
+  } catch {
+    return false;
+  }
+}
+
+function isFrontendOrigin(origin) {
+  const o = String(origin || "").toLowerCase();
+  return o.includes("-frontend.onrender.com") || o.includes("frontend.onrender.com");
+}
+
+function siblingRenderOrigin() {
+  try {
+    const o = window.location.origin;
+    return o
+      .replace(/-frontend(\.onrender\.com)$/i, "$1")
+      .replace(/-\d+(\.onrender\.com)$/i, "$1");
+  } catch {
+    return "";
+  }
+}
+
+async function probe(origin) {
+  if (!origin) return null;
+  const base = origin.replace(/\/+$/, "");
+  const url = `${base}/api/health`;
+
+  try {
+    const r = await fetch(url, { credentials: "omit" });
+    if (!r.ok) return null;
+
+    const ct = (r.headers.get("content-type") || "").toLowerCase();
+    if (ct.includes("application/json")) {
+      await r.json();
+      return base;
+    }
+
+    const t = await r.text();
+    if (String(t || "").toLowerCase().includes("ok")) return base;
+    return null;
+  } catch {
+    return null;
+  }
+}
+
+async function getWorkingApiOrigin() {
+  const env = cleanOrigin(ENV_BASE);
+  const sib = cleanOrigin(siblingRenderOrigin());
+
+  try {
+    const cached = sessionStorage.getItem("__api_origin__");
+    if (cached && !isFrontendOrigin(cached)) return cached;
+  } catch {}
+
+  const prod = isOnRenderHost();
+
+  const sameOrigin = (() => {
+    try {
+      return cleanOrigin(window.location.origin);
+    } catch {
+      return "";
+    }
+  })();
+
+  const candidates = [env, sib, ...(prod ? [] : [sameOrigin])].filter(Boolean);
+
+  for (const c of candidates) {
+    const ok = await probe(c);
+    if (ok) {
+      if (!isFrontendOrigin(ok)) {
+        try {
+          sessionStorage.setItem("__api_origin__", ok);
+        } catch {}
+      }
+      return ok;
+    }
+  }
+
+  if (env) return env;
+  if (sib) return sib;
+  return sameOrigin || "";
+}
+
+async function apiUrl(path) {
+  const origin = await getWorkingApiOrigin();
+  const p = String(path || "").replace(/^\/+/, "");
+  if (/^https?:\/\//i.test(p)) return p;
+  return `${origin.replace(/\/+$/, "")}/api/${p}`;
+}
+
+// ───────────────────────────────────────────────────────────────
+// Helpers
+// ───────────────────────────────────────────────────────────────
 
 function getAppointmentsFromLeads(leads) {
   let out = [];
-  (leads || []).forEach(lead => {
-    (lead.appointments || []).forEach(app => {
+  (leads || []).forEach((lead) => {
+    (lead.appointments || []).forEach((app) => {
       out.push({ ...app, type: "appointment", lead, checked: !!app.done });
     });
   });
@@ -41,7 +171,7 @@ function getAppointmentsFromLeads(leads) {
 
 function extractTags(leads, userTags) {
   const tagSet = new Set([...DEFAULT_TAGS, ...(userTags || [])]);
-  (leads || []).forEach(lead => (lead.tags || []).forEach(tag => tagSet.add(tag)));
+  (leads || []).forEach((lead) => (lead.tags || []).forEach((tag) => tagSet.add(tag)));
   return Array.from(tagSet);
 }
 
@@ -98,7 +228,11 @@ function CrmDashboard() {
   }, [user]);
 
   useEffect(() => {
-    if (settings?.user && settings.user.email && (!user || settings.user.email !== user.email)) {
+    if (
+      settings?.user &&
+      settings.user.email &&
+      (!user || settings.user.email !== user.email)
+    ) {
       setUserState(settings.user);
     }
     // eslint-disable-next-line
@@ -106,7 +240,11 @@ function CrmDashboard() {
 
   const [leads, setLeads] = useState([]);
   const [userTags, setUserTags] = useState(() => {
-    try { return JSON.parse(localStorage.getItem("userTags") || "[]"); } catch { return []; }
+    try {
+      return JSON.parse(localStorage.getItem("userTags") || "[]");
+    } catch {
+      return [];
+    }
   });
   const [tags, setTags] = useState([]);
   const [showLeadModal, setShowLeadModal] = useState(false);
@@ -128,67 +266,85 @@ function CrmDashboard() {
   const [quickAddDate, setQuickAddDate] = useState(null);
   const [showInviteModal, setShowInviteModal] = useState(false);
 
-  // ✅ Load leads (fixed: always hit backend origin via apiUrl)
+  // ✅ Load leads (prod-safe: always use apiUrl())
   useEffect(() => {
-    if (user && user.email) {
-      setLoadingLeads(true);
+    let cancelled = false;
 
-      fetch(apiUrl(`leads/${encodeURIComponent(user.email)}`), { credentials: "include" })
-        .then(async (res) => {
+    (async () => {
+      if (user && user.email) {
+        setLoadingLeads(true);
+        try {
+          const url = await apiUrl(`leads/${encodeURIComponent(user.email)}`);
+          const res = await fetch(url, { credentials: "include" });
           if (!res.ok) throw new Error(`HTTP ${res.status}`);
-          return res.json();
-        })
-        .then(data => {
+          const data = await res.json();
+          if (cancelled) return;
+
           const ls = Array.isArray(data.leads) ? data.leads : [];
           setLeads(ls);
           setTags(extractTags(ls, userTags));
           localStorage.setItem("leads", JSON.stringify(ls));
-        })
-        .catch(() => setLeads([]))
-        .finally(() => setLoadingLeads(false));
-    } else {
-      setLeads([]);
-      setTags([...DEFAULT_TAGS, ...userTags]);
-    }
+        } catch {
+          if (!cancelled) setLeads([]);
+        } finally {
+          if (!cancelled) setLoadingLeads(false);
+        }
+      } else {
+        setLeads([]);
+        setTags([...DEFAULT_TAGS, ...userTags]);
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
   }, [user, userTags]);
 
-  // ✅ Save leads (fixed)
-  const saveLeadsToBackend = (newLeads) => {
-    if (user && user.email) {
-      fetch(apiUrl(`leads/${encodeURIComponent(user.email)}`), {
-        method: "POST",
-        credentials: "include",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ leads: newLeads }),
-      }).catch(() => {});
-      localStorage.setItem("leads", JSON.stringify(newLeads));
-      setTags(extractTags(newLeads, userTags));
-    }
-  };
+  // ✅ Save leads (prod-safe)
+  const saveLeadsToBackend = useCallback(
+    async (newLeads) => {
+      if (user && user.email) {
+        try {
+          const url = await apiUrl(`leads/${encodeURIComponent(user.email)}`);
+          await fetch(url, {
+            method: "POST",
+            credentials: "include",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ leads: newLeads }),
+          });
+        } catch {}
+        localStorage.setItem("leads", JSON.stringify(newLeads));
+        setTags(extractTags(newLeads, userTags));
+      }
+    },
+    [user, userTags]
+  );
 
-  const handleUpdateLead = useCallback((updated) => {
-    if (!updated) return;
+  const handleUpdateLead = useCallback(
+    (updated) => {
+      if (!updated) return;
 
-    setLeads(prev => {
-      const match = (a, b) =>
-        String(a?.id ?? a?.email) === String(b?.id ?? b?.email);
+      setLeads((prev) => {
+        const match = (a, b) => String(a?.id ?? a?.email) === String(b?.id ?? b?.email);
 
-      const exists = prev.some(l => match(l, updated));
-      const next = exists
-        ? prev.map(l => (match(l, updated) ? { ...l, ...updated } : l))
-        : [updated, ...prev];
+        const exists = prev.some((l) => match(l, updated));
+        const next = exists
+          ? prev.map((l) => (match(l, updated) ? { ...l, ...updated } : l))
+          : [updated, ...prev];
 
-      saveLeadsToBackend(next);
-      return next;
-    });
+        saveLeadsToBackend(next);
+        return next;
+      });
 
-    setDrawerLead(prev => {
-      if (!prev) return prev;
-      const same =
-        String(prev?.id ?? prev?.email) === String(updated?.id ?? updated?.email);
-      return same ? { ...prev, ...updated } : prev;
-    });
-  }, []); // saveLeadsToBackend ok here
+      setDrawerLead((prev) => {
+        if (!prev) return prev;
+        const same =
+          String(prev?.id ?? prev?.email) === String(updated?.id ?? updated?.email);
+        return same ? { ...prev, ...updated } : prev;
+      });
+    },
+    [saveLeadsToBackend]
+  );
 
   useEffect(() => {
     if (highlightLeadIds.length > 0) {
@@ -212,6 +368,7 @@ function CrmDashboard() {
     saveLeadsToBackend(newLeads);
     setShowLeadModal(false);
     setEditLead(null);
+
     if (lead.tags && Array.isArray(lead.tags)) {
       lead.tags.forEach((tag) => {
         if (tag && !DEFAULT_TAGS.includes(tag) && !userTags.includes(tag)) {
@@ -229,23 +386,27 @@ function CrmDashboard() {
     saveLeadsToBackend(newLeads);
   };
 
-  // ✅ Lead contacted (fixed)
+  // ✅ Lead contacted (prod-safe)
   const handleLeadContacted = async (lead) => {
     if (!user || !user.email || !lead.id) return;
 
-    await fetch(
-      apiUrl(`leads/${encodeURIComponent(user.email)}/${lead.id}/contacted`),
-      {
+    try {
+      const url = await apiUrl(
+        `leads/${encodeURIComponent(user.email)}/${lead.id}/contacted`
+      );
+      await fetch(url, {
         method: "POST",
         credentials: "include",
-        headers: { "Content-Type": "application/json" }
-      }
-    ).catch(() => {});
+        headers: { "Content-Type": "application/json" },
+      });
+    } catch {}
 
-    fetch(apiUrl(`leads/${encodeURIComponent(user.email)}`), { credentials: "include" })
-      .then(res => res.json())
-      .then(data => setLeads(Array.isArray(data.leads) ? data.leads : []))
-      .catch(() => {});
+    try {
+      const url2 = await apiUrl(`leads/${encodeURIComponent(user.email)}`);
+      const res = await fetch(url2, { credentials: "include" });
+      const data = await res.json();
+      setLeads(Array.isArray(data.leads) ? data.leads : []);
+    } catch {}
   };
 
   const handleLogout = () => {
@@ -262,7 +423,7 @@ function CrmDashboard() {
       message: aiResponse,
       leadId: lead.id,
       leadEmail: lead.email,
-      userEmail: user.email
+      userEmail: user.email,
     });
     setSection("notification-send");
   }
@@ -271,7 +432,7 @@ function CrmDashboard() {
     setSection("messages");
   }
 
-  // ✅ Send AI prompt email (fixed)
+  // ✅ Send AI prompt email (prod-safe)
   async function handleSendAIPromptEmail(
     lead,
     aiResponse,
@@ -291,18 +452,23 @@ function CrmDashboard() {
       promptType: promptType || "",
     };
     try {
-      const res = await fetch(apiUrl("send-ai-message"), {
+      const url = await apiUrl("send-ai-message");
+      const res = await fetch(url, {
         method: "POST",
         credentials: "include",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(body)
+        body: JSON.stringify(body),
       });
       if (res.ok) {
         setHighlightLeadIds([lead.id]);
         alert("AI prompt email sent!");
       } else {
         let err = {};
-        try { err = await res.json(); } catch { err = { error: await res.text().catch(() => "") }; }
+        try {
+          err = await res.json();
+        } catch {
+          err = { error: await res.text().catch(() => "") };
+        }
         alert("Failed to send: " + (err.error || "Unknown error"));
       }
     } catch (e) {
@@ -310,58 +476,60 @@ function CrmDashboard() {
     }
   }
 
-  // ✅ Refresh user (fixed)
+  // ✅ Refresh user (prod-safe)
   const handleRefreshUser = useCallback(async () => {
     if (!user || !user.email) return;
 
-    const res = await fetch(apiUrl(`user/${encodeURIComponent(user.email)}`), {
-      credentials: "include"
-    });
+    try {
+      const url = await apiUrl(`user/${encodeURIComponent(user.email)}`);
+      const res = await fetch(url, { credentials: "include" });
 
-    if (res.ok) {
-      const data = await res.json();
-      setUserState(prev =>
-        prev
-          ? {
-              ...prev,
-              ...data,
-              lineOfBusiness:
-                data.lineOfBusiness ||
-                data.businessType ||
-                data.business ||
-                prev.lineOfBusiness ||
-                prev.businessType ||
-                prev.business ||
-                "",
-            }
-          : data
-      );
-      setUser(data);
-      localStorage.setItem("user", JSON.stringify(data));
-    }
+      if (res.ok) {
+        const data = await res.json();
+        setUserState((prev) =>
+          prev
+            ? {
+                ...prev,
+                ...data,
+                lineOfBusiness:
+                  data.lineOfBusiness ||
+                  data.businessType ||
+                  data.business ||
+                  prev.lineOfBusiness ||
+                  prev.businessType ||
+                  prev.business ||
+                  "",
+              }
+            : data
+        );
+        setUser(data);
+        localStorage.setItem("user", JSON.stringify(data));
+      }
+    } catch {}
   }, [user, setUser]);
 
   const crmAppointments = getAppointmentsFromLeads(leads);
   const SIDEBAR_WIDTH = sidebarCollapsed ? 60 : 245;
 
-  // ✅ Check Google connection (fixed)
+  // ✅ Check Google connection (prod-safe)
   const checkGoogleConnection = useCallback(async () => {
     if (!user || !user.email) return false;
     try {
-      const res = await fetch(apiUrl(`google/status/${encodeURIComponent(user.email)}`), {
-        credentials: "include"
-      });
+      const url = await apiUrl(`google/status/${encodeURIComponent(user.email)}`);
+      const res = await fetch(url, { credentials: "include" });
+
       if (!res.ok) {
         setGcalConnected(false);
         setGcalStatus("unavailable");
         return false;
       }
+
       const data = await res.json();
       const connected = !!data.connected;
       setGcalConnected(connected);
       setGcalStatus(connected ? "ok" : "disconnected");
       return connected;
-    } catch (e) {
+    } catch {
       setGcalConnected(false);
       setGcalStatus("unavailable");
       return false;
@@ -373,20 +541,24 @@ function CrmDashboard() {
     setSection("settings");
   }, []);
 
-  // ✅ Fetch Google events (fixed)
+  // ✅ Fetch Google events (prod-safe)
   const getGoogleEvents = useCallback(async () => {
     if (!user || !user.email) return;
     try {
-      const res = await fetch(apiUrl(`google/events/${encodeURIComponent(user.email)}`), {
-        credentials: "include"
-      });
+      const url = await apiUrl(`google/events/${encodeURIComponent(user.email)}`);
+      const res = await fetch(url, { credentials: "include" });
+
       if (!res.ok) {
         let msg = "";
         try {
           const err = await res.json();
           msg = err?.error || err?.message || "";
         } catch {
-          try { msg = await res.text(); } catch { msg = ""; }
+          try {
+            msg = await res.text();
+          } catch {
+            msg = "";
+          }
         }
         if (res.status === 401) {
           setGcalStatus("unauthorized");
@@ -398,6 +570,7 @@ function CrmDashboard() {
         console.warn("Google events fetch failed:", res.status, msg);
         return;
       }
+
       const data = await res.json();
       setGoogleEvents(Array.isArray(data.items) ? data.items : []);
       setGcalStatus("ok");
@@ -429,17 +602,23 @@ function CrmDashboard() {
     setQuickAddDate(day);
     setShowQuickAdd(true);
   }
+
   function handleQuickAddSave({ leadId, title, time }) {
     if (!leadId || !title || !quickAddDate) return;
-    setLeads(prev =>
-      prev.map(l =>
+    setLeads((prev) =>
+      prev.map((l) =>
         String(l.id) === String(leadId)
           ? {
               ...l,
               appointments: [
                 ...(l.appointments || []),
-                { title, date: quickAddDate.toISOString().slice(0, 10), time, done: false }
-              ]
+                {
+                  title,
+                  date: quickAddDate.toISOString().slice(0, 10),
+                  time,
+                  done: false,
+                },
+              ],
             }
           : l
       )
@@ -451,7 +630,10 @@ function CrmDashboard() {
   useEffect(() => {
     window.RetainAI = window.RetainAI || {};
     window.RetainAI.openImports = openImports;
-    window.RetainAI.openTeam = () => { setSettingsTab("team"); setSection("settings"); };
+    window.RetainAI.openTeam = () => {
+      setSettingsTab("team");
+      setSection("settings");
+    };
   }, [openImports]);
 
   if (!user) return null;
@@ -497,8 +679,14 @@ function CrmDashboard() {
               leads={leads}
               loading={loadingLeads}
               user={user}
-              onAddLead={() => { setEditLead(null); setShowLeadModal(true); }}
-              onEditLead={lead => { setEditLead(lead); setShowLeadModal(true); }}
+              onAddLead={() => {
+                setEditLead(null);
+                setShowLeadModal(true);
+              }}
+              onEditLead={(lead) => {
+                setEditLead(lead);
+                setShowLeadModal(true);
+              }}
               onDeleteLead={handleDeleteLead}
               drawerLead={drawerLead}
               setDrawerLead={setDrawerLead}
@@ -510,7 +698,10 @@ function CrmDashboard() {
               <LeadModal
                 lead={editLead}
                 tags={tags}
-                onClose={() => { setShowLeadModal(false); setEditLead(null); }}
+                onClose={() => {
+                  setShowLeadModal(false);
+                  setEditLead(null);
+                }}
                 onSave={handleSaveLead}
               />
             )}
@@ -519,7 +710,14 @@ function CrmDashboard() {
 
         {section === "calendar" && (
           <div>
-            <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 12 }}>
+            <div
+              style={{
+                display: "flex",
+                alignItems: "center",
+                gap: 8,
+                marginBottom: 12,
+              }}
+            >
               <button
                 style={{
                   background: calendarView === "calendar" ? "#191919" : "#141414",
@@ -537,7 +735,8 @@ function CrmDashboard() {
               </button>
               <button
                 style={{
-                  background: calendarView === "appointments" ? "#191919" : "#141414",
+                  background:
+                    calendarView === "appointments" ? "#191919" : "#141414",
                   color: "#f7cb53",
                   border: "1px solid #222",
                   borderRadius: "0 10px 10px 0",
@@ -589,7 +788,7 @@ function CrmDashboard() {
                   display: "flex",
                   alignItems: "center",
                   justifyContent: "space-between",
-                  gap: 10
+                  gap: 10,
                 }}
               >
                 <span>
@@ -601,7 +800,15 @@ function CrmDashboard() {
                 </span>
                 <button
                   onClick={openImports}
-                  style={{ background: "#f7cb53", color: "#232323", border: "none", borderRadius: 8, padding: "8px 12px", fontWeight: 800, cursor: "pointer" }}
+                  style={{
+                    background: "#f7cb53",
+                    color: "#232323",
+                    border: "none",
+                    borderRadius: 8,
+                    padding: "8px 12px",
+                    fontWeight: 800,
+                    cursor: "pointer",
+                  }}
                 >
                   Connect Calendar
                 </button>
@@ -631,9 +838,16 @@ function CrmDashboard() {
             {showQuickAdd && (
               <div
                 style={{
-                  position: "fixed", left: 0, top: 0, width: "100vw", height: "100vh",
-                  background: "#000a", zIndex: 99,
-                  display: "flex", alignItems: "center", justifyContent: "center",
+                  position: "fixed",
+                  left: 0,
+                  top: 0,
+                  width: "100vw",
+                  height: "100vh",
+                  background: "#000a",
+                  zIndex: 99,
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "center",
                 }}
               >
                 <div
@@ -648,13 +862,23 @@ function CrmDashboard() {
                     boxShadow: "0 2px 22px #0008",
                   }}
                 >
-                  <h3 style={{ color: "#f7cb53", fontWeight: 800, marginBottom: 12, fontSize: "1.05rem" }}>
+                  <h3
+                    style={{
+                      color: "#f7cb53",
+                      fontWeight: 800,
+                      marginBottom: 12,
+                      fontSize: "1.05rem",
+                    }}
+                  >
                     Add Appointment ({quickAddDate?.toLocaleDateString()})
                   </h3>
                   <QuickAddForm
                     leads={leads}
                     onSave={handleQuickAddSave}
-                    onCancel={() => { setShowQuickAdd(false); setQuickAddDate(null); }}
+                    onCancel={() => {
+                      setShowQuickAdd(false);
+                      setQuickAddDate(null);
+                    }}
                   />
                 </div>
               </div>
@@ -726,55 +950,111 @@ function QuickAddForm({ leads, onSave, onCancel }) {
 
   return (
     <form
-      onSubmit={e => {
+      onSubmit={(e) => {
         e.preventDefault();
         onSave({ leadId, title, time });
       }}
     >
       <div style={{ marginBottom: 14 }}>
-        <label style={{ color: "#fff", fontWeight: 700, display: "block", marginBottom: 6 }}>Lead</label>
+        <label
+          style={{ color: "#fff", fontWeight: 700, display: "block", marginBottom: 6 }}
+        >
+          Lead
+        </label>
         <select
           value={leadId}
-          onChange={e => setLeadId(e.target.value)}
-          style={{ padding: "10px 12px", borderRadius: 8, background: "#181a1b", color: "#fff", border: "1px solid #444", width: "100%" }}
+          onChange={(e) => setLeadId(e.target.value)}
+          style={{
+            padding: "10px 12px",
+            borderRadius: 8,
+            background: "#181a1b",
+            color: "#fff",
+            border: "1px solid #444",
+            width: "100%",
+          }}
           required
         >
           <option value="">Select Lead</option>
-          {leads.map(lead => (
-            <option value={lead.id} key={lead.id}>{lead.name}</option>
+          {leads.map((lead) => (
+            <option value={lead.id} key={lead.id}>
+              {lead.name}
+            </option>
           ))}
         </select>
       </div>
+
       <div style={{ marginBottom: 14 }}>
-        <label style={{ color: "#fff", fontWeight: 700, display: "block", marginBottom: 6 }}>Title</label>
+        <label
+          style={{ color: "#fff", fontWeight: 700, display: "block", marginBottom: 6 }}
+        >
+          Title
+        </label>
         <input
           value={title}
-          onChange={e => setTitle(e.target.value)}
+          onChange={(e) => setTitle(e.target.value)}
           placeholder="Appointment title"
-          style={{ padding: "10px 12px", borderRadius: 8, background: "#181a1b", color: "#fff", border: "1px solid #444", width: "100%" }}
+          style={{
+            padding: "10px 12px",
+            borderRadius: 8,
+            background: "#181a1b",
+            color: "#fff",
+            border: "1px solid #444",
+            width: "100%",
+          }}
           required
         />
       </div>
+
       <div style={{ marginBottom: 14 }}>
-        <label style={{ color: "#fff", fontWeight: 700, display: "block", marginBottom: 6 }}>Time</label>
+        <label
+          style={{ color: "#fff", fontWeight: 700, display: "block", marginBottom: 6 }}
+        >
+          Time
+        </label>
         <input
           type="time"
           value={time}
-          onChange={e => setTime(e.target.value)}
-          style={{ padding: "10px 12px", borderRadius: 8, background: "#181a1b", color: "#fff", border: "1px solid #444", width: "100%" }}
+          onChange={(e) => setTime(e.target.value)}
+          style={{
+            padding: "10px 12px",
+            borderRadius: 8,
+            background: "#181a1b",
+            color: "#fff",
+            border: "1px solid #444",
+            width: "100%",
+          }}
         />
       </div>
+
       <div style={{ display: "flex", gap: 10 }}>
         <button
           type="submit"
-          style={{ background: "#f7cb53", color: "#232323", fontWeight: 800, border: "none", borderRadius: 8, padding: "11px 0", cursor: "pointer", width: "50%" }}
+          style={{
+            background: "#f7cb53",
+            color: "#232323",
+            fontWeight: 800,
+            border: "none",
+            borderRadius: 8,
+            padding: "11px 0",
+            cursor: "pointer",
+            width: "50%",
+          }}
         >
           Add
         </button>
         <button
           type="button"
           onClick={onCancel}
-          style={{ background: "#232323", color: "#fff", fontWeight: 800, border: "1px solid #444", borderRadius: 8, padding: "11px 0", cursor: "pointer", width: "50%" }}
+          style={{
+            background: "#232323",
+            color: "#fff",
+            fontWeight: 800,
+            border: "1px solid #444",
+            borderRadius: 8,
+            padding: "11px 0",
+            cursor: "pointer",
+            width: "50%",
+          }}
         >
           Cancel
         </button>

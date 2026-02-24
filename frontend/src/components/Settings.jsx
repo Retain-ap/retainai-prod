@@ -13,23 +13,15 @@ import {
 } from "react-icons/fa";
 import { SiInstagram } from "react-icons/si";
 import "./settings.css";
-import { API_BASE } from "../apiBase";
-
-fetch(`${API_BASE}/api/leads/${email}`)
 
 /* ───────────────────────────────────────────────────────────────
    RUNTIME API BASE AUTO-DISCOVERY (PROD-SAFE)
 
-   Key issue you hit:
-   - If the frontend uses relative /api/... OR "sameOrigin" is chosen as API base,
-     you will call the FRONTEND service which returns SPA HTML → "Expected JSON..."
-
-   Hardening rules:
-   - In production (onrender.com), NEVER choose window.location.origin as API.
-   - Prefer ENV base if present (REACT_APP_API_BASE or VITE_API_BASE).
-   - Try Render "sibling" backend origin (strip -frontend / -<digits>).
-   - Probe /api/health accepting JSON OR text containing "ok".
-   - Cache only a non-frontend origin.
+   Fixes applied for your compile error:
+   ✅ Removed top-level fetch(`${API_BASE}/api/leads/${email}`) which:
+      - referenced `email` (no-undef)
+      - ran at module load (bad) and broke compilation
+   ✅ Removed API_BASE import since it was only used by that stray line.
    ─────────────────────────────────────────────────────────────── */
 
 const ENV_BASE =
@@ -48,7 +40,9 @@ function cleanOrigin(s) {
 
 function isOnRenderHost() {
   try {
-    return String(window.location.hostname || "").toLowerCase().includes("onrender.com");
+    return String(window.location.hostname || "")
+      .toLowerCase()
+      .includes("onrender.com");
   } catch {
     return false;
   }
@@ -124,11 +118,7 @@ async function getWorkingApiOrigin() {
     }
   })();
 
-  const candidates = [
-    env,
-    sib,
-    ...(prod ? [] : [sameOrigin]),
-  ].filter(Boolean);
+  const candidates = [env, sib, ...(prod ? [] : [sameOrigin])].filter(Boolean);
 
   for (const c of candidates) {
     const ok = await probe(c);
@@ -333,7 +323,8 @@ export default function Settings({
         business: prof.business || prof.businessName || "",
         type: prof.businessType || "",
         location: prof.location || "",
-        teamSize: prof.people || prof.teamSize || prof.teamSize === 0 ? prof.teamSize : "",
+        teamSize:
+          prof.people || prof.teamSize || prof.teamSize === 0 ? prof.teamSize : "",
       });
 
       try {
@@ -408,7 +399,10 @@ export default function Settings({
 
   if (booting || !profile) {
     return (
-      <div className="settings-layout" style={{ left: leftOffset, width: settingsWidth }}>
+      <div
+        className="settings-layout"
+        style={{ left: leftOffset, width: settingsWidth }}
+      >
         <div style={{ padding: 16, maxWidth: 900 }}>
           <div style={{ fontWeight: 900, marginBottom: 8, color: "#fff" }}>
             {booting ? "Loading Settings…" : "Settings couldn’t load"}
@@ -429,7 +423,11 @@ export default function Settings({
                 } catch {}
                 await loadProfile();
               }}
-              style={{ background: "#232323", color: "#fff", border: "1px solid #444" }}
+              style={{
+                background: "#232323",
+                color: "#fff",
+                border: "1px solid #444",
+              }}
             >
               Retry
             </button>
@@ -457,7 +455,10 @@ export default function Settings({
   }
 
   return (
-    <div className="settings-layout" style={{ left: leftOffset, width: settingsWidth }}>
+    <div
+      className="settings-layout"
+      style={{ left: leftOffset, width: settingsWidth }}
+    >
       <nav className="settings-nav">
         {TABS.map((t) => (
           <button
@@ -635,6 +636,7 @@ function TeamTab({ ownerEmail, userEmail, maxWidth, apiFetchJSON }) {
   useEffect(() => {
     if (ownerEmail) loadMembers();
     // eslint-disable-next-line react-hooks/exhaustive-deps
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [ownerEmail]);
 
   const filtered = useMemo(() => {
@@ -767,8 +769,8 @@ function TeamTab({ ownerEmail, userEmail, maxWidth, apiFetchJSON }) {
             Team API error (blocked / unauthorized)
           </div>
           <div style={{ color: "#bbb", marginBottom: 10 }}>
-            If profile loads but team fails, your backend likely enforces extra auth
-            on team routes. Our client retries with common headers.
+            If profile loads but team fails, your backend likely enforces extra auth on
+            team routes. Our client retries with common headers.
           </div>
           <pre style={{ margin: 0 }}>{error}</pre>
         </div>
