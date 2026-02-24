@@ -365,54 +365,6 @@ def _upsert_user(email: str, patch: dict) -> dict:
 # /api/profile (SINGLE SOURCE OF TRUTH)
 # ----------------------------
 
-@app.get("/api/profile")
-def api_profile_get():
-    email = (request.args.get("email") or "").strip().lower()
-    if not email:
-        return jsonify({"error": "missing_email"}), 400
-
-    users = load_users() or {}
-    u = users.get(email) or {}
-    if not u:
-        # IMPORTANT: JSON even when missing
-        return jsonify({"error": "user_not_found", "email": email}), 404
-
-    # return profile flat (your Settings.jsx supports flat/profile/user)
-    return jsonify({
-        "email": email,
-        "name": u.get("name", ""),
-        "business": u.get("business") or u.get("businessType") or "",
-        "businessType": u.get("businessType") or u.get("type") or "",
-        "location": u.get("location", ""),
-        "teamSize": u.get("teamSize") or u.get("people") or "",
-        "logo": u.get("logo", ""),
-    }), 200
-
-@app.post("/api/profile")
-def api_profile_post():
-    data = request.get_json(silent=True) or {}
-    email = (data.get("email") or "").strip().lower()
-    if not email:
-        return jsonify({"error": "missing_email"}), 400
-
-    users = load_users() or {}
-    u = users.get(email) or {}
-
-    u.update({
-        "email": email,
-        "name": data.get("name") or u.get("name") or "",
-        "business": data.get("business") or data.get("businessName") or u.get("business") or "",
-        "businessType": data.get("businessType") or u.get("businessType") or "",
-        "location": data.get("location") or u.get("location") or "",
-        "teamSize": data.get("teamSize") or data.get("people") or u.get("teamSize") or "",
-        "logo": data.get("logo") or u.get("logo") or "",
-    })
-
-    users[email] = u
-    save_users(users)
-
-    return jsonify(u), 200
-
 @app.route("/api/profile", methods=["GET", "POST", "OPTIONS"])
 def api_profile():
     if request.method == "OPTIONS":
@@ -469,29 +421,6 @@ def api_profile():
     except Exception as e:
         current_app.logger.exception("POST /api/profile failed")
         return jsonify({"error": "profile_update_failed", "detail": str(e)}), 500
-
-@app.route("/api/profile/debug", methods=["GET"])
-def api_profile_debug():
-    email = (request.args.get("email") or "").strip().lower()
-    ok = True
-    msg = "ok"
-    u = None
-    try:
-        u = get_user(email) if email else None
-    except Exception as ex:
-        ok = False
-        msg = f"get_user raised: {ex}"
-
-    return jsonify({
-        "ok": ok,
-        "message": msg,
-        "email": email,
-        "USE_SQLITE": bool(USE_SQLITE),
-        "SQLITE_PATH": SQLITE_PATH,
-        "DATA_ROOT": DATA_ROOT,
-        "exists": bool(u) if email else None,
-        "user_sample": u if (ok and u) else None
-    }), 200 if ok else 500
 
 # ----------------------------
 # OpenRouter helpers
@@ -3806,64 +3735,6 @@ def _get_email_from_request():
 # API: PROFILE / USER / ME
 # These fix your Settings 404s.
 # ----------------------------
-
-@app.route("/api/profile", methods=["GET", "POST"])
-def api_profile():
-    """
-    GET  /api/profile?email=<email>
-    POST /api/profile  { email, name, business, businessType, location, teamSize, ... }
-    """
-    if request.method == "GET":
-        email = _get_email_from_request()
-        if not email:
-            return jsonify({"error": "Missing email"}), 400
-
-        users = load_users() or {}
-        u = users.get(email) if isinstance(users, dict) else None
-
-        # If you have get_user(email), prefer it
-        try:
-            if u is None and callable(globals().get("get_user")):
-                u = get_user(email)
-        except Exception:
-            pass
-
-        if not u:
-            # return a minimal profile instead of 404 (frontend can render)
-            return jsonify({"email": email}), 200
-
-        if isinstance(u, dict) and "email" not in u:
-            u["email"] = email
-
-        return jsonify(u), 200
-
-    # POST
-    data, err = _json_or_400()
-    if err:
-        return err
-
-    email = _norm_email(data.get("email") or data.get("userEmail") or "")
-    if not email:
-        return jsonify({"error": "Missing email"}), 400
-
-    users = load_users() or {}
-    if not isinstance(users, dict):
-        users = {}
-
-    existing = users.get(email, {}) if isinstance(users.get(email, {}), dict) else {}
-
-    # Merge allowed fields
-    merged = {
-        **existing,
-        **{k: v for k, v in data.items() if v is not None},
-        "email": email,
-    }
-
-    users[email] = merged
-    save_users(users)
-
-    return jsonify(merged), 200
-
 
 @app.route("/api/user/<path:email>", methods=["GET"])
 def api_user(email):
