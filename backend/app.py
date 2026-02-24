@@ -809,106 +809,77 @@ def send_trial_ending_soon():
         save_users(users)
 
 # ----------------------------
-# LEADS API — PRODUCTION READY
+# LEADS API (PERSISTENT) — KEEP ONLY THIS
+# - Frontend uses:
+#   GET  /api/leads   (with header X-User-Email)
+#   POST /api/leads   (with header X-User-Email, body {leads:[...]})
+# - Storage uses load_leads()/save_leads() from storage.py (JSON or SQLite)
 # ----------------------------
 
-@app.route("/api/leads/<path:user_email>", methods=["GET", "OPTIONS"])
-def get_leads(user_email):
+from flask import request, jsonify
+
+def _norm_email(e: str) -> str:
+    return (e or "").strip().lower()
+
+def _req_user_email() -> str:
+    # Prefer headers (best for your app). Fallbacks just in case.
+    payload = request.get_json(silent=True) or {}
+    return _norm_email(
+        request.headers.get("X-User-Email")
+        or request.args.get("email")
+        or payload.get("email")
+    )
+
+@app.route("/api/leads", methods=["GET", "OPTIONS"])
+def api_get_leads():
     if request.method == "OPTIONS":
         return ("", 204)
 
-    user_email = (user_email or "").strip().lower()
-    leads_by_user = load_leads() or {}
+    email = _req_user_email()
+    if not email:
+        return jsonify({"ok": False, "error": "missing_user_email"}), 400
 
-    leads = []
-    if isinstance(leads_by_user, dict):
-        leads = leads_by_user.get(user_email, []) or []
+    try:
+        all_leads = load_leads() or {}
+        if not isinstance(all_leads, dict):
+            all_leads = {}
 
-    # Frontend expects ARRAY
-    return jsonify(leads), 200
+        leads = all_leads.get(email, [])
+        if not isinstance(leads, list):
+            leads = []
 
-
-@app.route("/api/leads/<path:user_email>", methods=["POST"])
-def create_lead(user_email):
-    user_email = (user_email or "").strip().lower()
-    data = request.get_json(silent=True) or {}
-
-    leads_by_user = load_leads() or {}
-    user_leads = leads_by_user.get(user_email, [])
-
-    new_lead = {
-        "id": str(uuid4()),
-        "name": data.get("name", "").strip(),
-        "email": data.get("email", "").strip().lower(),
-        "phone": data.get("phone", "").strip(),
-        "notes": data.get("notes", "").strip(),
-        "status": data.get("status", "new"),
-        "tags": data.get("tags", []),
-        "createdAt": datetime.datetime.utcnow().isoformat() + "Z",
-        "last_contacted": data.get("last_contacted") or ""
-    }
-
-    user_leads.append(new_lead)
-    leads_by_user[user_email] = user_leads
-    save_leads(leads_by_user)
-
-    return jsonify(new_lead), 201
+        return jsonify({"ok": True, "email": email, "leads": leads}), 200
+    except Exception as e:
+        return jsonify({"ok": False, "error": str(e)[:300]}), 500
 
 
-@app.route("/api/leads/<path:user_email>/<lead_id>", methods=["PUT"])
-def update_lead(user_email, lead_id):
-    user_email = (user_email or "").strip().lower()
-    data = request.get_json(silent=True) or {}
+@app.route("/api/leads", methods=["POST", "OPTIONS"])
+def api_save_leads():
+    if request.method == "OPTIONS":
+        return ("", 204)
 
-    leads_by_user = load_leads() or {}
-    user_leads = leads_by_user.get(user_email, [])
+    email = _req_user_email()
+    if not email:
+        return jsonify({"ok": False, "error": "missing_user_email"}), 400
 
-    updated_lead = None
+    payload = request.get_json(silent=True) or {}
+    leads = payload.get("leads", None)
 
-    for i, lead in enumerate(user_leads):
-        if lead.get("id") == lead_id:
-            # Update fields safely
-            for field in [
-                "name",
-                "email",
-                "phone",
-                "notes",
-                "status",
-                "tags",
-                "last_contacted"
-            ]:
-                if field in data:
-                    user_leads[i][field] = data[field]
+    if not isinstance(leads, list):
+        return jsonify({"ok": False, "error": "body_must_include_leads_array"}), 400
 
-            updated_lead = user_leads[i]
-            break
+    try:
+        all_leads = load_leads() or {}
+        if not isinstance(all_leads, dict):
+            all_leads = {}
 
-    leads_by_user[user_email] = user_leads
-    save_leads(leads_by_user)
+        # Save ONLY this user's list (full replace)
+        all_leads[email] = leads
+        save_leads(all_leads)
 
-    if not updated_lead:
-        return jsonify({"error": "lead_not_found"}), 404
-
-    return jsonify(updated_lead), 200
-
-
-@app.route("/api/leads/<path:user_email>/<lead_id>", methods=["DELETE"])
-def delete_lead(user_email, lead_id):
-    user_email = (user_email or "").strip().lower()
-
-    leads_by_user = load_leads() or {}
-    user_leads = leads_by_user.get(user_email, [])
-
-    before = len(user_leads)
-    user_leads = [l for l in user_leads if l.get("id") != lead_id]
-    after = len(user_leads)
-
-    leads_by_user[user_email] = user_leads
-    save_leads(leads_by_user)
-
-    return jsonify({
-        "deleted": before - after
-    }), 200
+        return jsonify({"ok": True, "email": email, "count": len(leads)}), 200
+    except Exception as e:
+        return jsonify({"ok": False, "error": str(e)[:300]}), 500
 
 # ----------------------------
 # Appointments

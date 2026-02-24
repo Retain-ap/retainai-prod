@@ -1,5 +1,5 @@
 // File: src/components/CrmDashboard.jsx
-import React, { useState, useEffect, useCallback, useMemo } from "react";
+import React, { useState, useEffect, useCallback, useMemo, useRef } from "react";
 import Sidebar from "./Sidebar";
 import LeadsDashboard from "./LeadsDashboard";
 import LeadModal from "./LeadModal";
@@ -39,7 +39,6 @@ function normEmail(v) {
 }
 
 function getEffectiveEmail(u) {
-  // If you use org/team accounts, prefer org_id when present
   const org = normEmail(u?.org_id);
   const email = normEmail(u?.email);
   return org || email;
@@ -75,6 +74,14 @@ function extractTags(leads, userTags) {
   const tagSet = new Set([...DEFAULT_TAGS, ...(userTags || [])]);
   (leads || []).forEach((lead) => (lead.tags || []).forEach((tag) => tagSet.add(tag)));
   return Array.from(tagSet);
+}
+
+function makeId() {
+  // Backend expects string IDs. Use UUID when possible.
+  try {
+    if (typeof crypto !== "undefined" && crypto.randomUUID) return crypto.randomUUID();
+  } catch {}
+  return `lead_${Date.now()}_${Math.random().toString(16).slice(2)}`;
 }
 
 function CrmDashboard() {
@@ -116,7 +123,7 @@ function CrmDashboard() {
     // eslint-disable-next-line
   }, []);
 
-  // Sync from SettingsContext if it changes (no interval polling)
+  // Sync from SettingsContext if it changes
   useEffect(() => {
     if (settings?.user && settings.user.email) {
       const next = settings.user;
@@ -170,6 +177,13 @@ function CrmDashboard() {
   const [quickAddDate, setQuickAddDate] = useState(null);
   const [showInviteModal, setShowInviteModal] = useState(false);
 
+  // ---- Lead persistence strategy (fixes your issue) ----
+  // 1) Load local cache immediately (fast UI)
+  // 2) Fetch authoritative from backend: GET /api/leads with X-User-Email
+  // 3) Save to backend: POST /api/leads with X-User-Email + {leads:[...]} (debounced)
+  const saveTimerRef = useRef(null);
+  const lastSavedJsonRef = useRef("");
+
   // Load per-user local cache immediately when user changes
   useEffect(() => {
     if (!effectiveEmail) {
@@ -182,9 +196,12 @@ function CrmDashboard() {
     const cachedLeads = safeParseJSON(localStorage.getItem(leadsKey(effectiveEmail)), []);
     const cachedTags = safeParseJSON(localStorage.getItem(tagsKey(effectiveEmail)), []);
 
-    setLeads(Array.isArray(cachedLeads) ? cachedLeads : []);
-    setUserTags(Array.isArray(cachedTags) ? cachedTags : []);
-    setTags(extractTags(Array.isArray(cachedLeads) ? cachedLeads : [], Array.isArray(cachedTags) ? cachedTags : []));
+    const lsLeads = Array.isArray(cachedLeads) ? cachedLeads : [];
+    const lsTags = Array.isArray(cachedTags) ? cachedTags : [];
+
+    setLeads(lsLeads);
+    setUserTags(lsTags);
+    setTags(extractTags(lsLeads, lsTags));
   }, [effectiveEmail]);
 
   // Fetch leads from backend (authoritative)
@@ -193,29 +210,41 @@ function CrmDashboard() {
 
     (async () => {
       if (!effectiveEmail) return;
-      setLoadingLeads(true);
 
+      setLoadingLeads(true);
       try {
-        const res = await fetch(apiUrl(`leads/${encodeURIComponent(effectiveEmail)}`), {
+        // ✅ NEW canonical endpoint style:
+        // GET /api/leads with header X-User-Email
+        const res = await fetch(apiUrl("leads"), {
+          method: "GET",
           credentials: "include",
-          headers: { Accept: "application/json" },
+          headers: {
+            Accept: "application/json",
+            "X-User-Email": effectiveEmail,
+          },
         });
 
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
-        const data = await res.json();
+        const data = await res.json().catch(() => ({}));
 
         if (cancelled) return;
 
-        const ls = Array.isArray(data.leads) ? data.leads : [];
-        setLeads(ls);
-        setTags(extractTags(ls, userTags));
+        const serverLeads = Array.isArray(data?.leads) ? data.leads : [];
+        setLeads(serverLeads);
+        setTags(extractTags(serverLeads, userTags));
 
-        // persist per-user cache
         try {
-          localStorage.setItem(leadsKey(effectiveEmail), JSON.stringify(ls));
+          localStorage.setItem(leadsKey(effectiveEmail), JSON.stringify(serverLeads));
         } catch {}
+
+        // reset save-deduper
+        try {
+          lastSavedJsonRef.current = JSON.stringify(serverLeads);
+        } catch {
+          lastSavedJsonRef.current = "";
+        }
       } catch {
-        // keep local cache if backend fails
+        // backend failed -> keep local cache
       } finally {
         if (!cancelled) setLoadingLeads(false);
       }
@@ -227,29 +256,50 @@ function CrmDashboard() {
     // eslint-disable-next-line
   }, [effectiveEmail]);
 
-  // Save leads to backend + per-user local cache
+  // Debounced backend save
   const saveLeadsToBackend = useCallback(
-    async (newLeads) => {
+    (newLeads) => {
       const email = effectiveEmail;
       if (!email) return;
 
-      // local cache first (fast + resilient)
+      // local cache first (resilient)
       try {
         localStorage.setItem(leadsKey(email), JSON.stringify(newLeads));
       } catch {}
 
       setTags(extractTags(newLeads, userTags));
 
+      // dedupe identical saves
+      let json = "";
       try {
-        await fetch(apiUrl(`leads/${encodeURIComponent(email)}`), {
-          method: "POST",
-          credentials: "include",
-          headers: { "Content-Type": "application/json", Accept: "application/json" },
-          body: JSON.stringify({ leads: newLeads }),
-        });
-      } catch {
-        // backend save failure is okay; local cache preserves user work
-      }
+        json = JSON.stringify(newLeads);
+      } catch {}
+      if (json && json === lastSavedJsonRef.current) return;
+
+      if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
+
+      saveTimerRef.current = setTimeout(async () => {
+        try {
+          const res = await fetch(apiUrl("leads"), {
+            method: "POST",
+            credentials: "include",
+            headers: {
+              "Content-Type": "application/json",
+              Accept: "application/json",
+              "X-User-Email": email,
+            },
+            body: JSON.stringify({ leads: newLeads }),
+          });
+
+          if (res.ok) {
+            lastSavedJsonRef.current = json || lastSavedJsonRef.current;
+          } else {
+            // keep local cache if backend fails
+          }
+        } catch {
+          // keep local cache if backend fails
+        }
+      }, 450);
     },
     [effectiveEmail, userTags]
   );
@@ -307,9 +357,9 @@ function CrmDashboard() {
       newLeads = leads.map((l) => (String(l.id) === String(lead.id) ? lead : l));
     } else {
       const now = new Date().toISOString();
-      lead.id = Date.now();
+      lead.id = makeId(); // ✅ string id
       lead.createdAt = now;
-      lead.last_contacted = now;
+      lead.last_contacted = lead.last_contacted || now;
       newLeads = [lead, ...leads];
     }
 
@@ -321,9 +371,7 @@ function CrmDashboard() {
 
     // merge tags into userTags (per-user)
     if (lead.tags && Array.isArray(lead.tags)) {
-      const toAdd = lead.tags.filter(
-        (t) => t && !DEFAULT_TAGS.includes(t) && !userTags.includes(t)
-      );
+      const toAdd = lead.tags.filter((t) => t && !DEFAULT_TAGS.includes(t) && !userTags.includes(t));
       if (toAdd.length) {
         persistUserTags([...userTags, ...toAdd]);
       }
@@ -336,31 +384,34 @@ function CrmDashboard() {
     saveLeadsToBackend(newLeads);
   };
 
-  // Lead contacted
+  // Lead contacted (backend optional; we ALWAYS update locally + persist)
   const handleLeadContacted = async (lead) => {
     const email = effectiveEmail;
     if (!email || !lead?.id) return;
 
+    const now = new Date().toISOString();
+
+    // optimistic local update
+    setLeads((prev) => {
+      const next = prev.map((l) =>
+        String(l.id) === String(lead.id) ? { ...l, last_contacted: now } : l
+      );
+      saveLeadsToBackend(next);
+      return next;
+    });
+
+    // optional backend endpoint (if you add it later)
     try {
-      await fetch(apiUrl(`leads/${encodeURIComponent(email)}/${lead.id}/contacted`), {
+      await fetch(apiUrl("leads/contacted"), {
         method: "POST",
         credentials: "include",
-        headers: { "Content-Type": "application/json", Accept: "application/json" },
+        headers: {
+          "Content-Type": "application/json",
+          Accept: "application/json",
+          "X-User-Email": email,
+        },
+        body: JSON.stringify({ leadId: String(lead.id), at: now }),
       });
-    } catch {}
-
-    // refresh from backend (best-effort)
-    try {
-      const res = await fetch(apiUrl(`leads/${encodeURIComponent(email)}`), {
-        credentials: "include",
-        headers: { Accept: "application/json" },
-      });
-      const data = await res.json();
-      const ls = Array.isArray(data.leads) ? data.leads : [];
-      setLeads(ls);
-      try {
-        localStorage.setItem(leadsKey(email), JSON.stringify(ls));
-      } catch {}
     } catch {}
   };
 
@@ -388,7 +439,7 @@ function CrmDashboard() {
     setSection("messages");
   }
 
-  // Send AI prompt email
+  // Send AI prompt email (fix 405 by fallback)
   async function handleSendAIPromptEmail(
     lead,
     aiResponse,
@@ -417,6 +468,33 @@ function CrmDashboard() {
         body: JSON.stringify(body),
       });
 
+      // If backend is GET-only by mistake, retry as GET
+      if (res.status === 405) {
+        const params = new URLSearchParams();
+        Object.entries(body).forEach(([k, v]) => params.set(k, String(v ?? "")));
+
+        const res2 = await fetch(`${apiUrl("send-ai-message")}?${params.toString()}`, {
+          method: "GET",
+          credentials: "include",
+          headers: { Accept: "application/json" },
+        });
+
+        if (res2.ok) {
+          setHighlightLeadIds([lead.id]);
+          alert("AI prompt email sent!");
+          return;
+        }
+
+        let err2 = {};
+        try {
+          err2 = await res2.json();
+        } catch {
+          err2 = { error: await res2.text().catch(() => "") };
+        }
+        alert("Failed to send: " + (err2.error || `HTTP ${res2.status}`));
+        return;
+      }
+
       if (res.ok) {
         setHighlightLeadIds([lead.id]);
         alert("AI prompt email sent!");
@@ -427,14 +505,14 @@ function CrmDashboard() {
         } catch {
           err = { error: await res.text().catch(() => "") };
         }
-        alert("Failed to send: " + (err.error || "Unknown error"));
+        alert("Failed to send: " + (err.error || `HTTP ${res.status}`));
       }
     } catch (e) {
       alert("Error sending AI prompt: " + e.message);
     }
   }
 
-  // Refresh user
+  // Refresh user (best-effort; backend may not support this)
   const handleRefreshUser = useCallback(async () => {
     const email = effectiveEmail;
     if (!email) return;
@@ -580,7 +658,6 @@ function CrmDashboard() {
           : l
       );
 
-      // IMPORTANT: persist this change
       saveLeadsToBackend(next);
       return next;
     });
@@ -879,9 +956,7 @@ function CrmDashboard() {
           />
         )}
 
-        {section === "analytics" && (
-          <Analytics leads={leads} events={crmAppointments} user={user} />
-        )}
+        {section === "analytics" && <Analytics leads={leads} events={crmAppointments} user={user} />}
 
         {section === "invoices" && (
           <Invoices user={user} leads={leads} refreshUser={handleRefreshUser} />
@@ -890,9 +965,7 @@ function CrmDashboard() {
         {section === "automations" && <Automations user={user} />}
       </div>
 
-      {showInviteModal && (
-        <InviteTeamModal user={user} onClose={() => setShowInviteModal(false)} />
-      )}
+      {showInviteModal && <InviteTeamModal user={user} onClose={() => setShowInviteModal(false)} />}
     </div>
   );
 }
