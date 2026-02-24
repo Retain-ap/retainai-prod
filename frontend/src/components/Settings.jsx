@@ -1,5 +1,5 @@
 // File: frontend/src/components/Settings.jsx
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useMemo, useState, useCallback } from "react";
 import { useLocation } from "react-router-dom";
 import GoogleCalendarEvents from "./GoogleCalendarEvents";
 import StripeConnectCard from "./StripeConnectCard";
@@ -13,72 +13,84 @@ import {
 } from "react-icons/fa";
 import { SiInstagram } from "react-icons/si";
 import "./settings.css";
+
+// ✅ IMPORTANT: apiUrl must point to BACKEND /api/* (not frontend origin)
 import { apiUrl } from "../apiBase";
 
 /* ───────────────────────────────────────────────────────────────
-   Settings.jsx (Render-safe)
-   - NO top-level fetch calls
-   - Uses apiUrl() from apiBase.js (single source of truth)
-   - Protects against SPA HTML fallback
-   - Fallbacks if backend route differs:
-       GET  /api/profile?email=
-       GET  /api/user/<email>
-       POST /api/profile
-       POST /api/user
-   ─────────────────────────────────────────────────────────────── */
-
-function isProbablyHtml(text) {
-  const t = String(text || "").toLowerCase();
-  return t.includes("<!doctype html") || t.includes("</html>") || t.includes("<head");
-}
-
-async function fetchJSONStrict(url, opts = {}) {
-  const res = await fetch(url, {
-    credentials: "include",
-    ...opts,
-    headers: {
-      Accept: "application/json",
-      ...(opts.headers || {}),
-    },
-  });
-
+   Robust JSON helper (protects against SPA HTML fallback)
+─────────────────────────────────────────────────────────────── */
+async function safeJson(res, urlForDebug = "") {
   const ct = (res.headers.get("content-type") || "").toLowerCase();
   const raw = await res.text();
 
   if (!res.ok) {
-    throw new Error(`HTTP ${res.status} ${res.statusText} @ ${url}\n${raw.slice(0, 400)}`);
+    throw new Error(
+      `HTTP ${res.status} ${res.statusText} @ ${urlForDebug}\n${raw.slice(0, 400)}`
+    );
   }
 
-  // If backend accidentally routes to SPA, we get HTML.
   if (!ct.includes("application/json")) {
-    if (isProbablyHtml(raw)) {
+    // If we accidentally hit the SPA, it returns HTML — show a clear error.
+    if (raw.toLowerCase().includes("<!doctype html") || raw.toLowerCase().includes("</html>")) {
       throw new Error(
-        `Expected JSON but got HTML (SPA fallback). Wrong API base / route.\nURL: ${url}`
+        `Expected JSON but got HTML (SPA fallback).\n` +
+          `You are hitting the FRONTEND instead of the BACKEND.\n` +
+          `URL: ${urlForDebug}`
       );
     }
     throw new Error(
-      `Expected JSON but got ${ct || "unknown content-type"}.\nURL: ${url}\n${raw.slice(0, 200)}`
+      `Expected JSON but got ${ct || "unknown"} @ ${urlForDebug}\n${raw.slice(0, 250)}`
     );
   }
 
   try {
     return JSON.parse(raw);
   } catch (e) {
-    throw new Error(`Bad JSON @ ${url}: ${e}\n${raw.slice(0, 200)}`);
+    throw new Error(`Bad JSON @ ${urlForDebug}: ${e}\n${raw.slice(0, 250)}`);
   }
 }
 
-function normalizeProfileResponse(raw, fallbackEmail) {
+function getStoredToken() {
+  try {
+    const ls = window.localStorage;
+    return (
+      ls.getItem("token") ||
+      ls.getItem("access_token") ||
+      ls.getItem("auth_token") ||
+      ""
+    );
+  } catch {
+    return "";
+  }
+}
+
+function baseHeaders(extra = {}) {
+  const token = getStoredToken();
+  const h = { Accept: "application/json", ...(extra || {}) };
+  if (token && !h.Authorization) h.Authorization = `Bearer ${token}`;
+  return h;
+}
+
+async function apiFetchJSON(path, opts = {}) {
+  const url = apiUrl(path); // apiUrl("profile?email=...") -> https://BACKEND/api/profile?email=...
+  const res = await fetch(url, {
+    credentials: "include",
+    ...opts,
+    headers: baseHeaders(opts.headers || {}),
+  });
+  return safeJson(res, url);
+}
+
+/* ───────────────────────────────────────────────────────────────
+   Helpers / UI
+─────────────────────────────────────────────────────────────── */
+function normalizeProfile(raw, fallbackEmail) {
   const base = (raw && (raw.profile || raw.user || raw)) || {};
   const out = { ...base };
   if (!out.email && fallbackEmail) out.email = fallbackEmail;
-
-  // Normalize naming variants
   if (!out.business && out.businessName) out.business = out.businessName;
   if (!out.businessName && out.business) out.businessName = out.business;
-
-  if (!out.businessType && out.type) out.businessType = out.type;
-
   return out;
 }
 
@@ -114,94 +126,71 @@ export default function Settings({
 
   const [editMode, setEditMode] = useState(false);
   const [saving, setSaving] = useState(false);
-  const [bootError, setBootError] = useState("");
   const [booting, setBooting] = useState(true);
+  const [bootError, setBootError] = useState("");
 
   useEffect(() => {
     if (initialTab && TABS.some((t) => t.key === initialTab)) setTab(initialTab);
   }, [initialTab]);
 
-  // --- Load profile with fallback routes ---
-  const loadProfile = async () => {
+  const loadProfile = useCallback(async () => {
     setBootError("");
     setBooting(true);
 
     try {
-      const email = user?.email || profile?.email || "";
+      const email = user?.email || "";
       if (!email) {
         setProfile(null);
         setBootError("No user email found. Please sign in again.");
         return;
       }
 
-      // Attempt 1: /api/profile?email=
-      try {
-        const url1 = apiUrl(`profile?email=${encodeURIComponent(email)}`);
-        const raw1 = await fetchJSONStrict(url1);
-        const prof1 = normalizeProfileResponse(raw1, email);
-        setProfile(prof1);
-        setForm({
-          name: prof1.name || "",
-          email: prof1.email || email,
-          business: prof1.business || prof1.businessName || "",
-          type: prof1.businessType || "",
-          location: prof1.location || "",
-          teamSize:
-            prof1.people ?? prof1.teamSize ?? prof1.team_size ?? prof1.teamSize === 0
-              ? String(prof1.people ?? prof1.teamSize ?? prof1.team_size ?? "")
-              : "",
-        });
+      // ✅ IMPORTANT: this MUST hit backend (via apiUrl)
+      const raw = await apiFetchJSON(`profile?email=${encodeURIComponent(email)}`);
+      const prof = normalizeProfile(raw, email);
 
-        try {
-          localStorage.setItem("user", JSON.stringify(prof1));
-        } catch {}
-
-        return;
-      } catch (e1) {
-        // fall through to try /api/user/<email>
-        console.warn("profile?email route failed, trying /user/<email>:", e1);
-      }
-
-      // Attempt 2: /api/user/<email>
-      const url2 = apiUrl(`user/${encodeURIComponent(email)}`);
-      const raw2 = await fetchJSONStrict(url2);
-      const prof2 = normalizeProfileResponse(raw2, email);
-
-      setProfile(prof2);
+      setProfile(prof);
       setForm({
-        name: prof2.name || "",
-        email: prof2.email || email,
-        business: prof2.business || prof2.businessName || "",
-        type: prof2.businessType || "",
-        location: prof2.location || "",
+        name: prof.name || "",
+        email: prof.email || email,
+        business: prof.business || prof.businessName || "",
+        type: prof.businessType || "",
+        location: prof.location || "",
         teamSize:
-          prof2.people ?? prof2.teamSize ?? prof2.team_size ?? prof2.teamSize === 0
-            ? String(prof2.people ?? prof2.teamSize ?? prof2.team_size ?? "")
-            : "",
+          prof.people ??
+          prof.teamSize ??
+          (prof.teamSize === 0 ? 0 : "") ??
+          "",
       });
 
       try {
-        localStorage.setItem("user", JSON.stringify(prof2));
+        localStorage.setItem("user", JSON.stringify(prof));
       } catch {}
+
+      // optional: allow parent refresh
+      if (typeof refreshUser === "function") {
+        try {
+          await refreshUser();
+        } catch {}
+      }
     } catch (err) {
-      console.error("Failed to load profile:", err);
+      console.error("Settings loadProfile failed:", err);
       setProfile(null);
       setBootError(String(err).slice(0, 1200));
     } finally {
       setBooting(false);
     }
-  };
+  }, [user?.email, refreshUser]);
 
   useEffect(() => {
     loadProfile();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [user?.email]);
+  }, [loadProfile]);
 
+  // After Stripe connect redirect (if you use ?stripe_connected=1)
   useEffect(() => {
     const params = new URLSearchParams(search);
     if (params.get("stripe_connected") === "1") loadProfile();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [search]);
+  }, [search, loadProfile]);
 
   const handleSave = async () => {
     setSaving(true);
@@ -218,58 +207,31 @@ export default function Settings({
         teamSize: form.teamSize,
       };
 
-      // Try POST /api/profile first
-      try {
-        const url1 = apiUrl("profile");
-        const raw1 = await fetchJSONStrict(url1, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(payload),
-        });
-        const prof = normalizeProfileResponse(raw1, form.email);
-        setProfile(prof);
-        setForm((f) => ({
-          ...f,
-          name: prof.name || f.name,
-          email: prof.email || f.email,
-          business: prof.business || prof.businessName || f.business,
-          type: prof.businessType || f.type,
-          location: prof.location || f.location,
-          teamSize: String(prof.people ?? prof.teamSize ?? f.teamSize ?? ""),
-        }));
-      } catch (e1) {
-        // Fallback POST /api/user
-        console.warn("POST /profile failed, trying POST /user:", e1);
-        const url2 = apiUrl("user");
-        const raw2 = await fetchJSONStrict(url2, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(payload),
-        });
-        const prof = normalizeProfileResponse(raw2, form.email);
-        setProfile(prof);
-        setForm((f) => ({
-          ...f,
-          name: prof.name || f.name,
-          email: prof.email || f.email,
-          business: prof.business || prof.businessName || f.business,
-          type: prof.businessType || f.type,
-          location: prof.location || f.location,
-          teamSize: String(prof.people ?? prof.teamSize ?? f.teamSize ?? ""),
-        }));
-      }
+      const raw = await apiFetchJSON("profile", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
 
+      const prof = normalizeProfile(raw, form.email);
+      setProfile(prof);
+      setForm((f) => ({
+        ...f,
+        name: prof.name || f.name,
+        email: prof.email || f.email,
+        business: prof.business || prof.businessName || f.business,
+        type: prof.businessType || f.type,
+        location: prof.location || f.location,
+        teamSize: prof.people ?? prof.teamSize ?? f.teamSize,
+      }));
       setEditMode(false);
 
-      // Optional: let parent refresh
-      if (typeof refreshUser === "function") {
-        try {
-          await refreshUser();
-        } catch {}
-      }
+      try {
+        localStorage.setItem("user", JSON.stringify(prof));
+      } catch {}
     } catch (e) {
       console.error("Failed to save profile:", e);
-      alert("Could not save profile. See console for details.");
+      alert("Could not save profile. Check console for details.");
     } finally {
       setSaving(false);
     }
@@ -290,7 +252,7 @@ export default function Settings({
           <div style={{ color: "#bbb", lineHeight: 1.5 }}>
             {booting
               ? "Fetching your profile and workspace data."
-              : "Your profile request failed. This is usually an API routing / backend origin issue."}
+              : "Your profile request failed. This is usually an API base issue (frontend HTML instead of backend JSON) or backend auth."}
           </div>
 
           <div style={{ display: "flex", gap: 10, marginTop: 14 }}>
@@ -348,11 +310,7 @@ export default function Settings({
             <h2>Profile</h2>
             <div className="profile-card">
               <div className="avatar">
-                {profile.logo ? (
-                  <img src={profile.logo} alt="logo" />
-                ) : (
-                  profile.name?.[0]?.toUpperCase() || "?"
-                )}
+                {profile.logo ? <img src={profile.logo} alt="logo" /> : profile.name?.[0]?.toUpperCase() || "?"}
               </div>
 
               <div className="profile-fields">
@@ -370,10 +328,8 @@ export default function Settings({
                       <input
                         className="field-input"
                         type="text"
-                        value={form[name] || ""}
-                        onChange={(e) =>
-                          setForm((f) => ({ ...f, [name]: e.target.value }))
-                        }
+                        value={form[name] ?? ""}
+                        onChange={(e) => setForm((f) => ({ ...f, [name]: e.target.value }))}
                         disabled={name === "email"}
                       />
                     ) : (
@@ -395,11 +351,7 @@ export default function Settings({
                       >
                         Cancel
                       </button>
-                      <button
-                        className="btn btn-save"
-                        onClick={handleSave}
-                        disabled={saving}
-                      >
+                      <button className="btn btn-save" onClick={handleSave} disabled={saving}>
                         {saving ? "Saving…" : "Save"}
                       </button>
                     </>
@@ -425,6 +377,7 @@ export default function Settings({
         {tab === "integrations" && (
           <div style={{ maxWidth: MAX_W, margin: "0 auto" }}>
             <h2>Integrations</h2>
+
             <div className="integration-row" style={{ justifyContent: "center" }}>
               <div className="integration-card">
                 <GoogleCalendarEvents
@@ -444,6 +397,12 @@ export default function Settings({
                 </div>
               </div>
             </div>
+
+            {gcalStatus && gcalStatus !== "ok" && (
+              <div style={{ marginTop: 12, color: "#bbb" }}>
+                Google status: <b style={{ color: "#fff" }}>{gcalStatus}</b>
+              </div>
+            )}
           </div>
         )}
 
@@ -461,10 +420,9 @@ export default function Settings({
   );
 }
 
-/* ─────────────────────────────────────────────────────────────── */
-/* Team tab                                                        */
-/* ─────────────────────────────────────────────────────────────── */
-
+/* ───────────────────────────────────────────────────────────────
+   TEAM TAB
+─────────────────────────────────────────────────────────────── */
 function TeamTab({ ownerEmail, userEmail, maxWidth }) {
   const [members, setMembers] = useState([]);
   const [search, setSearch] = useState("");
@@ -474,30 +432,37 @@ function TeamTab({ ownerEmail, userEmail, maxWidth }) {
 
   const roles = ["owner", "manager", "member"];
 
-  const loadMembers = async () => {
+  const loadMembers = useCallback(async () => {
     if (!ownerEmail) return;
     setLoading(true);
     setError("");
+
     try {
       const url = apiUrl(`team/members?ownerEmail=${encodeURIComponent(ownerEmail)}`);
-      const data = await fetchJSONStrict(url, {},);
+      const res = await fetch(url, {
+        credentials: "include",
+        headers: baseHeaders({
+          "X-Owner-Email": ownerEmail,
+          "X-User-Email": userEmail || ownerEmail,
+        }),
+      });
+      const data = await safeJson(res, url);
 
       if (Array.isArray(data?.members)) setMembers(data.members);
       else if (Array.isArray(data)) setMembers(data);
       else setMembers([]);
     } catch (e) {
-      console.error("Load members failed:", e);
-      setError(String(e).slice(0, 800));
+      console.error("Load team members failed:", e);
+      setError(String(e).slice(0, 900));
       setMembers([]);
     } finally {
       setLoading(false);
     }
-  };
+  }, [ownerEmail, userEmail]);
 
   useEffect(() => {
-    if (ownerEmail) loadMembers();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [ownerEmail]);
+    loadMembers();
+  }, [loadMembers]);
 
   const filtered = useMemo(() => {
     const q = search.trim().toLowerCase();
@@ -515,14 +480,13 @@ function TeamTab({ ownerEmail, userEmail, maxWidth }) {
     setMembers((ms) => ms.map((m) => (m.email === email ? { ...m, role } : m)));
 
     try {
-      const url = apiUrl("team/role");
-      await fetchJSONStrict(url, {
+      await apiFetchJSON("team/role", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ email, role, ownerEmail, userEmail }),
+        body: JSON.stringify({ email, role, ownerEmail }),
       });
     } catch (e) {
-      alert("Could not change role. Make sure /api/team/role exists.");
+      alert("Could not change role. Make sure /api/team/role exists and allows your session.");
       loadMembers();
     } finally {
       setBusyEmail("");
@@ -531,20 +495,19 @@ function TeamTab({ ownerEmail, userEmail, maxWidth }) {
 
   const removeMember = async (email) => {
     if (!window.confirm("Remove this member?")) return;
-    setBusyEmail(email);
 
+    setBusyEmail(email);
     const prev = members;
     setMembers((ms) => ms.filter((m) => m.email !== email));
 
     try {
-      const url = apiUrl("team/remove");
-      await fetchJSONStrict(url, {
+      await apiFetchJSON("team/remove", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ email, ownerEmail, userEmail }),
+        body: JSON.stringify({ email, ownerEmail }),
       });
     } catch (e) {
-      alert("Could not remove. Make sure /api/team/remove exists.");
+      alert("Could not remove. Make sure /api/team/remove exists and allows your session.");
       setMembers(prev);
     } finally {
       setBusyEmail("");
@@ -553,7 +516,7 @@ function TeamTab({ ownerEmail, userEmail, maxWidth }) {
 
   return (
     <div>
-      <h2 style={{ maxWidth: maxWidth, margin: "0 auto 14px" }}>Team</h2>
+      <h2 style={{ maxWidth, margin: "0 auto 14px" }}>Team</h2>
 
       <div
         style={{
@@ -561,7 +524,7 @@ function TeamTab({ ownerEmail, userEmail, maxWidth }) {
           alignItems: "center",
           gap: 12,
           margin: "0 auto 14px",
-          maxWidth: maxWidth,
+          maxWidth,
           width: "100%",
         }}
       >
@@ -595,11 +558,7 @@ function TeamTab({ ownerEmail, userEmail, maxWidth }) {
         <button
           className="btn"
           onClick={loadMembers}
-          style={{
-            background: "#232323",
-            color: "#fff",
-            border: "1px solid #444",
-          }}
+          style={{ background: "#232323", color: "#fff", border: "1px solid #444" }}
         >
           Refresh
         </button>
@@ -620,7 +579,7 @@ function TeamTab({ ownerEmail, userEmail, maxWidth }) {
           }}
         >
           <div style={{ fontWeight: 900, marginBottom: 6 }}>
-            Team API error (blocked / wrong route)
+            Team API error (blocked / unauthorized)
           </div>
           <pre style={{ margin: 0 }}>{error}</pre>
         </div>
@@ -633,7 +592,7 @@ function TeamTab({ ownerEmail, userEmail, maxWidth }) {
           padding: 0,
           overflow: "hidden",
           boxShadow: "0 2px 12px #0002",
-          maxWidth: maxWidth,
+          maxWidth,
           width: "100%",
           margin: "0 auto",
         }}
@@ -659,9 +618,7 @@ function TeamTab({ ownerEmail, userEmail, maxWidth }) {
         {loading ? (
           <div style={{ padding: 18, color: "#ddd" }}>Loading members…</div>
         ) : filtered.length === 0 ? (
-          <div style={{ padding: 18, color: "#bbb" }}>
-            No members found (or access blocked).
-          </div>
+          <div style={{ padding: 18, color: "#bbb" }}>No members found (or access blocked).</div>
         ) : (
           filtered.map((m) => (
             <div
