@@ -365,6 +365,54 @@ def _upsert_user(email: str, patch: dict) -> dict:
 # /api/profile (SINGLE SOURCE OF TRUTH)
 # ----------------------------
 
+@app.get("/api/profile")
+def api_profile_get():
+    email = (request.args.get("email") or "").strip().lower()
+    if not email:
+        return jsonify({"error": "missing_email"}), 400
+
+    users = load_users() or {}
+    u = users.get(email) or {}
+    if not u:
+        # IMPORTANT: JSON even when missing
+        return jsonify({"error": "user_not_found", "email": email}), 404
+
+    # return profile flat (your Settings.jsx supports flat/profile/user)
+    return jsonify({
+        "email": email,
+        "name": u.get("name", ""),
+        "business": u.get("business") or u.get("businessType") or "",
+        "businessType": u.get("businessType") or u.get("type") or "",
+        "location": u.get("location", ""),
+        "teamSize": u.get("teamSize") or u.get("people") or "",
+        "logo": u.get("logo", ""),
+    }), 200
+
+@app.post("/api/profile")
+def api_profile_post():
+    data = request.get_json(silent=True) or {}
+    email = (data.get("email") or "").strip().lower()
+    if not email:
+        return jsonify({"error": "missing_email"}), 400
+
+    users = load_users() or {}
+    u = users.get(email) or {}
+
+    u.update({
+        "email": email,
+        "name": data.get("name") or u.get("name") or "",
+        "business": data.get("business") or data.get("businessName") or u.get("business") or "",
+        "businessType": data.get("businessType") or u.get("businessType") or "",
+        "location": data.get("location") or u.get("location") or "",
+        "teamSize": data.get("teamSize") or data.get("people") or u.get("teamSize") or "",
+        "logo": data.get("logo") or u.get("logo") or "",
+    })
+
+    users[email] = u
+    save_users(users)
+
+    return jsonify(u), 200
+
 @app.route("/api/profile", methods=["GET", "POST", "OPTIONS"])
 def api_profile():
     if request.method == "OPTIONS":
@@ -421,6 +469,29 @@ def api_profile():
     except Exception as e:
         current_app.logger.exception("POST /api/profile failed")
         return jsonify({"error": "profile_update_failed", "detail": str(e)}), 500
+
+@app.route("/api/profile/debug", methods=["GET"])
+def api_profile_debug():
+    email = (request.args.get("email") or "").strip().lower()
+    ok = True
+    msg = "ok"
+    u = None
+    try:
+        u = get_user(email) if email else None
+    except Exception as ex:
+        ok = False
+        msg = f"get_user raised: {ex}"
+
+    return jsonify({
+        "ok": ok,
+        "message": msg,
+        "email": email,
+        "USE_SQLITE": bool(USE_SQLITE),
+        "SQLITE_PATH": SQLITE_PATH,
+        "DATA_ROOT": DATA_ROOT,
+        "exists": bool(u) if email else None,
+        "user_sample": u if (ok and u) else None
+    }), 200 if ok else 500
 
 # ----------------------------
 # OpenRouter helpers
@@ -3709,182 +3780,7 @@ def _bootstrap_scheduler():
 @app.get("/api/health")
 def health():
     return jsonify({"ok": True, "ts": int(time.time())}), 200
-
-# ----------------------------
-# Helpers
-# ----------------------------
-def _norm_email(e: str) -> str:
-    return (e or "").strip().lower()
-
-def _json_or_400():
-    data = request.get_json(silent=True)
-    if data is None:
-        return None, (jsonify({"error": "Expected JSON body"}), 400)
-    return data, None
-
-def _get_email_from_request():
-    # Support query ?email=, header X-User-Email, or JSON body
-    email = request.args.get("email") or request.headers.get("X-User-Email") or ""
-    if not email:
-        body = request.get_json(silent=True) or {}
-        email = body.get("email") or body.get("userEmail") or ""
-    return _norm_email(email)
-
-
-# ----------------------------
-# API: PROFILE / USER / ME
-# These fix your Settings 404s.
-# ----------------------------
-
-@app.route("/api/user/<path:email>", methods=["GET"])
-def api_user(email):
-    """
-    GET /api/user/<email>
-    Used by CrmDashboard refreshUser.
-    """
-    email = _norm_email(email)
-    if not email:
-        return jsonify({"error": "Missing email"}), 400
-
-    users = load_users() or {}
-    u = users.get(email) if isinstance(users, dict) else None
-
-    try:
-        if not u and callable(globals().get("get_user")):
-            u = get_user(email)
-    except Exception:
-        pass
-
-    if not u:
-        return jsonify({"email": email}), 200
-
-    if isinstance(u, dict) and "email" not in u:
-        u["email"] = email
-
-    return jsonify(u), 200
-
-
-@app.route("/api/me", methods=["GET"])
-def api_me():
-    """
-    GET /api/me?email=<email>
-    Some frontends call /me to fetch the current user record.
-    """
-    email = _get_email_from_request()
-    if not email:
-        return jsonify({"error": "Missing email"}), 400
-    return api_user(email)
-
-
-# ----------------------------
-# API: LEADS (fixes your 405)
-# ----------------------------
-
-@app.route("/api/leads/<path:email>", methods=["GET", "POST"])
-def api_leads(email):
-    """
-    GET  /api/leads/<email> -> { leads: [...] }
-    POST /api/leads/<email> { leads: [...] } -> { ok: true }
-    """
-    email = _norm_email(email)
-    if not email:
-        return jsonify({"error": "Missing email"}), 400
-
-    if request.method == "GET":
-        try:
-            data = load_leads(email)
-        except TypeError:
-            # if your storage.load_leads() doesn't take email, then it returns dict keyed by email
-            all_leads = load_leads() or {}
-            data = all_leads.get(email, [])
-
-        # normalize response
-        if isinstance(data, dict) and "leads" in data:
-            return jsonify({"leads": data.get("leads") or []}), 200
-        if isinstance(data, list):
-            return jsonify({"leads": data}), 200
-        if isinstance(data, dict):
-            # maybe storage returns dict keyed by email
-            return jsonify({"leads": data.get(email, [])}), 200
-
-        return jsonify({"leads": []}), 200
-
-    # POST
-    data, err = _json_or_400()
-    if err:
-        return err
-
-    leads = data.get("leads")
-    if not isinstance(leads, list):
-        return jsonify({"error": "Body must be {leads: [...]}"}), 400
-
-    try:
-        save_leads(email, leads)
-    except TypeError:
-        # if storage.save_leads expects (leads_dict) instead
-        all_leads = load_leads() or {}
-        if not isinstance(all_leads, dict):
-            all_leads = {}
-        all_leads[email] = leads
-        save_leads(all_leads)
-
-    return jsonify({"ok": True, "count": len(leads)}), 200
-
-
-@app.route("/api/leads/<path:email>/<lead_id>/contacted", methods=["POST"])
-def api_lead_contacted(email, lead_id):
-    """
-    POST /api/leads/<email>/<lead_id>/contacted
-    Updates last_contacted on a lead.
-    """
-    email = _norm_email(email)
-    if not email:
-        return jsonify({"error": "Missing email"}), 400
-
-    # load
-    try:
-        current = load_leads(email)
-    except TypeError:
-        all_leads = load_leads() or {}
-        current = all_leads.get(email, [])
-
-    if isinstance(current, dict) and "leads" in current:
-        current = current.get("leads") or []
-
-    if not isinstance(current, list):
-        current = []
-
-    now_iso = datetime.datetime.utcnow().isoformat()
-
-    def _match_id(l):
-        return str(l.get("id")) == str(lead_id) or str(l.get("email")) == str(lead_id)
-
-    updated = []
-    found = False
-    for l in current:
-        if isinstance(l, dict) and _match_id(l):
-            nl = {**l, "last_contacted": now_iso}
-            updated.append(nl)
-            found = True
-        else:
-            updated.append(l)
-
-    if not found:
-        # not fatal
-        pass
-
-    # save back
-    try:
-        save_leads(email, updated)
-    except TypeError:
-        all_leads = load_leads() or {}
-        if not isinstance(all_leads, dict):
-            all_leads = {}
-        all_leads[email] = updated
-        save_leads(all_leads)
-
-    return jsonify({"ok": True, "found": found}), 200
-
+z
 # ----------------------------
 # Run local
 # ----------------------------
