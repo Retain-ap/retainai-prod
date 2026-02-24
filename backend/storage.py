@@ -27,8 +27,8 @@ from sqlalchemy.orm import declarative_base, sessionmaker, relationship
 # ----------------------------
 # ENV / PATHS
 # ----------------------------
-DATA_ROOT   = os.getenv("DATA_ROOT", "./data")
-USE_SQLITE  = (os.getenv("USE_SQLITE", "false") or "").lower() == "true"
+DATA_ROOT = os.getenv("DATA_ROOT", "./data")
+USE_SQLITE = (os.getenv("USE_SQLITE", "false") or "").lower() == "true"
 SQLITE_PATH = os.getenv("SQLITE_PATH", os.path.join(DATA_ROOT, "retainai.db"))
 
 Path(DATA_ROOT).mkdir(parents=True, exist_ok=True)
@@ -36,7 +36,7 @@ Path(DATA_ROOT).mkdir(parents=True, exist_ok=True)
 # JSON fallback paths
 USERS_JSON = os.path.join(DATA_ROOT, "users.json")
 LEADS_JSON = os.path.join(DATA_ROOT, "leads.json")
-TEAM_JSON  = os.path.join(DATA_ROOT, "team.json")  # kept for legacy compatibility
+TEAM_JSON = os.path.join(DATA_ROOT, "team.json")  # kept for legacy compatibility
 
 
 # ----------------------------
@@ -120,6 +120,57 @@ class LeadRow(Base):
 Index("idx_leads_user_email", LeadRow.user_email)
 
 
+def _sqlite_columns(conn, table_name: str) -> set[str]:
+    rows = conn.exec_driver_sql(f"PRAGMA table_info({table_name})").fetchall()
+    # PRAGMA table_info columns: cid, name, type, notnull, dflt_value, pk
+    return {r[1] for r in rows}
+
+
+def ensure_sqlite_schema(_engine) -> None:
+    """
+    Heal existing Render persistent DB schema to match current models.
+    Fixes: sqlite3.OperationalError: no such column: users.data
+    """
+    with _engine.begin() as conn:
+        # Create minimal users table if missing
+        conn.exec_driver_sql(
+            """
+            CREATE TABLE IF NOT EXISTS users (
+                email TEXT PRIMARY KEY,
+                data TEXT
+            )
+            """
+        )
+
+        cols = _sqlite_columns(conn, "users")
+        if "data" not in cols:
+            conn.exec_driver_sql("ALTER TABLE users ADD COLUMN data TEXT")
+
+        # Create minimal leads table if missing
+        conn.exec_driver_sql(
+            """
+            CREATE TABLE IF NOT EXISTS leads (
+                id TEXT PRIMARY KEY,
+                user_email TEXT,
+                data TEXT
+            )
+            """
+        )
+
+        # Ensure leads has required columns
+        lcols = _sqlite_columns(conn, "leads")
+        if "user_email" not in lcols:
+            conn.exec_driver_sql("ALTER TABLE leads ADD COLUMN user_email TEXT")
+        if "data" not in lcols:
+            conn.exec_driver_sql("ALTER TABLE leads ADD COLUMN data TEXT")
+
+        # Index (safe if already exists)
+        try:
+            conn.exec_driver_sql("CREATE INDEX IF NOT EXISTS idx_leads_user_email ON leads(user_email)")
+        except Exception:
+            pass
+
+
 def _init_sqlite():
     global engine, SessionLocal
 
@@ -139,6 +190,10 @@ def _init_sqlite():
         connect_args={"check_same_thread": False},
         pool_pre_ping=True,
     )
+
+    # ✅ heal schema BEFORE ORM touches it
+    ensure_sqlite_schema(engine)
+
     SessionLocal = sessionmaker(bind=engine, autoflush=False, autocommit=False, future=True)
     Base.metadata.create_all(engine)
 
@@ -274,13 +329,12 @@ def load_leads() -> Dict[str, List[Dict[str, Any]]]:
             d = _safe_json_loads(row.data, {})
             if not isinstance(d, dict):
                 d = {}
-            # ensure id/user fields exist
             d["id"] = str(d.get("id") or row.id or "")
             out.setdefault(user_email, []).append(d)
 
     # keep stable ordering if createdAt exists
     try:
-        for ue, arr in out.items():
+        for _, arr in out.items():
             arr.sort(key=lambda x: (x.get("createdAt") or x.get("created_at") or ""), reverse=False)
     except Exception:
         pass
@@ -316,20 +370,16 @@ def save_leads(leads_by_user: Dict[str, List[Dict[str, Any]]]) -> None:
 
         for user_email, leads in leads_by_user.items():
             ue = (user_email or "").strip().lower()
-            if not ue:
-                continue
-            if not isinstance(leads, list):
+            if not ue or not isinstance(leads, list):
                 continue
 
             for ld in leads:
                 if not isinstance(ld, dict):
                     continue
 
-                # app.py uses uuid strings; enforce string id
                 lid = ld.get("id")
                 lid = str(lid) if lid is not None else ""
                 if not lid:
-                    # last resort: derive a deterministic-ish id
                     lid = f"lead_{ue}_{abs(hash(_safe_json_dumps(ld))) % (10**12)}"
                     ld["id"] = lid
 
