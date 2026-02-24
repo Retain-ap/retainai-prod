@@ -1,11 +1,6 @@
 // src/components/GoogleCalendarEvents.jsx
 import React, { useState, useEffect, useRef, useCallback } from "react";
 import { SiGooglecalendar } from "react-icons/si";
-import { API_BASE } from "../apiBase";
-
-fetch(`${API_BASE}/api/leads/${email}`)
-
-// ✅ NEW: use backend-safe API builder (prevents HTML/SPA fallback issues on Render)
 import { apiUrl } from "../apiBase";
 
 // Key for storing selected calendar per user in localStorage
@@ -16,14 +11,26 @@ function getUserCalKey(email) {
 async function safeJson(res) {
   const ct = (res.headers.get("content-type") || "").toLowerCase();
   const raw = await res.text();
-  if (!res.ok) throw new Error(`HTTP ${res.status} ${res.statusText}\n${raw.slice(0, 300)}`);
+
+  if (!res.ok) {
+    throw new Error(
+      `HTTP ${res.status} ${res.statusText}\n${raw.slice(0, 300)}`
+    );
+  }
+
   if (!ct.includes("application/json")) {
     // If we accidentally hit the SPA, it returns HTML — show a clear error.
-    if (raw.toLowerCase().includes("<!doctype html") || raw.toLowerCase().includes("</html>")) {
-      throw new Error("Expected JSON but got HTML. Likely wrong API base / proxy route.");
+    const low = raw.toLowerCase();
+    if (low.includes("<!doctype html") || low.includes("</html>")) {
+      throw new Error(
+        "Expected JSON but got HTML. Likely wrong API base / proxy route."
+      );
     }
-    throw new Error(`Expected JSON but got ${ct || "unknown"}\n${raw.slice(0, 200)}`);
+    throw new Error(
+      `Expected JSON but got ${ct || "unknown"}\n${raw.slice(0, 200)}`
+    );
   }
+
   try {
     return JSON.parse(raw);
   } catch (e) {
@@ -59,14 +66,17 @@ export default function GoogleCalendarEvents({
     setLoading(true);
     setError("");
     try {
-      const res = await fetch(apiUrl(`google/status/${encodeURIComponent(user.email)}`), {
-        credentials: "include",
-        headers: { Accept: "application/json" },
-      });
+      const res = await fetch(
+        apiUrl(`google/status/${encodeURIComponent(user.email)}`),
+        {
+          credentials: "include",
+          headers: { Accept: "application/json" },
+        }
+      );
       const data = await safeJson(res);
 
       const isConnected = !!data.connected;
-      const cals = data.calendars || [];
+      const cals = Array.isArray(data.calendars) ? data.calendars : [];
 
       setConnected(isConnected);
       setCalendars(cals);
@@ -74,13 +84,10 @@ export default function GoogleCalendarEvents({
       // Restore previously selected calendar, or default to primary
       const savedId = localStorage.getItem(getUserCalKey(user.email));
       const fallbackId =
-        cals.find((c) => c.primary)?.id ||
-        (cals?.[0]?.id ?? "");
+        cals.find((c) => c.primary)?.id || (cals?.[0]?.id ?? "");
 
       const nextId =
-        savedId && cals.some((c) => c.id === savedId)
-          ? savedId
-          : fallbackId;
+        savedId && cals.some((c) => c.id === savedId) ? savedId : fallbackId;
 
       setCalendarId(nextId || "");
 
@@ -120,6 +127,7 @@ export default function GoogleCalendarEvents({
         headers: { Accept: "application/json" },
       }
     );
+
     const data = await safeJson(res);
     return data?.url || "";
   }, [user?.email]);
@@ -139,7 +147,6 @@ export default function GoogleCalendarEvents({
         return;
       }
 
-      // open popup
       popupRef.current = window.open(url, "googleConnect", "width=520,height=720");
       const popup = popupRef.current;
 
@@ -157,30 +164,29 @@ export default function GoogleCalendarEvents({
         }
 
         try {
-          const res = await fetch(apiUrl(`google/status/${encodeURIComponent(user.email)}`), {
-            credentials: "include",
-            headers: { Accept: "application/json" },
-          });
+          const res = await fetch(
+            apiUrl(`google/status/${encodeURIComponent(user.email)}`),
+            {
+              credentials: "include",
+              headers: { Accept: "application/json" },
+            }
+          );
           const data = await safeJson(res);
 
           if (data.connected) {
             stopPolling();
             try { popup.close(); } catch {}
 
-            // refresh calendar list + selection
-            const cals = data.calendars || [];
+            const cals = Array.isArray(data.calendars) ? data.calendars : [];
             setConnected(true);
             setCalendars(cals);
 
             const savedId = localStorage.getItem(getUserCalKey(user.email));
             const fallbackId =
-              cals.find((c) => c.primary)?.id ||
-              (cals?.[0]?.id ?? "");
+              cals.find((c) => c.primary)?.id || (cals?.[0]?.id ?? "");
 
             setCalendarId(
-              savedId && cals.some((c) => c.id === savedId)
-                ? savedId
-                : fallbackId
+              savedId && cals.some((c) => c.id === savedId) ? savedId : fallbackId
             );
 
             setError("");
@@ -242,7 +248,6 @@ export default function GoogleCalendarEvents({
     };
   }, [stopPolling]);
 
-  // UI
   return (
     <div className="integration-card-inner">
       <div className="integration-center" style={{ alignItems: "center" }}>
