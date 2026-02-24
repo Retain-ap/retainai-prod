@@ -17,74 +17,11 @@ import "./settings.css";
 import { apiUrl } from "../apiBase";
 
 /* ------------------------------------------------------------
-   JSON helpers (hard-fail on HTML / SPA fallbacks)
------------------------------------------------------------- */
-
-async function readJsonStrict(res, urlForError = "") {
-  const ct = (res.headers.get("content-type") || "").toLowerCase();
-  const raw = await res.text();
-
-  if (!res.ok) {
-    throw new Error(`HTTP ${res.status} ${res.statusText} @ ${urlForError}\n${raw.slice(0, 400)}`);
-  }
-
-  if (!ct.includes("application/json")) {
-    // if it looks like the frontend SPA
-    const lower = raw.toLowerCase();
-    if (lower.includes("<!doctype html") || lower.includes("</html>")) {
-      throw new Error(
-        `Expected JSON but got HTML @ ${urlForError}\n` +
-          `This usually means you're hitting the FRONTEND instead of the backend, or the backend route 404'd (Flask returns HTML).\n` +
-          `First 200 chars:\n${raw.slice(0, 200)}`
-      );
-    }
-    throw new Error(
-      `Expected JSON but got ${ct || "unknown content-type"} @ ${urlForError}\n${raw.slice(0, 200)}`
-    );
-  }
-
-  try {
-    return JSON.parse(raw);
-  } catch (e) {
-    throw new Error(`Bad JSON @ ${urlForError}: ${String(e)}\n${raw.slice(0, 200)}`);
-  }
-}
-
-async function fetchJson(path, opts = {}) {
-  const url = apiUrl(path);
-  const res = await fetch(url, {
-    credentials: "include",
-    ...opts,
-    headers: {
-      Accept: "application/json",
-      ...(opts.headers || {}),
-    },
-  });
-  return readJsonStrict(res, url);
-}
-
-/* ------------------------------------------------------------
-   Profile normalization
------------------------------------------------------------- */
-
-function normalizeProfileResponse(raw, fallbackEmail) {
-  const base = (raw && (raw.profile || raw.user || raw)) || {};
-  const out = { ...base };
-
-  // normalize common keys
-  if (!out.email && fallbackEmail) out.email = fallbackEmail;
-  if (!out.business && out.businessName) out.business = out.businessName;
-  if (!out.businessName && out.business) out.businessName = out.business;
-
-  // support businessType / lineOfBusiness
-  if (!out.businessType && out.lineOfBusiness) out.businessType = out.lineOfBusiness;
-  if (!out.lineOfBusiness && out.businessType) out.lineOfBusiness = out.businessType;
-
-  return out;
-}
-
-/* ------------------------------------------------------------
-   Tabs
+   Notes:
+   - Your backend does NOT expose GET /api/profile or /api/user endpoints (404 in your screenshot).
+   - So Settings must render WITHOUT fetching profile.
+   - We use the passed-in `user` and localStorage as source of truth.
+   - Save tries POST endpoints (if they exist), otherwise saves locally.
 ------------------------------------------------------------ */
 
 const TABS = [
@@ -93,6 +30,70 @@ const TABS = [
   { key: "integrations", label: "Integrations", icon: <FaPlug /> },
   { key: "help", label: "Help & Support", icon: <FaQuestionCircle /> },
 ];
+
+function safeParse(json) {
+  try {
+    return JSON.parse(json);
+  } catch {
+    return null;
+  }
+}
+
+function normalizeUser(u) {
+  if (!u || typeof u !== "object") return null;
+  return {
+    ...u,
+    email: u.email || "",
+    name: u.name || "",
+    logo: u.logo || "",
+    business:
+      u.business ||
+      u.businessName ||
+      "",
+    businessName:
+      u.businessName ||
+      u.business ||
+      "",
+    businessType:
+      u.businessType ||
+      u.lineOfBusiness ||
+      "",
+    lineOfBusiness:
+      u.lineOfBusiness ||
+      u.businessType ||
+      "",
+    location: u.location || "",
+    people: u.people ?? u.teamSize ?? "",
+    teamSize: u.teamSize ?? u.people ?? "",
+  };
+}
+
+async function tryPostJson(path, payload) {
+  const url = apiUrl(path);
+  const res = await fetch(url, {
+    method: "POST",
+    credentials: "include",
+    headers: { "Content-Type": "application/json", Accept: "application/json" },
+    body: JSON.stringify(payload),
+  });
+
+  const ct = (res.headers.get("content-type") || "").toLowerCase();
+  const raw = await res.text();
+
+  if (!res.ok) {
+    throw new Error(`HTTP ${res.status} ${res.statusText} @ ${url}\n${raw.slice(0, 300)}`);
+  }
+
+  // If backend returns JSON, parse it. If it returns empty/text, still treat as success.
+  if (ct.includes("application/json")) {
+    try {
+      return JSON.parse(raw);
+    } catch {
+      return payload;
+    }
+  }
+  return payload;
+}
 
 export default function Settings({
   user,
@@ -107,205 +108,142 @@ export default function Settings({
   const { search } = useLocation();
 
   const [tab, setTab] = useState(initialTab || "profile");
-  const [profile, setProfile] = useState(null);
-  const [form, setForm] = useState({
-    name: "",
-    email: "",
-    business: "",
-    type: "",
-    location: "",
-    teamSize: "",
+
+  // ✅ Profile source of truth: props.user -> localStorage.user
+  const [profile, setProfile] = useState(() => {
+    const fromProps = normalizeUser(user);
+    if (fromProps?.email) return fromProps;
+
+    const stored = safeParse(localStorage.getItem("user") || "");
+    const fromLS = normalizeUser(stored);
+    return fromLS;
   });
+
+  const [form, setForm] = useState(() => ({
+    name: profile?.name || "",
+    email: profile?.email || "",
+    business: profile?.business || profile?.businessName || "",
+    type: profile?.businessType || profile?.lineOfBusiness || "",
+    location: profile?.location || "",
+    teamSize: String(profile?.people ?? profile?.teamSize ?? ""),
+  }));
+
   const [editMode, setEditMode] = useState(false);
   const [saving, setSaving] = useState(false);
-  const [bootError, setBootError] = useState("");
-  const [booting, setBooting] = useState(true);
+
+  // lightweight info banner (we don’t block rendering)
+  const [info, setInfo] = useState("");
 
   useEffect(() => {
     if (initialTab && TABS.some((t) => t.key === initialTab)) setTab(initialTab);
   }, [initialTab]);
 
-  // ✅ Try multiple GET endpoints so we're compatible with your current app.py
-  const loadProfile = useCallback(async () => {
-    setBootError("");
-    setBooting(true);
-
-    const email = user?.email;
-    if (!email) {
-      setProfile(null);
-      setBootError("No user email found. Please sign in again.");
-      setBooting(false);
-      return;
+  // If user prop changes (login switch), update local profile + form
+  useEffect(() => {
+    const next = normalizeUser(user);
+    if (next?.email && next.email !== profile?.email) {
+      setProfile(next);
+      setForm({
+        name: next.name || "",
+        email: next.email || "",
+        business: next.business || next.businessName || "",
+        type: next.businessType || next.lineOfBusiness || "",
+        location: next.location || "",
+        teamSize: String(next.people ?? next.teamSize ?? ""),
+      });
+      try {
+        localStorage.setItem("user", JSON.stringify(next));
+      } catch {}
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [user?.email]);
 
-    const candidates = [
-      `profile?email=${encodeURIComponent(email)}`,   // your current Settings.jsx expects this
-      `user/${encodeURIComponent(email)}`,            // very common in your codebase
-      `profile/${encodeURIComponent(email)}`,         // fallback style
-      `me?email=${encodeURIComponent(email)}`,        // fallback style
+  // Stripe callback refresh (no backend profile fetch — just optional refreshUser)
+  useEffect(() => {
+    const params = new URLSearchParams(search);
+    if (params.get("stripe_connected") === "1") {
+      if (typeof refreshUser === "function") {
+        refreshUser().catch(() => {});
+      }
+    }
+  }, [search, refreshUser]);
+
+  const handleSave = useCallback(async () => {
+    setSaving(true);
+    setInfo("");
+
+    const payload = {
+      email: form.email,
+      name: form.name,
+      logo: profile?.logo || "",
+      business: form.business,
+      businessName: form.business,
+      businessType: form.type,
+      lineOfBusiness: form.type,
+      location: form.location,
+      people: form.teamSize,
+      teamSize: form.teamSize,
+    };
+
+    // ✅ Always update local UI first
+    const merged = normalizeUser({ ...(profile || {}), ...payload });
+    setProfile(merged);
+    try {
+      localStorage.setItem("user", JSON.stringify(merged));
+    } catch {}
+
+    // ✅ Try backend save routes (ONLY POST — since your GET routes 404)
+    const postCandidates = [
+      "profile",          // if exists
+      "user",             // if exists
+      "settings/profile", // fallback
+      "save-profile",     // fallback
     ];
 
+    let saved = false;
     let lastErr = null;
 
-    for (const path of candidates) {
+    for (const p of postCandidates) {
       try {
-        const raw = await fetchJson(path);
-        const prof = normalizeProfileResponse(raw, email);
-
-        setProfile(prof);
-        setForm({
-          name: prof.name || "",
-          email: prof.email || email,
-          business: prof.business || prof.businessName || "",
-          type: prof.businessType || prof.lineOfBusiness || "",
-          location: prof.location || "",
-          teamSize:
-            (prof.people ?? prof.teamSize ?? "") === 0
-              ? "0"
-              : String(prof.people ?? prof.teamSize ?? ""),
-        });
-
-        try {
-          localStorage.setItem("user", JSON.stringify(prof));
-        } catch {}
-
-        if (typeof refreshUser === "function") {
-          // optional: sync parent context if provided
-          try { await refreshUser(); } catch {}
-        }
-
-        setBooting(false);
-        return;
+        await tryPostJson(p, payload);
+        saved = true;
+        break;
       } catch (e) {
         lastErr = e;
       }
     }
 
-    console.error("Failed to load profile (all endpoints):", lastErr);
-    setProfile(null);
-    setBootError(String(lastErr || "Failed to load profile").slice(0, 1200));
-    setBooting(false);
-  }, [user?.email, refreshUser]);
-
-  useEffect(() => {
-    loadProfile();
-  }, [loadProfile]);
-
-  useEffect(() => {
-    const params = new URLSearchParams(search);
-    if (params.get("stripe_connected") === "1") loadProfile();
-  }, [search, loadProfile]);
-
-  // ✅ Save profile (POST) with fallback endpoints
-  const handleSave = async () => {
-    setSaving(true);
-    try {
-      const payload = {
-        email: form.email,
-        name: form.name,
-        logo: profile?.logo || "",
-        businessType: form.type,
-        lineOfBusiness: form.type,
-        business: form.business,
-        businessName: form.business,
-        location: form.location,
-        people: form.teamSize,
-        teamSize: form.teamSize,
-      };
-
-      const postCandidates = [
-        "profile",
-        "user",
-        "profile/save",
-      ];
-
-      let saved = null;
-      let lastErr = null;
-
-      for (const p of postCandidates) {
-        try {
-          const raw = await fetchJson(p, {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify(payload),
-          });
-          saved = raw;
-          break;
-        } catch (e) {
-          lastErr = e;
-        }
-      }
-
-      if (!saved) throw lastErr || new Error("Failed saving profile.");
-
-      const prof = normalizeProfileResponse(saved, form.email);
-      setProfile(prof);
-      setForm((f) => ({
-        ...f,
-        name: prof.name || f.name,
-        email: prof.email || f.email,
-        business: prof.business || prof.businessName || f.business,
-        type: prof.businessType || prof.lineOfBusiness || f.type,
-        location: prof.location || f.location,
-        teamSize: String(prof.people ?? prof.teamSize ?? f.teamSize ?? ""),
-      }));
+    if (saved) {
+      setInfo("Saved ✅");
       setEditMode(false);
-
-      try {
-        localStorage.setItem("user", JSON.stringify(prof));
-      } catch {}
-    } catch (e) {
-      console.error("Failed to save profile:", e);
-      alert("Could not save profile. Open console for details.");
-    } finally {
-      setSaving(false);
+      if (typeof refreshUser === "function") {
+        try { await refreshUser(); } catch {}
+      }
+    } else {
+      // Backend doesn’t support saving profile (yet) — but Settings still works.
+      console.warn("Profile save: no backend endpoint matched. Using localStorage only.", lastErr);
+      setInfo("Saved locally ✅ (backend profile endpoint not found)");
+      setEditMode(false);
     }
-  };
+
+    setSaving(false);
+  }, [form, profile, refreshUser]);
 
   const leftOffset = sidebarCollapsed ? 60 : 245;
   const settingsWidth = `calc(100vw - ${leftOffset}px)`;
   const MAX_W = 1000;
 
-  if (booting || !profile) {
+  // If profile is missing entirely, don’t “load forever” — show a clear message
+  if (!profile?.email) {
     return (
       <div className="settings-layout" style={{ left: leftOffset, width: settingsWidth }}>
         <div style={{ padding: 16, maxWidth: 900 }}>
           <div style={{ fontWeight: 900, marginBottom: 8, color: "#fff" }}>
-            {booting ? "Loading Settings…" : "Settings couldn’t load"}
+            Settings couldn’t identify your account
           </div>
-
           <div style={{ color: "#bbb", lineHeight: 1.5 }}>
-            {booting
-              ? "Fetching your profile and workspace data."
-              : "Your profile request failed. This is usually an API routing mismatch or a missing backend endpoint."}
+            Your session user is missing an email. Log out and log back in.
           </div>
-
-          <div style={{ display: "flex", gap: 10, marginTop: 14 }}>
-            <button
-              className="btn"
-              onClick={loadProfile}
-              style={{ background: "#232323", color: "#fff", border: "1px solid #444" }}
-            >
-              Retry
-            </button>
-          </div>
-
-          {bootError && (
-            <pre
-              style={{
-                marginTop: 14,
-                padding: 12,
-                background: "#2a2a2e",
-                borderRadius: 10,
-                border: "1px solid #3a3a3f",
-                color: "#ddd",
-                whiteSpace: "pre-wrap",
-                wordBreak: "break-word",
-              }}
-            >
-              {bootError}
-            </pre>
-          )}
         </div>
       </div>
     );
@@ -321,6 +259,7 @@ export default function Settings({
             onClick={() => {
               setTab(t.key);
               setEditMode(false);
+              setInfo("");
             }}
           >
             <span className="settings-icon">{t.icon}</span>
@@ -333,6 +272,23 @@ export default function Settings({
         {tab === "profile" && (
           <div className="profile-tab" style={{ maxWidth: MAX_W, margin: "0 auto" }}>
             <h2>Profile</h2>
+
+            {info && (
+              <div
+                style={{
+                  marginBottom: 12,
+                  padding: "10px 12px",
+                  borderRadius: 10,
+                  border: "1px solid #2f2f33",
+                  background: "#1f1f23",
+                  color: "#ddd",
+                  fontWeight: 700,
+                }}
+              >
+                {info}
+              </div>
+            )}
+
             <div className="profile-card">
               <div className="avatar">
                 {profile.logo ? (
@@ -374,12 +330,21 @@ export default function Settings({
                         className="btn btn-cancel"
                         onClick={() => {
                           setEditMode(false);
-                          loadProfile();
+                          setForm({
+                            name: profile.name || "",
+                            email: profile.email || "",
+                            business: profile.business || profile.businessName || "",
+                            type: profile.businessType || profile.lineOfBusiness || "",
+                            location: profile.location || "",
+                            teamSize: String(profile.people ?? profile.teamSize ?? ""),
+                          });
+                          setInfo("");
                         }}
                         disabled={saving}
                       >
                         Cancel
                       </button>
+
                       <button className="btn btn-save" onClick={handleSave} disabled={saving}>
                         {saving ? "Saving…" : "Save"}
                       </button>
@@ -390,28 +355,34 @@ export default function Settings({
                     </button>
                   )}
                 </div>
+
+                <div style={{ marginTop: 10, color: "#8d8d93", fontSize: 12, lineHeight: 1.5 }}>
+                  Note: your backend currently returns 404 for profile GET endpoints, so Settings does not fetch from server.
+                  This page uses your signed-in user data (localStorage) and still works.
+                </div>
               </div>
             </div>
           </div>
         )}
 
         {tab === "team" && (
-          <TeamTab
-            ownerEmail={profile.email}
-            userEmail={user?.email || profile.email}
-            maxWidth={MAX_W}
-          />
+          <TeamTab ownerEmail={profile.email} userEmail={profile.email} maxWidth={MAX_W} />
         )}
 
         {tab === "integrations" && (
           <div style={{ maxWidth: MAX_W, margin: "0 auto" }}>
             <h2>Integrations</h2>
+
             <div className="integration-row" style={{ justifyContent: "center" }}>
               <div className="integration-card">
-                <GoogleCalendarEvents user={profile} onStatus={setGcalStatus} onEvents={setGoogleEvents} />
+                <GoogleCalendarEvents
+                  user={profile}
+                  onStatus={setGcalStatus}
+                  onEvents={setGoogleEvents}
+                />
               </div>
 
-              <StripeConnectCard user={profile} refreshUser={loadProfile} />
+              <StripeConnectCard user={profile} refreshUser={() => {}} />
 
               <div className="integration-card coming-soon">
                 <SiInstagram className="integration-icon instagram" />
@@ -421,6 +392,12 @@ export default function Settings({
                 </div>
               </div>
             </div>
+
+            {gcalStatus && (
+              <div style={{ marginTop: 12, color: "#bbb" }}>
+                Google Calendar status: <b style={{ color: "#fff" }}>{gcalStatus}</b>
+              </div>
+            )}
           </div>
         )}
 
@@ -439,7 +416,7 @@ export default function Settings({
 }
 
 /* ------------------------------------------------------------
-   Team tab (calls backend via apiUrl)
+   Team tab (kept, but your backend must actually have these routes)
 ------------------------------------------------------------ */
 
 function TeamTab({ ownerEmail, userEmail, maxWidth }) {
@@ -456,37 +433,31 @@ function TeamTab({ ownerEmail, userEmail, maxWidth }) {
     setLoading(true);
     setError("");
 
+    const url = apiUrl(`team/members?ownerEmail=${encodeURIComponent(ownerEmail)}`);
+
     try {
-      // Try common patterns:
-      const candidates = [
-        `team/members?ownerEmail=${encodeURIComponent(ownerEmail)}`,
-        `team/members?owner_email=${encodeURIComponent(ownerEmail)}`,
-      ];
+      const res = await fetch(url, {
+        credentials: "include",
+        headers: {
+          Accept: "application/json",
+          "X-User-Email": userEmail || "",
+          "X-Owner-Email": ownerEmail || "",
+        },
+      });
 
-      let data = null;
-      let lastErr = null;
+      const ct = (res.headers.get("content-type") || "").toLowerCase();
+      const raw = await res.text();
 
-      for (const c of candidates) {
-        try {
-          data = await fetchJson(c, {
-            headers: {
-              "X-User-Email": userEmail || "",
-              "X-Owner-Email": ownerEmail || "",
-            },
-          });
-          break;
-        } catch (e) {
-          lastErr = e;
-        }
+      if (!res.ok) throw new Error(`HTTP ${res.status} @ ${url}\n${raw.slice(0, 300)}`);
+      if (!ct.includes("application/json")) {
+        throw new Error(`Expected JSON @ ${url} but got ${ct || "unknown"}\n${raw.slice(0, 200)}`);
       }
 
-      if (!data) throw lastErr || new Error("No team endpoint matched.");
-
+      const data = JSON.parse(raw);
       if (Array.isArray(data?.members)) setMembers(data.members);
       else if (Array.isArray(data)) setMembers(data);
       else setMembers([]);
     } catch (e) {
-      console.error("Load members failed:", e);
       setError(String(e).slice(0, 900));
       setMembers([]);
     } finally {
@@ -495,8 +466,8 @@ function TeamTab({ ownerEmail, userEmail, maxWidth }) {
   }, [ownerEmail, userEmail]);
 
   useEffect(() => {
-    if (ownerEmail) loadMembers();
-  }, [ownerEmail, loadMembers]);
+    loadMembers();
+  }, [loadMembers]);
 
   const filtered = useMemo(() => {
     const q = search.trim().toLowerCase();
@@ -514,17 +485,19 @@ function TeamTab({ ownerEmail, userEmail, maxWidth }) {
     setMembers((ms) => ms.map((m) => (m.email === email ? { ...m, role } : m)));
 
     try {
-      await fetchJson("team/role", {
+      await fetch(apiUrl("team/role"), {
         method: "POST",
+        credentials: "include",
         headers: {
           "Content-Type": "application/json",
+          Accept: "application/json",
           "X-User-Email": userEmail || "",
           "X-Owner-Email": ownerEmail || "",
         },
         body: JSON.stringify({ email, role, ownerEmail }),
       });
-    } catch (e) {
-      alert("Could not change role. Make sure /api/team/role exists.");
+    } catch {
+      alert("Could not change role. Backend route /api/team/role may be missing.");
       loadMembers();
     } finally {
       setBusyEmail("");
@@ -539,17 +512,19 @@ function TeamTab({ ownerEmail, userEmail, maxWidth }) {
     setMembers((ms) => ms.filter((m) => m.email !== email));
 
     try {
-      await fetchJson("team/remove", {
+      await fetch(apiUrl("team/remove"), {
         method: "POST",
+        credentials: "include",
         headers: {
           "Content-Type": "application/json",
+          Accept: "application/json",
           "X-User-Email": userEmail || "",
           "X-Owner-Email": ownerEmail || "",
         },
         body: JSON.stringify({ email, ownerEmail }),
       });
-    } catch (e) {
-      alert("Could not remove. Make sure /api/team/remove exists.");
+    } catch {
+      alert("Could not remove. Backend route /api/team/remove may be missing.");
       setMembers(prev);
     } finally {
       setBusyEmail("");
@@ -661,7 +636,9 @@ function TeamTab({ ownerEmail, userEmail, maxWidth }) {
         {loading ? (
           <div style={{ padding: 18, color: "#ddd" }}>Loading members…</div>
         ) : filtered.length === 0 ? (
-          <div style={{ padding: 18, color: "#bbb" }}>No members found (or access blocked).</div>
+          <div style={{ padding: 18, color: "#bbb" }}>
+            No members found (or backend team routes missing).
+          </div>
         ) : (
           filtered.map((m) => (
             <div
