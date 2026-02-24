@@ -17,11 +17,12 @@ import "./settings.css";
 import { apiUrl } from "../apiBase";
 
 /* ------------------------------------------------------------
-   Notes:
-   - Your backend does NOT expose GET /api/profile or /api/user endpoints (404 in your screenshot).
-   - So Settings must render WITHOUT fetching profile.
-   - We use the passed-in `user` and localStorage as source of truth.
-   - Save tries POST endpoints (if they exist), otherwise saves locally.
+   Settings (PROD-SAFE)
+   - Profile loads from:
+       1) props.user (fast)
+       2) backend GET /api/profile?email=...
+       3) localStorage fallback (only if backend missing/unavailable)
+   - Save uses POST /api/profile
 ------------------------------------------------------------ */
 
 const TABS = [
@@ -46,53 +47,56 @@ function normalizeUser(u) {
     email: u.email || "",
     name: u.name || "",
     logo: u.logo || "",
-    business:
-      u.business ||
-      u.businessName ||
-      "",
-    businessName:
-      u.businessName ||
-      u.business ||
-      "",
-    businessType:
-      u.businessType ||
-      u.lineOfBusiness ||
-      "",
-    lineOfBusiness:
-      u.lineOfBusiness ||
-      u.businessType ||
-      "",
+    business: u.business || u.businessName || "",
+    businessName: u.businessName || u.business || "",
+    businessType: u.businessType || u.lineOfBusiness || "",
+    lineOfBusiness: u.lineOfBusiness || u.businessType || "",
     location: u.location || "",
     people: u.people ?? u.teamSize ?? "",
     teamSize: u.teamSize ?? u.people ?? "",
   };
 }
 
-async function tryPostJson(path, payload) {
-  const url = apiUrl(path);
+async function fetchJson(url, opts = {}) {
   const res = await fetch(url, {
-    method: "POST",
     credentials: "include",
-    headers: { "Content-Type": "application/json", Accept: "application/json" },
-    body: JSON.stringify(payload),
+    ...opts,
+    headers: {
+      Accept: "application/json",
+      ...(opts.headers || {}),
+    },
   });
 
   const ct = (res.headers.get("content-type") || "").toLowerCase();
   const raw = await res.text();
 
   if (!res.ok) {
-    throw new Error(`HTTP ${res.status} ${res.statusText} @ ${url}\n${raw.slice(0, 300)}`);
+    const err = new Error(
+      `HTTP ${res.status} ${res.statusText} @ ${url}\n${raw.slice(0, 300)}`
+    );
+    err.status = res.status;
+    err.raw = raw;
+    throw err;
   }
 
-  // If backend returns JSON, parse it. If it returns empty/text, still treat as success.
+  // If JSON, parse it; otherwise return raw
   if (ct.includes("application/json")) {
     try {
       return JSON.parse(raw);
     } catch {
-      return payload;
+      return null;
     }
   }
-  return payload;
+  return raw;
+}
+
+async function postJson(path, payload) {
+  const url = apiUrl(path);
+  return fetchJson(url, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
 }
 
 export default function Settings({
@@ -109,14 +113,13 @@ export default function Settings({
 
   const [tab, setTab] = useState(initialTab || "profile");
 
-  // ✅ Profile source of truth: props.user -> localStorage.user
+  // initial profile: props.user -> localStorage.user
   const [profile, setProfile] = useState(() => {
     const fromProps = normalizeUser(user);
     if (fromProps?.email) return fromProps;
 
     const stored = safeParse(localStorage.getItem("user") || "");
-    const fromLS = normalizeUser(stored);
-    return fromLS;
+    return normalizeUser(stored);
   });
 
   const [form, setForm] = useState(() => ({
@@ -131,14 +134,15 @@ export default function Settings({
   const [editMode, setEditMode] = useState(false);
   const [saving, setSaving] = useState(false);
 
-  // lightweight info banner (we don’t block rendering)
+  // info banner + backend status for profile
   const [info, setInfo] = useState("");
+  const [profileBackendOk, setProfileBackendOk] = useState(null); // null unknown | true ok | false unavailable
 
   useEffect(() => {
     if (initialTab && TABS.some((t) => t.key === initialTab)) setTab(initialTab);
   }, [initialTab]);
 
-  // If user prop changes (login switch), update local profile + form
+  // If user prop changes (login switch), update local profile + form immediately
   useEffect(() => {
     const next = normalizeUser(user);
     if (next?.email && next.email !== profile?.email) {
@@ -154,11 +158,13 @@ export default function Settings({
       try {
         localStorage.setItem("user", JSON.stringify(next));
       } catch {}
+      setInfo("");
+      setProfileBackendOk(null);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [user?.email]);
 
-  // Stripe callback refresh (no backend profile fetch — just optional refreshUser)
+  // Stripe callback refresh (kept)
   useEffect(() => {
     const params = new URLSearchParams(search);
     if (params.get("stripe_connected") === "1") {
@@ -167,6 +173,65 @@ export default function Settings({
       }
     }
   }, [search, refreshUser]);
+
+  // Try fetching profile from backend (if endpoint exists)
+  const tryFetchProfileFromBackend = useCallback(async (email) => {
+    if (!email) return null;
+    const url = apiUrl(`profile?email=${encodeURIComponent(email)}`);
+
+    try {
+      const data = await fetchJson(url);
+      // backend might return {profile:{...}} or just the profile object
+      const maybeProfile =
+        data?.profile && typeof data.profile === "object" ? data.profile : data;
+
+      const normalized = normalizeUser(maybeProfile);
+      if (normalized?.email) {
+        setProfileBackendOk(true);
+        return normalized;
+      }
+      // If response was OK but empty/weird, still consider backend reachable
+      setProfileBackendOk(true);
+      return null;
+    } catch (e) {
+      // 404 means route missing; other errors could be downtime, CORS, etc.
+      setProfileBackendOk(false);
+      return null;
+    }
+  }, []);
+
+  // On mount / when profile.email changes: attempt backend fetch once
+  useEffect(() => {
+    let cancelled = false;
+
+    (async () => {
+      const email = profile?.email;
+      if (!email) return;
+
+      const fromBackend = await tryFetchProfileFromBackend(email);
+      if (cancelled) return;
+
+      if (fromBackend?.email) {
+        setProfile(fromBackend);
+        setForm({
+          name: fromBackend.name || "",
+          email: fromBackend.email || "",
+          business: fromBackend.business || fromBackend.businessName || "",
+          type: fromBackend.businessType || fromBackend.lineOfBusiness || "",
+          location: fromBackend.location || "",
+          teamSize: String(fromBackend.people ?? fromBackend.teamSize ?? ""),
+        });
+        try {
+          localStorage.setItem("user", JSON.stringify(fromBackend));
+        } catch {}
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [profile?.email, tryFetchProfileFromBackend]);
 
   const handleSave = useCallback(async () => {
     setSaving(true);
@@ -185,55 +250,40 @@ export default function Settings({
       teamSize: form.teamSize,
     };
 
-    // ✅ Always update local UI first
+    // Update UI immediately
     const merged = normalizeUser({ ...(profile || {}), ...payload });
     setProfile(merged);
     try {
       localStorage.setItem("user", JSON.stringify(merged));
     } catch {}
 
-    // ✅ Try backend save routes (ONLY POST — since your GET routes 404)
-    const postCandidates = [
-      "profile",          // if exists
-      "user",             // if exists
-      "settings/profile", // fallback
-      "save-profile",     // fallback
-    ];
-
-    let saved = false;
-    let lastErr = null;
-
-    for (const p of postCandidates) {
-      try {
-        await tryPostJson(p, payload);
-        saved = true;
-        break;
-      } catch (e) {
-        lastErr = e;
-      }
-    }
-
-    if (saved) {
+    // Save to backend (single, correct endpoint)
+    try {
+      await postJson("profile", payload);
+      setProfileBackendOk(true);
       setInfo("Saved ✅");
       setEditMode(false);
-      if (typeof refreshUser === "function") {
-        try { await refreshUser(); } catch {}
-      }
-    } else {
-      // Backend doesn’t support saving profile (yet) — but Settings still works.
-      console.warn("Profile save: no backend endpoint matched. Using localStorage only.", lastErr);
-      setInfo("Saved locally ✅ (backend profile endpoint not found)");
-      setEditMode(false);
-    }
 
-    setSaving(false);
+      if (typeof refreshUser === "function") {
+        try {
+          await refreshUser();
+        } catch {}
+      }
+    } catch (e) {
+      // If backend missing/unavailable, keep local save and show clear message
+      setProfileBackendOk(false);
+      console.warn("Profile save failed (backend). Using localStorage only.", e);
+      setInfo("Saved locally ✅ (backend profile endpoint unavailable)");
+      setEditMode(false);
+    } finally {
+      setSaving(false);
+    }
   }, [form, profile, refreshUser]);
 
   const leftOffset = sidebarCollapsed ? 60 : 245;
   const settingsWidth = `calc(100vw - ${leftOffset}px)`;
   const MAX_W = 1000;
 
-  // If profile is missing entirely, don’t “load forever” — show a clear message
   if (!profile?.email) {
     return (
       <div className="settings-layout" style={{ left: leftOffset, width: settingsWidth }}>
@@ -273,7 +323,7 @@ export default function Settings({
           <div className="profile-tab" style={{ maxWidth: MAX_W, margin: "0 auto" }}>
             <h2>Profile</h2>
 
-            {info && (
+            {(info || profileBackendOk === false) && (
               <div
                 style={{
                   marginBottom: 12,
@@ -285,7 +335,7 @@ export default function Settings({
                   fontWeight: 700,
                 }}
               >
-                {info}
+                {info || "Backend profile endpoint unavailable — using local profile cache."}
               </div>
             )}
 
@@ -357,8 +407,14 @@ export default function Settings({
                 </div>
 
                 <div style={{ marginTop: 10, color: "#8d8d93", fontSize: 12, lineHeight: 1.5 }}>
-                  Note: your backend currently returns 404 for profile GET endpoints, so Settings does not fetch from server.
-                  This page uses your signed-in user data (localStorage) and still works.
+                  Profile sync:{" "}
+                  <b style={{ color: "#fff" }}>
+                    {profileBackendOk === true
+                      ? "Server"
+                      : profileBackendOk === false
+                      ? "Local cache"
+                      : "Checking…"}
+                  </b>
                 </div>
               </div>
             </div>
@@ -416,7 +472,7 @@ export default function Settings({
 }
 
 /* ------------------------------------------------------------
-   Team tab (kept, but your backend must actually have these routes)
+   Team tab (unchanged)
 ------------------------------------------------------------ */
 
 function TeamTab({ ownerEmail, userEmail, maxWidth }) {
