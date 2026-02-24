@@ -5,6 +5,7 @@ import App from "./App";
 import "./index.css";
 import GoogleAuthWrapper from "./components/GoogleAuthProvider";
 import { SettingsProvider } from "./components/SettingsContext";
+import { apiUrl } from "./apiBase";
 
 // ---------------- PWA install prompt plumbing ----------------
 let _deferredInstallPrompt = null;
@@ -21,11 +22,9 @@ export async function promptInstall() {
   return choice;
 }
 
-// Fired when the app becomes installable (Chrome/Edge desktop & Android)
 window.addEventListener("beforeinstallprompt", (e) => {
-  e.preventDefault(); // donâ€™t show the mini-infobar; weâ€™ll trigger it manually
+  e.preventDefault(); // don't show the mini-infobar; we'll trigger it manually
   _deferredInstallPrompt = e;
-  // Tell any UI (like Sidebar) that install is now available
   window.dispatchEvent(new Event("pwa-install-available"));
 });
 
@@ -34,39 +33,104 @@ window.addEventListener("appinstalled", () => {
 });
 // --------------------------------------------------------------
 
-// Register service worker + Push
-if ("serviceWorker" in navigator) {
-  window.addEventListener("load", async () => {
-    try {
-      const registration = await navigator.serviceWorker.register("/service-worker.js");
-      console.log("Service Worker registered:", registration);
+// helper to convert VAPID key
+function urlBase64ToUint8Array(base64String) {
+  const padding = "=".repeat((4 - (base64String.length % 4)) % 4);
+  const base64 = (base64String + padding).replace(/-/g, "+").replace(/_/g, "/");
+  const rawData = window.atob(base64);
+  const outputArray = new Uint8Array(rawData.length);
+  for (let i = 0; i < rawData.length; ++i) outputArray[i] = rawData.charCodeAt(i);
+  return outputArray;
+}
 
-      // Ask for push permission
-      const permission = await Notification.requestPermission();
-      if (permission === "granted" && process.env.REACT_APP_VAPID_PUBLIC_KEY) {
-        const subscribeOptions = {
-          userVisibleOnly: true,
-          applicationServerKey: urlBase64ToUint8Array(
-            process.env.REACT_APP_VAPID_PUBLIC_KEY
-          ),
-        };
-        const pushSubscription = await registration.pushManager.subscribe(subscribeOptions);
-        console.log("PushSubscription:", pushSubscription);
+function getUserEmail() {
+  try {
+    const u = JSON.parse(localStorage.getItem("user") || "null");
+    return (u?.org_id || u?.email || "").toString().trim().toLowerCase();
+  } catch {
+    return "";
+  }
+}
 
-        // Send to backend
-        await fetch((process.env.REACT_APP_API_BASE || "") + "/api/save-subscription", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            subscription: pushSubscription,
-            email: localStorage.getItem("userEmail"),
-          }),
-        });
-      }
-    } catch (err) {
-      console.error("SW registration / push setup failed:", err);
+// Register service worker + Push (PROD SAFE)
+async function registerSwAndPush() {
+  if (!("serviceWorker" in navigator)) return;
+
+  try {
+    const registration = await navigator.serviceWorker.register("/service-worker.js");
+    console.log("Service Worker registered:", registration);
+
+    // Only attempt push if we have a VAPID key
+    const VAPID_PUBLIC_KEY =
+      (window.__ENV__ &&
+        (window.__ENV__.REACT_APP_VAPID_PUBLIC_KEY ||
+          window.__ENV__.VITE_VAPID_PUBLIC_KEY ||
+          window.__ENV__.VAPID_PUBLIC_KEY)) ||
+      (typeof process !== "undefined" &&
+        process.env &&
+        process.env.REACT_APP_VAPID_PUBLIC_KEY) ||
+      "";
+
+    if (!VAPID_PUBLIC_KEY) return;
+
+    // Ask for push permission (best-effort)
+    const permission = await Notification.requestPermission();
+    if (permission !== "granted") return;
+
+    // If already subscribed, reuse; otherwise subscribe
+    let pushSubscription = await registration.pushManager.getSubscription();
+    if (!pushSubscription) {
+      const subscribeOptions = {
+        userVisibleOnly: true,
+        applicationServerKey: urlBase64ToUint8Array(VAPID_PUBLIC_KEY),
+      };
+      pushSubscription = await registration.pushManager.subscribe(subscribeOptions);
+    }
+
+    console.log("PushSubscription:", pushSubscription);
+
+    const email = getUserEmail();
+    if (!email) {
+      // user not logged in yet; don't store a subscription against empty email
+      return;
+    }
+
+    // Send to backend using apiUrl (prevents posting to frontend origin)
+    await fetch(apiUrl("save-subscription"), {
+      method: "POST",
+      credentials: "include",
+      headers: { "Content-Type": "application/json", Accept: "application/json" },
+      body: JSON.stringify({
+        subscription: pushSubscription,
+        email,
+      }),
+    });
+  } catch (err) {
+    console.error("SW registration / push setup failed:", err);
+  }
+}
+
+// ✅ Only register SW/push in production builds.
+// CRA sets NODE_ENV=production in builds on Render.
+if (process.env.NODE_ENV === "production") {
+  window.addEventListener("load", () => {
+    registerSwAndPush();
+  });
+
+  // If user logs in after page load, try again once (so subscription gets linked to email)
+  window.addEventListener("storage", (e) => {
+    if (e.key === "user") {
+      // Debounce a hair in case other login storage writes happen
+      setTimeout(() => {
+        registerSwAndPush();
+      }, 250);
     }
   });
+} else {
+  // In dev, avoid SW caching headaches.
+  if ("serviceWorker" in navigator) {
+    navigator.serviceWorker.getRegistrations().then((regs) => regs.forEach((r) => r.unregister()));
+  }
 }
 
 const root = ReactDOM.createRoot(document.getElementById("root"));
@@ -79,13 +143,3 @@ root.render(
     </SettingsProvider>
   </React.StrictMode>
 );
-
-// helper to convert VAPID key
-function urlBase64ToUint8Array(base64String) {
-  const padding = "=".repeat((4 - (base64String.length % 4)) % 4);
-  const base64 = (base64String + padding).replace(/-/g, "+").replace(/_/g, "/");
-  const rawData = window.atob(base64);
-  const outputArray = new Uint8Array(rawData.length);
-  for (let i = 0; i < rawData.length; ++i) outputArray[i] = rawData.charCodeAt(i);
-  return outputArray;
-}

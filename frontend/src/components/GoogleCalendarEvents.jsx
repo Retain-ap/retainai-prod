@@ -36,14 +36,17 @@ export default function GoogleCalendarEvents({ user, onEvents, onStatus, onCalen
   const [calendars, setCalendars] = useState([]);
   const [calendarId, setCalendarId] = useState("");
   const [error, setError] = useState("");
+
   const pollingRef = useRef(null);
   const popupRef = useRef(null);
+  const tickRef = useRef(0);
 
   const stopPolling = useCallback(() => {
     if (pollingRef.current) {
       clearInterval(pollingRef.current);
       pollingRef.current = null;
     }
+    tickRef.current = 0;
   }, []);
 
   const refreshStatus = useCallback(async () => {
@@ -94,13 +97,21 @@ export default function GoogleCalendarEvents({ user, onEvents, onStatus, onCalen
 
   const fetchAuthUrl = useCallback(async () => {
     if (!user?.email) return "";
-    const res = await fetch(
-      apiUrl(`google/auth-url?user_email=${encodeURIComponent(user.email)}`),
-      { credentials: "include", headers: { Accept: "application/json" } }
-    );
+    const res = await fetch(apiUrl(`google/auth-url?user_email=${encodeURIComponent(user.email)}`), {
+      credentials: "include",
+      headers: { Accept: "application/json" },
+    });
     const data = await safeJson(res);
     return data?.url || "";
   }, [user?.email]);
+
+  const tryClosePopup = useCallback(() => {
+    // COOP can block access to popup window in different ways.
+    // We attempt close, but NEVER read popup.closed (can trigger COOP warnings).
+    try {
+      if (popupRef.current) popupRef.current.close();
+    } catch {}
+  }, []);
 
   const handleConnect = async () => {
     if (!user?.email) return;
@@ -116,18 +127,20 @@ export default function GoogleCalendarEvents({ user, onEvents, onStatus, onCalen
         return;
       }
 
+      // Open popup
       popupRef.current = window.open(url, "googleConnect", "width=520,height=720");
-      const popup = popupRef.current;
-
       stopPolling();
 
-      let ticks = 0;
+      // Poll connection status only (no popup.closed checks)
       pollingRef.current = setInterval(async () => {
-        ticks += 1;
+        tickRef.current += 1;
 
-        if (ticks > 90 || !popup || popup.closed) {
+        // stop after ~2 minutes (1200ms * 100 = 120s)
+        if (tickRef.current > 100) {
           stopPolling();
           setLoading(false);
+          // best-effort close
+          tryClosePopup();
           return;
         }
 
@@ -140,9 +153,7 @@ export default function GoogleCalendarEvents({ user, onEvents, onStatus, onCalen
 
           if (data.connected) {
             stopPolling();
-            try {
-              popup.close();
-            } catch {}
+            tryClosePopup();
 
             const cals = data.calendars || [];
             setConnected(true);
@@ -150,7 +161,6 @@ export default function GoogleCalendarEvents({ user, onEvents, onStatus, onCalen
 
             const savedId = localStorage.getItem(getUserCalKey(user.email));
             const fallbackId = cals.find((c) => c.primary)?.id || (cals?.[0]?.id ?? "");
-
             setCalendarId(savedId && cals.some((c) => c.id === savedId) ? savedId : fallbackId);
 
             setError("");
@@ -189,9 +199,7 @@ export default function GoogleCalendarEvents({ user, onEvents, onStatus, onCalen
       if (onStatus) onStatus("not_connected");
 
       stopPolling();
-      try {
-        if (popupRef.current && !popupRef.current.closed) popupRef.current.close();
-      } catch {}
+      tryClosePopup();
 
       try {
         localStorage.removeItem(getUserCalKey(user.email));
@@ -204,11 +212,9 @@ export default function GoogleCalendarEvents({ user, onEvents, onStatus, onCalen
   useEffect(() => {
     return () => {
       stopPolling();
-      try {
-        if (popupRef.current && !popupRef.current.closed) popupRef.current.close();
-      } catch {}
+      tryClosePopup();
     };
-  }, [stopPolling]);
+  }, [stopPolling, tryClosePopup]);
 
   return (
     <div className="integration-card-inner">

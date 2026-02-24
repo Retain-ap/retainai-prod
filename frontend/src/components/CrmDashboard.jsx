@@ -1,5 +1,5 @@
 // File: src/components/CrmDashboard.jsx
-import React, { useState, useEffect, useCallback } from "react";
+import React, { useState, useEffect, useCallback, useMemo } from "react";
 import Sidebar from "./Sidebar";
 import LeadsDashboard from "./LeadsDashboard";
 import LeadModal from "./LeadModal";
@@ -17,17 +17,7 @@ import { useNavigate, useLocation } from "react-router-dom";
 import { useSettings } from "./SettingsContext";
 import Automations from "./Automations";
 import InviteTeamModal from "./InviteTeamModal";
-
-/*
-  ✅ FIXES FOR YOUR ESLINT/COMPILE ERRORS
-  - Removed `import { API_BASE } from "../apiBase";`
-  - Removed the top-level `fetch(`${API_BASE}/api/leads/${email}`)` which:
-      * referenced `email` (no-undef)
-      * ran at module load time (bad)
-      * caused "import/first" because it sat between imports + code in some variants
-  - Added safe `apiUrl()` helper here (same idea as in Settings) so all fetches
-    always target the backend origin in production and avoid SPA HTML responses.
-*/
+import { apiUrl } from "../apiBase";
 
 const DEFAULT_TAGS = [
   "VIP",
@@ -44,123 +34,35 @@ const DEFAULT_TAGS = [
   "Upset",
 ];
 
-// ───────────────────────────────────────────────────────────────
-// API ORIGIN RESOLUTION (prod-safe)
-// ───────────────────────────────────────────────────────────────
-
-const ENV_BASE =
-  (typeof import.meta !== "undefined" &&
-    import.meta.env &&
-    import.meta.env.VITE_API_BASE) ||
-  (typeof process !== "undefined" &&
-    process.env &&
-    (process.env.REACT_APP_API_BASE || process.env.REACT_APP_API_URL)) ||
-  "";
-
-function cleanOrigin(s) {
-  return (s || "").trim().replace(/\/+$/g, "").replace(/\/api$/i, "");
+function normEmail(v) {
+  return String(v || "").trim().toLowerCase();
 }
 
-function isOnRenderHost() {
+function getEffectiveEmail(u) {
+  // If you use org/team accounts, prefer org_id when present
+  const org = normEmail(u?.org_id);
+  const email = normEmail(u?.email);
+  return org || email;
+}
+
+function leadsKey(email) {
+  return `retainai_leads_${normEmail(email)}`;
+}
+function tagsKey(email) {
+  return `retainai_userTags_${normEmail(email)}`;
+}
+
+function safeParseJSON(s, fallback) {
   try {
-    return String(window.location.hostname || "")
-      .toLowerCase()
-      .includes("onrender.com");
+    const v = JSON.parse(s);
+    return v ?? fallback;
   } catch {
-    return false;
+    return fallback;
   }
 }
-
-function isFrontendOrigin(origin) {
-  const o = String(origin || "").toLowerCase();
-  return o.includes("-frontend.onrender.com") || o.includes("frontend.onrender.com");
-}
-
-function siblingRenderOrigin() {
-  try {
-    const o = window.location.origin;
-    return o
-      .replace(/-frontend(\.onrender\.com)$/i, "$1")
-      .replace(/-\d+(\.onrender\.com)$/i, "$1");
-  } catch {
-    return "";
-  }
-}
-
-async function probe(origin) {
-  if (!origin) return null;
-  const base = origin.replace(/\/+$/, "");
-  const url = `${base}/api/health`;
-
-  try {
-    const r = await fetch(url, { credentials: "omit" });
-    if (!r.ok) return null;
-
-    const ct = (r.headers.get("content-type") || "").toLowerCase();
-    if (ct.includes("application/json")) {
-      await r.json();
-      return base;
-    }
-
-    const t = await r.text();
-    if (String(t || "").toLowerCase().includes("ok")) return base;
-    return null;
-  } catch {
-    return null;
-  }
-}
-
-async function getWorkingApiOrigin() {
-  const env = cleanOrigin(ENV_BASE);
-  const sib = cleanOrigin(siblingRenderOrigin());
-
-  try {
-    const cached = sessionStorage.getItem("__api_origin__");
-    if (cached && !isFrontendOrigin(cached)) return cached;
-  } catch {}
-
-  const prod = isOnRenderHost();
-
-  const sameOrigin = (() => {
-    try {
-      return cleanOrigin(window.location.origin);
-    } catch {
-      return "";
-    }
-  })();
-
-  const candidates = [env, sib, ...(prod ? [] : [sameOrigin])].filter(Boolean);
-
-  for (const c of candidates) {
-    const ok = await probe(c);
-    if (ok) {
-      if (!isFrontendOrigin(ok)) {
-        try {
-          sessionStorage.setItem("__api_origin__", ok);
-        } catch {}
-      }
-      return ok;
-    }
-  }
-
-  if (env) return env;
-  if (sib) return sib;
-  return sameOrigin || "";
-}
-
-async function apiUrl(path) {
-  const origin = await getWorkingApiOrigin();
-  const p = String(path || "").replace(/^\/+/, "");
-  if (/^https?:\/\//i.test(p)) return p;
-  return `${origin.replace(/\/+$/, "")}/api/${p}`;
-}
-
-// ───────────────────────────────────────────────────────────────
-// Helpers
-// ───────────────────────────────────────────────────────────────
 
 function getAppointmentsFromLeads(leads) {
-  let out = [];
+  const out = [];
   (leads || []).forEach((lead) => {
     (lead.appointments || []).forEach((app) => {
       out.push({ ...app, type: "appointment", lead, checked: !!app.done });
@@ -180,12 +82,6 @@ function CrmDashboard() {
   const location = useLocation();
   const { settings, setUser } = useSettings();
 
-  useEffect(() => {
-    const storedUser = JSON.parse(localStorage.getItem("user"));
-    if (!storedUser) navigate("/login", { replace: true });
-    // eslint-disable-next-line
-  }, []);
-
   // When routed to /app/import, auto-open Settings → Imports
   const [settingsTab, setSettingsTab] = useState(null);
   const [section, setSection] = useState("dashboard");
@@ -198,55 +94,63 @@ function CrmDashboard() {
     }
   }, [location.pathname, location.search]);
 
+  // user state (single source of truth)
   const [user, setUserState] = useState(() => {
-    try {
-      const u = JSON.parse(localStorage.getItem("user"));
-      if (u && typeof u === "object") {
-        return {
-          ...u,
-          lineOfBusiness: u.lineOfBusiness || u.businessType || u.business || "",
-          name: u.name || "",
-          logo: u.logo || "",
-          email: u.email || "",
-        };
-      }
-      return null;
-    } catch {
-      return null;
+    const stored = safeParseJSON(localStorage.getItem("user"), null);
+    if (stored && typeof stored === "object") {
+      return {
+        ...stored,
+        lineOfBusiness: stored.lineOfBusiness || stored.businessType || stored.business || "",
+        name: stored.name || "",
+        logo: stored.logo || "",
+        email: stored.email || "",
+      };
     }
+    return null;
   });
 
-  // keep local user in sync with any external changes
+  // If no user, redirect
   useEffect(() => {
-    const interval = setInterval(() => {
-      const stored = JSON.parse(localStorage.getItem("user"));
-      if (stored && JSON.stringify(stored) !== JSON.stringify(user)) {
-        setUserState(stored);
-      }
-    }, 1000);
-    return () => clearInterval(interval);
-  }, [user]);
+    const stored = safeParseJSON(localStorage.getItem("user"), null);
+    if (!stored) navigate("/login", { replace: true });
+    // eslint-disable-next-line
+  }, []);
 
+  // Sync from SettingsContext if it changes (no interval polling)
   useEffect(() => {
-    if (
-      settings?.user &&
-      settings.user.email &&
-      (!user || settings.user.email !== user.email)
-    ) {
-      setUserState(settings.user);
+    if (settings?.user && settings.user.email) {
+      const next = settings.user;
+      if (!user || normEmail(next.email) !== normEmail(user.email)) {
+        setUserState({
+          ...next,
+          lineOfBusiness: next.lineOfBusiness || next.businessType || next.business || "",
+          name: next.name || "",
+          logo: next.logo || "",
+          email: next.email || "",
+        });
+      }
     }
     // eslint-disable-next-line
-  }, [settings.user]);
+  }, [settings?.user]);
+
+  // Sync across tabs/windows (storage event)
+  useEffect(() => {
+    function onStorage(e) {
+      if (e.key === "user") {
+        const next = safeParseJSON(localStorage.getItem("user"), null);
+        setUserState(next);
+      }
+    }
+    window.addEventListener("storage", onStorage);
+    return () => window.removeEventListener("storage", onStorage);
+  }, []);
+
+  const effectiveEmail = useMemo(() => getEffectiveEmail(user), [user]);
 
   const [leads, setLeads] = useState([]);
-  const [userTags, setUserTags] = useState(() => {
-    try {
-      return JSON.parse(localStorage.getItem("userTags") || "[]");
-    } catch {
-      return [];
-    }
-  });
+  const [userTags, setUserTags] = useState([]);
   const [tags, setTags] = useState([]);
+
   const [showLeadModal, setShowLeadModal] = useState(false);
   const [editLead, setEditLead] = useState(null);
   const [calendarView, setCalendarView] = useState("calendar");
@@ -258,7 +162,7 @@ function CrmDashboard() {
 
   // Google Calendar bits
   const [googleEvents, setGoogleEvents] = useState([]);
-  const [gcalStatus, setGcalStatus] = useState(""); // "ok" | "disconnected" | "unauthorized" | "unavailable" | "error: <code>"
+  const [gcalStatus, setGcalStatus] = useState("");
   const [gcalConnected, setGcalConnected] = useState(false);
 
   const [selectedDate, setSelectedDate] = useState(null);
@@ -266,58 +170,88 @@ function CrmDashboard() {
   const [quickAddDate, setQuickAddDate] = useState(null);
   const [showInviteModal, setShowInviteModal] = useState(false);
 
-  // ✅ Load leads (prod-safe: always use apiUrl())
+  // Load per-user local cache immediately when user changes
+  useEffect(() => {
+    if (!effectiveEmail) {
+      setLeads([]);
+      setUserTags([]);
+      setTags([...DEFAULT_TAGS]);
+      return;
+    }
+
+    const cachedLeads = safeParseJSON(localStorage.getItem(leadsKey(effectiveEmail)), []);
+    const cachedTags = safeParseJSON(localStorage.getItem(tagsKey(effectiveEmail)), []);
+
+    setLeads(Array.isArray(cachedLeads) ? cachedLeads : []);
+    setUserTags(Array.isArray(cachedTags) ? cachedTags : []);
+    setTags(extractTags(Array.isArray(cachedLeads) ? cachedLeads : [], Array.isArray(cachedTags) ? cachedTags : []));
+  }, [effectiveEmail]);
+
+  // Fetch leads from backend (authoritative)
   useEffect(() => {
     let cancelled = false;
 
     (async () => {
-      if (user && user.email) {
-        setLoadingLeads(true);
-        try {
-          const url = await apiUrl(`leads/${encodeURIComponent(user.email)}`);
-          const res = await fetch(url, { credentials: "include" });
-          if (!res.ok) throw new Error(`HTTP ${res.status}`);
-          const data = await res.json();
-          if (cancelled) return;
+      if (!effectiveEmail) return;
+      setLoadingLeads(true);
 
-          const ls = Array.isArray(data.leads) ? data.leads : [];
-          setLeads(ls);
-          setTags(extractTags(ls, userTags));
-          localStorage.setItem("leads", JSON.stringify(ls));
-        } catch {
-          if (!cancelled) setLeads([]);
-        } finally {
-          if (!cancelled) setLoadingLeads(false);
-        }
-      } else {
-        setLeads([]);
-        setTags([...DEFAULT_TAGS, ...userTags]);
+      try {
+        const res = await fetch(apiUrl(`leads/${encodeURIComponent(effectiveEmail)}`), {
+          credentials: "include",
+          headers: { Accept: "application/json" },
+        });
+
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        const data = await res.json();
+
+        if (cancelled) return;
+
+        const ls = Array.isArray(data.leads) ? data.leads : [];
+        setLeads(ls);
+        setTags(extractTags(ls, userTags));
+
+        // persist per-user cache
+        try {
+          localStorage.setItem(leadsKey(effectiveEmail), JSON.stringify(ls));
+        } catch {}
+      } catch {
+        // keep local cache if backend fails
+      } finally {
+        if (!cancelled) setLoadingLeads(false);
       }
     })();
 
     return () => {
       cancelled = true;
     };
-  }, [user, userTags]);
+    // eslint-disable-next-line
+  }, [effectiveEmail]);
 
-  // ✅ Save leads (prod-safe)
+  // Save leads to backend + per-user local cache
   const saveLeadsToBackend = useCallback(
     async (newLeads) => {
-      if (user && user.email) {
-        try {
-          const url = await apiUrl(`leads/${encodeURIComponent(user.email)}`);
-          await fetch(url, {
-            method: "POST",
-            credentials: "include",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ leads: newLeads }),
-          });
-        } catch {}
-        localStorage.setItem("leads", JSON.stringify(newLeads));
-        setTags(extractTags(newLeads, userTags));
+      const email = effectiveEmail;
+      if (!email) return;
+
+      // local cache first (fast + resilient)
+      try {
+        localStorage.setItem(leadsKey(email), JSON.stringify(newLeads));
+      } catch {}
+
+      setTags(extractTags(newLeads, userTags));
+
+      try {
+        await fetch(apiUrl(`leads/${encodeURIComponent(email)}`), {
+          method: "POST",
+          credentials: "include",
+          headers: { "Content-Type": "application/json", Accept: "application/json" },
+          body: JSON.stringify({ leads: newLeads }),
+        });
+      } catch {
+        // backend save failure is okay; local cache preserves user work
       }
     },
-    [user, userTags]
+    [effectiveEmail, userTags]
   );
 
   const handleUpdateLead = useCallback(
@@ -338,8 +272,7 @@ function CrmDashboard() {
 
       setDrawerLead((prev) => {
         if (!prev) return prev;
-        const same =
-          String(prev?.id ?? prev?.email) === String(updated?.id ?? updated?.email);
+        const same = String(prev?.id ?? prev?.email) === String(updated?.id ?? updated?.email);
         return same ? { ...prev, ...updated } : prev;
       });
     },
@@ -353,10 +286,25 @@ function CrmDashboard() {
     }
   }, [highlightLeadIds]);
 
+  const persistUserTags = useCallback(
+    (nextTags) => {
+      const email = effectiveEmail;
+      setUserTags(nextTags);
+      if (email) {
+        try {
+          localStorage.setItem(tagsKey(email), JSON.stringify(nextTags));
+        } catch {}
+      }
+      setTags(extractTags(leads, nextTags));
+    },
+    [effectiveEmail, leads]
+  );
+
   const handleSaveLead = (lead) => {
     let newLeads;
+
     if (lead.id) {
-      newLeads = leads.map((l) => (l.id === lead.id ? lead : l));
+      newLeads = leads.map((l) => (String(l.id) === String(lead.id) ? lead : l));
     } else {
       const now = new Date().toISOString();
       lead.id = Date.now();
@@ -364,48 +312,55 @@ function CrmDashboard() {
       lead.last_contacted = now;
       newLeads = [lead, ...leads];
     }
+
     setLeads(newLeads);
     saveLeadsToBackend(newLeads);
+
     setShowLeadModal(false);
     setEditLead(null);
 
+    // merge tags into userTags (per-user)
     if (lead.tags && Array.isArray(lead.tags)) {
-      lead.tags.forEach((tag) => {
-        if (tag && !DEFAULT_TAGS.includes(tag) && !userTags.includes(tag)) {
-          const updated = [...userTags, tag];
-          setUserTags(updated);
-          localStorage.setItem("userTags", JSON.stringify(updated));
-        }
-      });
+      const toAdd = lead.tags.filter(
+        (t) => t && !DEFAULT_TAGS.includes(t) && !userTags.includes(t)
+      );
+      if (toAdd.length) {
+        persistUserTags([...userTags, ...toAdd]);
+      }
     }
   };
 
   const handleDeleteLead = (id) => {
-    const newLeads = leads.filter((l) => l.id !== id);
+    const newLeads = leads.filter((l) => String(l.id) !== String(id));
     setLeads(newLeads);
     saveLeadsToBackend(newLeads);
   };
 
-  // ✅ Lead contacted (prod-safe)
+  // Lead contacted
   const handleLeadContacted = async (lead) => {
-    if (!user || !user.email || !lead.id) return;
+    const email = effectiveEmail;
+    if (!email || !lead?.id) return;
 
     try {
-      const url = await apiUrl(
-        `leads/${encodeURIComponent(user.email)}/${lead.id}/contacted`
-      );
-      await fetch(url, {
+      await fetch(apiUrl(`leads/${encodeURIComponent(email)}/${lead.id}/contacted`), {
         method: "POST",
         credentials: "include",
-        headers: { "Content-Type": "application/json" },
+        headers: { "Content-Type": "application/json", Accept: "application/json" },
       });
     } catch {}
 
+    // refresh from backend (best-effort)
     try {
-      const url2 = await apiUrl(`leads/${encodeURIComponent(user.email)}`);
-      const res = await fetch(url2, { credentials: "include" });
+      const res = await fetch(apiUrl(`leads/${encodeURIComponent(email)}`), {
+        credentials: "include",
+        headers: { Accept: "application/json" },
+      });
       const data = await res.json();
-      setLeads(Array.isArray(data.leads) ? data.leads : []);
+      const ls = Array.isArray(data.leads) ? data.leads : [];
+      setLeads(ls);
+      try {
+        localStorage.setItem(leadsKey(email), JSON.stringify(ls));
+      } catch {}
     } catch {}
   };
 
@@ -423,16 +378,17 @@ function CrmDashboard() {
       message: aiResponse,
       leadId: lead.id,
       leadEmail: lead.email,
-      userEmail: user.email,
+      userEmail: effectiveEmail || user?.email || "",
     });
     setSection("notification-send");
   }
+
   function handleAfterSendNotification(leadId) {
     if (leadId) setHighlightLeadIds([leadId]);
     setSection("messages");
   }
 
-  // ✅ Send AI prompt email (prod-safe)
+  // Send AI prompt email
   async function handleSendAIPromptEmail(
     lead,
     aiResponse,
@@ -443,22 +399,24 @@ function CrmDashboard() {
       alert("Missing recipient or message");
       return;
     }
+
     const body = {
       leadEmail: lead.email,
-      userEmail: user.email,
+      userEmail: effectiveEmail || user?.email || "",
       leadName: lead.name || "",
       message: aiResponse,
       subject: aiSubject,
       promptType: promptType || "",
     };
+
     try {
-      const url = await apiUrl("send-ai-message");
-      const res = await fetch(url, {
+      const res = await fetch(apiUrl("send-ai-message"), {
         method: "POST",
         credentials: "include",
-        headers: { "Content-Type": "application/json" },
+        headers: { "Content-Type": "application/json", Accept: "application/json" },
         body: JSON.stringify(body),
       });
+
       if (res.ok) {
         setHighlightLeadIds([lead.id]);
         alert("AI prompt email sent!");
@@ -476,47 +434,53 @@ function CrmDashboard() {
     }
   }
 
-  // ✅ Refresh user (prod-safe)
+  // Refresh user
   const handleRefreshUser = useCallback(async () => {
-    if (!user || !user.email) return;
+    const email = effectiveEmail;
+    if (!email) return;
 
     try {
-      const url = await apiUrl(`user/${encodeURIComponent(user.email)}`);
-      const res = await fetch(url, { credentials: "include" });
+      const res = await fetch(apiUrl(`user/${encodeURIComponent(email)}`), {
+        credentials: "include",
+        headers: { Accept: "application/json" },
+      });
 
       if (res.ok) {
         const data = await res.json();
-        setUserState((prev) =>
-          prev
-            ? {
-                ...prev,
-                ...data,
-                lineOfBusiness:
-                  data.lineOfBusiness ||
-                  data.businessType ||
-                  data.business ||
-                  prev.lineOfBusiness ||
-                  prev.businessType ||
-                  prev.business ||
-                  "",
-              }
-            : data
-        );
-        setUser(data);
-        localStorage.setItem("user", JSON.stringify(data));
+
+        const next = {
+          ...(user || {}),
+          ...data,
+          lineOfBusiness:
+            data.lineOfBusiness ||
+            data.businessType ||
+            data.business ||
+            user?.lineOfBusiness ||
+            user?.businessType ||
+            user?.business ||
+            "",
+        };
+
+        setUserState(next);
+        setUser(next);
+        localStorage.setItem("user", JSON.stringify(next));
       }
     } catch {}
-  }, [user, setUser]);
+  }, [effectiveEmail, user, setUser]);
 
-  const crmAppointments = getAppointmentsFromLeads(leads);
+  const crmAppointments = useMemo(() => getAppointmentsFromLeads(leads), [leads]);
   const SIDEBAR_WIDTH = sidebarCollapsed ? 60 : 245;
 
-  // ✅ Check Google connection (prod-safe)
+  // Google connection
   const checkGoogleConnection = useCallback(async () => {
-    if (!user || !user.email) return false;
+    const email = effectiveEmail;
+    if (!email) return false;
+
     try {
-      const url = await apiUrl(`google/status/${encodeURIComponent(user.email)}`);
-      const res = await fetch(url, { credentials: "include" });
+      const res = await fetch(apiUrl(`google/status/${encodeURIComponent(email)}`), {
+        credentials: "include",
+        headers: { Accept: "application/json" },
+      });
 
       if (!res.ok) {
         setGcalConnected(false);
@@ -534,32 +498,25 @@ function CrmDashboard() {
       setGcalStatus("unavailable");
       return false;
     }
-  }, [user]);
+  }, [effectiveEmail]);
 
   const openImports = useCallback(() => {
     setSettingsTab("imports");
     setSection("settings");
   }, []);
 
-  // ✅ Fetch Google events (prod-safe)
+  // Fetch Google events
   const getGoogleEvents = useCallback(async () => {
-    if (!user || !user.email) return;
+    const email = effectiveEmail;
+    if (!email) return;
+
     try {
-      const url = await apiUrl(`google/events/${encodeURIComponent(user.email)}`);
-      const res = await fetch(url, { credentials: "include" });
+      const res = await fetch(apiUrl(`google/events/${encodeURIComponent(email)}`), {
+        credentials: "include",
+        headers: { Accept: "application/json" },
+      });
 
       if (!res.ok) {
-        let msg = "";
-        try {
-          const err = await res.json();
-          msg = err?.error || err?.message || "";
-        } catch {
-          try {
-            msg = await res.text();
-          } catch {
-            msg = "";
-          }
-        }
         if (res.status === 401) {
           setGcalStatus("unauthorized");
           setGoogleEvents([]);
@@ -567,24 +524,23 @@ function CrmDashboard() {
         }
         setGcalStatus(`error: ${res.status}`);
         setGoogleEvents([]);
-        console.warn("Google events fetch failed:", res.status, msg);
         return;
       }
 
       const data = await res.json();
       setGoogleEvents(Array.isArray(data.items) ? data.items : []);
       setGcalStatus("ok");
-    } catch (e) {
-      console.warn("Google events fetch error:", e);
+    } catch {
       setGcalStatus("unavailable");
       setGoogleEvents([]);
     }
-  }, [user]);
+  }, [effectiveEmail]);
 
   // Only try to fetch events when in calendar/appointments AND connected.
   useEffect(() => {
     (async () => {
-      if (!user?.email) return;
+      if (!effectiveEmail) return;
+
       if (section === "calendar" || section === "appointments") {
         const connected = await checkGoogleConnection();
         if (connected) {
@@ -596,7 +552,7 @@ function CrmDashboard() {
         setGoogleEvents([]);
       }
     })();
-  }, [section, user, checkGoogleConnection, getGoogleEvents]);
+  }, [section, effectiveEmail, checkGoogleConnection, getGoogleEvents]);
 
   function handleQuickAdd(day) {
     setQuickAddDate(day);
@@ -605,8 +561,9 @@ function CrmDashboard() {
 
   function handleQuickAddSave({ leadId, title, time }) {
     if (!leadId || !title || !quickAddDate) return;
-    setLeads((prev) =>
-      prev.map((l) =>
+
+    setLeads((prev) => {
+      const next = prev.map((l) =>
         String(l.id) === String(leadId)
           ? {
               ...l,
@@ -621,8 +578,13 @@ function CrmDashboard() {
               ],
             }
           : l
-      )
-    );
+      );
+
+      // IMPORTANT: persist this change
+      saveLeadsToBackend(next);
+      return next;
+    });
+
     setShowQuickAdd(false);
     setQuickAddDate(null);
   }
@@ -693,7 +655,9 @@ function CrmDashboard() {
               onContactedLead={handleLeadContacted}
               onImportLeads={openImports}
               onUpdateLead={handleUpdateLead}
+              onSendNotification={handleSendNotification}
             />
+
             {showLeadModal && (
               <LeadModal
                 lead={editLead}
@@ -710,14 +674,7 @@ function CrmDashboard() {
 
         {section === "calendar" && (
           <div>
-            <div
-              style={{
-                display: "flex",
-                alignItems: "center",
-                gap: 8,
-                marginBottom: 12,
-              }}
-            >
+            <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 12 }}>
               <button
                 style={{
                   background: calendarView === "calendar" ? "#191919" : "#141414",
@@ -735,8 +692,7 @@ function CrmDashboard() {
               </button>
               <button
                 style={{
-                  background:
-                    calendarView === "appointments" ? "#191919" : "#141414",
+                  background: calendarView === "appointments" ? "#191919" : "#141414",
                   color: "#f7cb53",
                   border: "1px solid #222",
                   borderRadius: "0 10px 10px 0",
@@ -775,7 +731,6 @@ function CrmDashboard() {
               </button>
             </div>
 
-            {/* Inline status/CTA when not connected or unauthorized */}
             {gcalStatus && gcalStatus !== "ok" && (
               <div
                 style={{
@@ -942,7 +897,7 @@ function CrmDashboard() {
   );
 }
 
-// Quick Add Appointment form (unchanged, robust id compare)
+// Quick Add Appointment form
 function QuickAddForm({ leads, onSave, onCancel }) {
   const [leadId, setLeadId] = useState("");
   const [title, setTitle] = useState("");
@@ -956,9 +911,7 @@ function QuickAddForm({ leads, onSave, onCancel }) {
       }}
     >
       <div style={{ marginBottom: 14 }}>
-        <label
-          style={{ color: "#fff", fontWeight: 700, display: "block", marginBottom: 6 }}
-        >
+        <label style={{ color: "#fff", fontWeight: 700, display: "block", marginBottom: 6 }}>
           Lead
         </label>
         <select
@@ -984,9 +937,7 @@ function QuickAddForm({ leads, onSave, onCancel }) {
       </div>
 
       <div style={{ marginBottom: 14 }}>
-        <label
-          style={{ color: "#fff", fontWeight: 700, display: "block", marginBottom: 6 }}
-        >
+        <label style={{ color: "#fff", fontWeight: 700, display: "block", marginBottom: 6 }}>
           Title
         </label>
         <input
@@ -1006,9 +957,7 @@ function QuickAddForm({ leads, onSave, onCancel }) {
       </div>
 
       <div style={{ marginBottom: 14 }}>
-        <label
-          style={{ color: "#fff", fontWeight: 700, display: "block", marginBottom: 6 }}
-        >
+        <label style={{ color: "#fff", fontWeight: 700, display: "block", marginBottom: 6 }}>
           Time
         </label>
         <input
