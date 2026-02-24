@@ -1,17 +1,21 @@
-# app.py (CONSOLIDATED + PROD-SAFE)
+# app.py (CONSOLIDATED + PROD-SAFE) — PART 1/2
 import os
+import re
 import json
 import time
 import base64
+import hmac
+import hashlib
 import datetime
 import urllib.parse
 from uuid import uuid4
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Optional, List, Tuple
+from urllib.parse import urlparse
 
 import stripe
 import requests as pyrequests
 
-from flask import Flask, request, jsonify, send_from_directory, redirect, current_app
+from flask import Flask, request, jsonify, send_from_directory, redirect, current_app, Blueprint
 from flask_cors import CORS
 from dotenv import load_dotenv
 from flask_apscheduler import APScheduler
@@ -34,7 +38,14 @@ from storage import (
 class Config:
     SCHEDULER_API_ENABLED = True
 
+
 load_dotenv()
+
+# Ensure data root exists
+try:
+    os.makedirs(DATA_ROOT, exist_ok=True)
+except Exception:
+    pass
 
 # Kick off one-time JSON -> SQLite migration if needed
 migrate_json_to_sqlite_if_needed()
@@ -43,6 +54,8 @@ print(f"[BOOT] RetainAI started (PID: {os.getpid()})")
 
 app = Flask(__name__)
 app.config.from_object(Config())
+app.config["BOOTSTRAP_DONE"] = False  # used to start scheduler once in prod
+
 
 # ----------------------------
 # CORS
@@ -72,9 +85,11 @@ CORS(
     expose_headers=["Content-Type"],
 )
 
+# Cookies: secure in prod (Render/https), relax in local dev
+IS_LOCAL = (os.getenv("FLASK_ENV", "").lower() == "development") or ("localhost" in ",".join(ALLOWED))
 app.config.update(
     SESSION_COOKIE_SAMESITE="None",
-    SESSION_COOKIE_SECURE=True,
+    SESSION_COOKIE_SECURE=not IS_LOCAL,
 )
 
 @app.after_request
@@ -95,9 +110,6 @@ def add_cors_headers(resp):
 def api_options(_any):
     return ("", 204)
 
-@app.route("/api/auth/signup", methods=["OPTIONS"])
-def signup_preflight():
-    return ("", 204)
 
 # ----------------------------
 # HEALTH / TEST
@@ -108,7 +120,7 @@ def healthz():
 
 @app.route("/api/health", methods=["GET"])
 def api_health():
-    return jsonify(ok=True), 200
+    return jsonify(ok=True, ts=int(time.time())), 200
 
 @app.route("/test", methods=["GET"])
 def test_root():
@@ -117,6 +129,7 @@ def test_root():
 @app.route("/api/test", methods=["GET"])
 def test_api():
     return jsonify(ok=True, route="/api/test"), 200
+
 
 # ----------------------------
 # ENV & third-party keys
@@ -137,7 +150,8 @@ STRIPE_REDIRECT_URI = (os.getenv("STRIPE_REDIRECT_URI") or "").strip()
 
 FRONTEND_URL = os.getenv("FRONTEND_URL", "http://localhost:3000").rstrip("/")
 
-stripe.api_key = STRIPE_SECRET_KEY
+if STRIPE_SECRET_KEY:
+    stripe.api_key = STRIPE_SECRET_KEY
 
 ZERO_DECIMAL = {"bif","clp","djf","gnf","jpy","kmf","krw","mga","pyg","rwf","ugx","vnd","vuv","xaf","xof","xpf"}
 
@@ -163,6 +177,7 @@ GOOGLE_SCOPES = [
     "https://www.googleapis.com/auth/calendar",
 ]
 
+
 # ----------------------------
 # Legacy JSON helpers (non-core files)
 # ----------------------------
@@ -174,7 +189,6 @@ CHAT_FILE          = os.path.join(DATA_ROOT, "whatsapp_chats.json")
 STATUS_FILE        = os.path.join(DATA_ROOT, "whatsapp_status.json")
 
 ICS_DIR = os.path.join(DATA_ROOT, "ics_files")
-
 os.makedirs(ICS_DIR, exist_ok=True)
 
 def _legacy_load_json(file_path: str):
@@ -187,8 +201,10 @@ def _legacy_load_json(file_path: str):
         return {}
 
 def _legacy_save_json(file_path: str, data: Any):
-    with open(file_path, "w", encoding="utf-8") as f:
-        json.dump(data, f, indent=2)
+    tmp = file_path + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as f:
+        json.dump(data, f, indent=2, ensure_ascii=False)
+    os.replace(tmp, file_path)
 
 def load_notifications():
     return _legacy_load_json(NOTIFICATIONS_FILE)
@@ -214,6 +230,7 @@ def load_statuses():
 def save_statuses(data):
     _legacy_save_json(STATUS_FILE, data)
 
+
 # ----------------------------
 # Utilities
 # ----------------------------
@@ -228,14 +245,12 @@ def _norm_email(e: str) -> str:
 def _to_dict(obj: Any) -> Dict[str, Any]:
     if obj is None:
         return {}
-
     if isinstance(obj, tuple) and obj:
         for part in obj:
             d = _to_dict(part)
             if d:
                 return d
         return {}
-
     if hasattr(obj, "get_json") and callable(getattr(obj, "get_json")):
         try:
             j = obj.get_json(silent=True)
@@ -244,48 +259,39 @@ def _to_dict(obj: Any) -> Dict[str, Any]:
         except Exception:
             pass
         return {}
-
     if isinstance(obj, dict):
         return dict(obj)
-
     try:
         return dict(obj)
     except Exception:
         pass
-
     if hasattr(obj, "_asdict") and callable(getattr(obj, "_asdict")):
         try:
             return dict(obj._asdict())
         except Exception:
             return {}
-
     if hasattr(obj, "__dict__"):
         try:
             return {k: v for k, v in vars(obj).items()}
         except Exception:
             return {}
-
     return {}
 
 def _json_sanitize(val: Any):
     import datetime as _dt
     import base64 as _b64
-
     if val is None or isinstance(val, (bool, int, float, str)):
         return val
-
     if isinstance(val, (_dt.datetime, _dt.date)):
         try:
             return val.isoformat()
         except Exception:
             return str(val)
-
     if isinstance(val, (bytes, bytearray, memoryview)):
         try:
             return _b64.b64encode(bytes(val)).decode("ascii")
         except Exception:
             return str(val)
-
     if isinstance(val, dict):
         out = {}
         for k, v in val.items():
@@ -296,7 +302,6 @@ def _json_sanitize(val: Any):
             except Exception:
                 continue
         return out
-
     if isinstance(val, (list, tuple, set)):
         out = []
         for x in val:
@@ -305,7 +310,6 @@ def _json_sanitize(val: Any):
             except Exception:
                 continue
         return out
-
     try:
         return str(val)
     except Exception:
@@ -353,66 +357,16 @@ def _upsert_user(email: str, patch: dict) -> dict:
         users[email] = merged
         save_users(users)
     else:
-        # If storage adapter isn't dict-based, fall back to create_user(**kwargs) if supported
         try:
             create_user(**merged)
         except Exception:
-            # best effort: no crash
             pass
     return merged
 
+
 # ----------------------------
-# /api/profile (SINGLE SOURCE OF TRUTH)
+# /api/profile (SINGLE SOURCE OF TRUTH) — FIXED (no duplicates)
 # ----------------------------
-
-@app.get("/api/profile")
-def api_profile_get():
-    email = (request.args.get("email") or "").strip().lower()
-    if not email:
-        return jsonify({"error": "missing_email"}), 400
-
-    users = load_users() or {}
-    u = users.get(email) or {}
-    if not u:
-        # IMPORTANT: JSON even when missing
-        return jsonify({"error": "user_not_found", "email": email}), 404
-
-    # return profile flat (your Settings.jsx supports flat/profile/user)
-    return jsonify({
-        "email": email,
-        "name": u.get("name", ""),
-        "business": u.get("business") or u.get("businessType") or "",
-        "businessType": u.get("businessType") or u.get("type") or "",
-        "location": u.get("location", ""),
-        "teamSize": u.get("teamSize") or u.get("people") or "",
-        "logo": u.get("logo", ""),
-    }), 200
-
-@app.post("/api/profile")
-def api_profile_post():
-    data = request.get_json(silent=True) or {}
-    email = (data.get("email") or "").strip().lower()
-    if not email:
-        return jsonify({"error": "missing_email"}), 400
-
-    users = load_users() or {}
-    u = users.get(email) or {}
-
-    u.update({
-        "email": email,
-        "name": data.get("name") or u.get("name") or "",
-        "business": data.get("business") or data.get("businessName") or u.get("business") or "",
-        "businessType": data.get("businessType") or u.get("businessType") or "",
-        "location": data.get("location") or u.get("location") or "",
-        "teamSize": data.get("teamSize") or data.get("people") or u.get("teamSize") or "",
-        "logo": data.get("logo") or u.get("logo") or "",
-    })
-
-    users[email] = u
-    save_users(users)
-
-    return jsonify(u), 200
-
 @app.route("/api/profile", methods=["GET", "POST", "OPTIONS"])
 def api_profile():
     if request.method == "OPTIONS":
@@ -431,6 +385,9 @@ def api_profile():
                 raw = None
 
             profile = _normalize_profile(email, raw)
+            if not profile.get("email"):
+                return jsonify({"error": "user_not_found", "email": _norm_email(email)}), 404
+
             return jsonify(profile), 200
 
         except Exception as e:
@@ -470,6 +427,7 @@ def api_profile():
         current_app.logger.exception("POST /api/profile failed")
         return jsonify({"error": "profile_update_failed", "detail": str(e)}), 500
 
+
 @app.route("/api/profile/debug", methods=["GET"])
 def api_profile_debug():
     email = (request.args.get("email") or "").strip().lower()
@@ -490,8 +448,9 @@ def api_profile_debug():
         "SQLITE_PATH": SQLITE_PATH,
         "DATA_ROOT": DATA_ROOT,
         "exists": bool(u) if email else None,
-        "user_sample": u if (ok and u) else None
+        "user_sample": _json_sanitize(u) if (ok and u) else None
     }), 200 if ok else 500
+
 
 # ----------------------------
 # OpenRouter helpers
@@ -506,9 +465,8 @@ AI_MODEL_ORDER_PROMPT = [
 ]
 
 def _clean_ai_text(text: str) -> str:
-    import re
     s = (text or "").strip()
-    s = re.sub(r"^(Subject|Lead Name|Recipient)\s*:\s*.*\n?", "", s, flags=re.I|re.M)
+    s = re.sub(r"^(Subject|Lead Name|Recipient)\s*:\s*.*\n?", "", s, flags=re.I | re.M)
     s = re.sub(r"^\s*[\w \-]+:\s*$", "", s, flags=re.M)
     s = re.sub(r"\n{3,}", "\n\n", s)
     return s.strip()
@@ -559,6 +517,7 @@ def _complete_openrouter_prompt(messages, *, max_tokens=150, temperature=0.7, ti
 
     return False, "", {"error": "all_models_failed", "last": last_err}
 
+
 # ----------------------------
 # SendGrid email helpers
 # ----------------------------
@@ -586,6 +545,7 @@ def send_email_with_template(to_email, template_id, dynamic_data, subject=None, 
     except Exception as e:
         print(f"[SENDGRID ERROR] Failed to send to {to_email}: {e}")
         return False
+
 
 # ----------------------------
 # ICS helpers
@@ -634,6 +594,7 @@ def make_google_calendar_link(appt):
         f"&details={details.replace(' ','+')}"
         f"&location={location}"
     )
+
 
 # ----------------------------
 # Notifications & scheduler jobs
@@ -847,6 +808,7 @@ def send_trial_ending_soon():
     if changed:
         save_users(users)
 
+
 # ----------------------------
 # Appointments
 # ----------------------------
@@ -1019,6 +981,8 @@ def serialize_invoice(inv):
         "invoice_url": inv.hosted_invoice_url,
         "number": getattr(inv, "number", None),
     }
+
+# app.py (CONSOLIDATED + PROD-SAFE) — PART 2/2 (CONTINUATION)
 
 @app.route("/api/stripe/connect-url", methods=["GET"])
 def get_stripe_connect_url():
@@ -1367,6 +1331,7 @@ def stripe_disconnect():
     save_users(users)
     return ("", 204)
 
+
 # ----------------------------
 # Auth & Google OAuth (trial gated)
 # ----------------------------
@@ -1440,7 +1405,6 @@ def signup():
     }
     save_users(users)
 
-    # Welcome email (best-effort)
     try:
         send_email_with_template(
             to_email=email,
@@ -1575,7 +1539,6 @@ def google_oauth():
         print("[GOOGLE OAUTH ERROR]", e)
         return jsonify({"error": "Invalid Google token"}), 401
 
-# ONE unified /api/oauth/google/complete (no duplicates)
 @app.route("/api/oauth/google/complete", methods=["POST"])
 def google_oauth_complete():
     """
@@ -1665,6 +1628,7 @@ def stripe_verify():
     except Exception as e:
         print("[STRIPE VERIFY ERROR]", e)
         return jsonify({"ok": False, "error": str(e)}), 500
+
 
 # ----------------------------
 # Google Calendar token handling
@@ -1893,84 +1857,49 @@ def google_events(email):
 
     return jsonify(resp.json())
 
+
 # ============================================================
 # WhatsApp Cloud API — 24h gate, templates, webhook, etc.
-# CLEANED + PROD-SAFE DROP-IN (single-file app.py friendly)
 # ============================================================
-import os, re, json, uuid, time, hmac, hashlib, datetime
-from typing import Any, Dict, List, Optional, Tuple
-from urllib.parse import urlparse
 
-import requests
-from flask import Blueprint, request, jsonify
-
-# -------------------------------------------------------------------
-# Assumes you already have these helpers elsewhere in app.py:
-#   load_users(), load_leads(), save_leads()
-#   load_chats(), save_chats()
-#   load_statuses(), save_statuses()
-#   load_notifications(), save_notifications()   (optional; used below)
-#   app (Flask instance)
-#   SENDGRID_API_KEY, SENDER_EMAIL, OPENROUTER_API_KEY
-#   send_email_with_template(...) OR SendGrid send function
-# -------------------------------------------------------------------
-
-# ----------------------------
-# WhatsApp: caches / throttles
-# ----------------------------
-_TEMPLATE_CACHE: Dict[Tuple[str, str], Dict[str, Any]] = {}  # (name, lang_norm) -> {"status": "...", "checked_at": dt}
+_TEMPLATE_CACHE: Dict[Tuple[str, str], Dict[str, Any]] = {}
 _TEMPLATE_TTL_SECONDS = 300
 
-_MSG_CACHE: Dict[Tuple[str, str], Dict[str, Any]] = {}      # (user_email, lead_id) -> {"at": dt, "data": [...]}
+_MSG_CACHE: Dict[Tuple[str, str], Dict[str, Any]] = {}
 _MSG_CACHE_TTL_SECONDS = 2
 
-# Cache phone->WABA resolution (5 min)
 _WABA_RES = {"id": None, "checked_at": None}
 _WABA_TTL_SECONDS = 300
 
-
-# ----------------------------
-# WhatsApp: normalization
-# ----------------------------
 def wa_normalize_lang(code: str) -> str:
-    """
-    Keep 'en' as 'en'. Only normalize case/format:
-      - ll      -> ll
-      - ll_CC   -> ll_CC
-    """
     default = (os.getenv("WHATSAPP_TEMPLATE_LANG") or "en").strip()
     if not code:
         return default
     c = str(code).replace("-", "_").strip()
     parts = c.split("_")
     if len(parts) == 1:
-        return parts[0].lower()  # 'en'
+        return parts[0].lower()
     if len(parts) >= 2 and parts[0] and parts[1]:
-        return parts[0].lower() + "_" + parts[1].upper()  # 'en_us' -> 'en_US'
+        return parts[0].lower() + "_" + parts[1].upper()
     return c.lower()
-
 
 def wa_primary_lang(code: str) -> str:
     if not code:
         return ""
     return code.replace("-", "_").split("_", 1)[0].lower()
 
-
 def wa_norm_number(s: str) -> str:
-    """Normalize to digits; auto-prefix 10-digit NANP numbers with DEFAULT_COUNTRY_CODE."""
     d = re.sub(r"\D", "", s or "")
     dcc = os.getenv("DEFAULT_COUNTRY_CODE", "1")
     if len(d) == 10 and dcc.isdigit():
         d = dcc + d
     return d
 
-
 def lead_matches_wa(lead: dict, wa_digits: str) -> bool:
     for key in ("whatsapp", "phone"):
         if wa_norm_number(lead.get(key)) == wa_digits:
             return True
     return False
-
 
 def find_user_by_whatsapp(wa_id: str) -> Optional[str]:
     wa = wa_norm_number(wa_id)
@@ -1980,7 +1909,6 @@ def find_user_by_whatsapp(wa_id: str) -> Optional[str]:
             if lead_matches_wa(lead, wa):
                 return user_email
     return None
-
 
 def find_lead_by_whatsapp(wa_id: str) -> Optional[str]:
     wa = wa_norm_number(wa_id)
@@ -1992,7 +1920,6 @@ def find_lead_by_whatsapp(wa_id: str) -> Optional[str]:
                 return str(lid) if lid is not None else None
     return None
 
-
 def wa_env() -> Tuple[str, str]:
     token = os.getenv("WHATSAPP_TOKEN")
     phone_id = os.getenv("WHATSAPP_PHONE_ID")
@@ -2000,12 +1927,7 @@ def wa_env() -> Tuple[str, str]:
         raise RuntimeError("WhatsApp credentials missing (WHATSAPP_TOKEN / WHATSAPP_PHONE_ID)")
     return token, phone_id
 
-
 def wa_resolve_waba_id(force: bool = False) -> str:
-    """
-    Resolve WABA from phone ID (authoritative) and cache for 5 minutes.
-    Falls back to WHATSAPP_WABA_ID/WHATSAPP_BUSINESS_ID if graph fails.
-    """
     now = datetime.datetime.utcnow()
     if (
         not force
@@ -2020,7 +1942,7 @@ def wa_resolve_waba_id(force: bool = False) -> str:
         url = f"https://graph.facebook.com/v20.0/{phone_id}"
         headers = {"Authorization": f"Bearer {token}"}
         params = {"fields": "whatsapp_business_account{id},display_phone_number"}
-        r = requests.get(url, headers=headers, params=params, timeout=30)
+        r = pyrequests.get(url, headers=headers, params=params, timeout=30)
         wid = None
         if r.ok:
             wid = (((r.json() or {}).get("whatsapp_business_account") or {}).get("id"))
@@ -2028,10 +1950,6 @@ def wa_resolve_waba_id(force: bool = False) -> str:
             wid = os.getenv("WHATSAPP_WABA_ID") or os.getenv("WHATSAPP_BUSINESS_ID", "")
         _WABA_RES["id"] = wid
         _WABA_RES["checked_at"] = now
-        try:
-            app.logger.info("[WA WABA] resolved WABA id=%s", wid)
-        except Exception:
-            pass
         return wid
     except Exception as e:
         try:
@@ -2040,21 +1958,17 @@ def wa_resolve_waba_id(force: bool = False) -> str:
             pass
         return os.getenv("WHATSAPP_WABA_ID") or os.getenv("WHATSAPP_BUSINESS_ID", "")
 
-
 def wa_fetch_templates_for_waba(waba_id: str):
     headers = {"Authorization": f"Bearer {os.getenv('WHATSAPP_TOKEN')}"}
     params = {"fields": "name,language,status,category,components", "limit": 200}
     url = f"https://graph.facebook.com/v20.0/{waba_id}/message_templates"
-    return requests.get(url, headers=headers, params=params, timeout=30)
-
+    return pyrequests.get(url, headers=headers, params=params, timeout=30)
 
 def wa_fetch_templates_raw():
     waba_id = wa_resolve_waba_id()
     return wa_fetch_templates_for_waba(waba_id)
 
-
 def wa_lookup_template_status(name: str, lang_api: str, force: bool = False) -> str:
-    """Return status string. Exact (name+lang), else fallback to same primary language."""
     if not (os.getenv("WHATSAPP_TOKEN") and (os.getenv("WHATSAPP_WABA_ID") or os.getenv("WHATSAPP_PHONE_ID"))):
         return "UNKNOWN"
 
@@ -2097,14 +2011,9 @@ def wa_lookup_template_status(name: str, lang_api: str, force: bool = False) -> 
         _TEMPLATE_CACHE[key] = {"status": "UNKNOWN", "checked_at": now}
         return "UNKNOWN"
 
-
 def wa_is_template_approved(name: str, lang: str, force: bool = False) -> bool:
     return wa_lookup_template_status(name, lang, force).upper() == "APPROVED"
 
-
-# ----------------------------
-# WhatsApp: 24h window (best-effort, based on your stored chats)
-# ----------------------------
 def get_last_inbound_ts(user_email: str, lead_id: str) -> Optional[str]:
     chats = load_chats()
     msgs = (chats.get(user_email, {}) or {}).get(str(lead_id), []) or []
@@ -2112,7 +2021,6 @@ def get_last_inbound_ts(user_email: str, lead_id: str) -> Optional[str]:
         if m.get("from") == "lead":
             return m.get("time")
     return None
-
 
 def within_24h(user_email: str, lead_id: str) -> bool:
     ts = get_last_inbound_ts(user_email, lead_id)
@@ -2124,10 +2032,6 @@ def within_24h(user_email: str, lead_id: str) -> bool:
         return False
     return (datetime.datetime.utcnow() - last_dt) <= datetime.timedelta(hours=24)
 
-
-# ----------------------------
-# WhatsApp: API senders
-# ----------------------------
 def wa_send_text(to_number: str, body: str):
     to = wa_norm_number(to_number)
     token, phone_id = wa_env()
@@ -2135,14 +2039,13 @@ def wa_send_text(to_number: str, body: str):
     url = f"https://graph.facebook.com/{ver}/{phone_id}/messages"
     headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
     payload = {"messaging_product": "whatsapp", "to": to, "type": "text", "text": {"body": body}}
-    resp = requests.post(url, headers=headers, json=payload, timeout=30)
+    resp = pyrequests.post(url, headers=headers, json=payload, timeout=30)
     if resp.status_code >= 400:
         try:
             app.logger.error("[WA SEND ERROR] %s %s", resp.status_code, resp.text)
         except Exception:
             pass
     return resp
-
 
 def wa_send_template(to_number: str, template_name: str, lang_code: str, parameters: Optional[List[Any]] = None):
     to = wa_norm_number(to_number)
@@ -2165,7 +2068,7 @@ def wa_send_template(to_number: str, template_name: str, lang_code: str, paramet
             "components": components
         }
     }
-    resp = requests.post(url, headers=headers, json=payload, timeout=30)
+    resp = pyrequests.post(url, headers=headers, json=payload, timeout=30)
     if resp.status_code >= 400:
         try:
             app.logger.error("[WA TEMPLATE ERROR] %s %s", resp.status_code, resp.text)
@@ -2173,10 +2076,6 @@ def wa_send_template(to_number: str, template_name: str, lang_code: str, paramet
             pass
     return resp
 
-
-# ----------------------------
-# WhatsApp Routes
-# ----------------------------
 @app.get("/api/whatsapp/health")
 def whatsapp_health():
     return jsonify({
@@ -2188,7 +2087,6 @@ def whatsapp_health():
         "default_lang_ui": wa_primary_lang(os.getenv("WHATSAPP_TEMPLATE_LANG", "en")) or "en",
         "default_lang_api": wa_normalize_lang(os.getenv("WHATSAPP_TEMPLATE_LANG", "en")),
     }), 200
-
 
 @app.get("/api/whatsapp/templates")
 def list_templates():
@@ -2205,7 +2103,6 @@ def list_templates():
         data = {"raw": r.text}
     return jsonify({"status": r.status_code, "waba_id": waba_id, "data": data}), r.status_code
 
-
 @app.get("/api/whatsapp/template-state")
 def template_state():
     name = (request.args.get("name") or os.getenv("WHATSAPP_TEMPLATE_DEFAULT", "") or "").strip()
@@ -2219,7 +2116,6 @@ def template_state():
         "approved": status.upper() == "APPROVED",
         "checked_at": datetime.datetime.utcnow().isoformat() + "Z"
     }), 200
-
 
 @app.get("/api/whatsapp/window-state")
 def whatsapp_window_state():
@@ -2244,7 +2140,6 @@ def whatsapp_window_state():
         "canTemplate": (not inside) and (status.upper() == "APPROVED")
     }), 200
 
-
 def _get_thread_cached(user_email: str, lead_id: str):
     key = (str(user_email or ""), str(lead_id or ""))
     now = datetime.datetime.utcnow()
@@ -2257,14 +2152,12 @@ def _get_thread_cached(user_email: str, lead_id: str):
     _MSG_CACHE[key] = {"at": now, "data": msgs}
     return msgs, False
 
-
 @app.route("/api/whatsapp/messages", methods=["GET"])
 def get_whatsapp_messages():
     user_email = (request.args.get("user_email") or "").strip().lower()
     lead_id = (request.args.get("lead_id") or "").strip()
     msgs, _ = _get_thread_cached(user_email, lead_id)
     return jsonify({"messages": msgs}), 200
-
 
 @app.get("/api/whatsapp/status")
 def get_message_status():
@@ -2273,7 +2166,6 @@ def get_message_status():
         return jsonify({"error": "message_id is required"}), 400
     statuses = load_statuses()
     return jsonify(statuses.get(mid) or {}), 200
-
 
 @app.post("/api/whatsapp/optout")
 def set_optout():
@@ -2293,12 +2185,11 @@ def set_optout():
     save_leads(leads)
     return jsonify({"ok": True, "opt_out": opt_out}), 200
 
-
 @app.route("/api/whatsapp/send", methods=["POST"])
 def send_whatsapp_message():
     """
     Inside 24h: free text (requires 'message') — sends EXACTLY what the user typed.
-    Outside 24h: template send with locale fallback on PHONE'S WABA.
+    Outside 24h: template send with locale fallback.
 
     Returns 409 if template exists but no approved locale.
     """
@@ -2313,7 +2204,7 @@ def send_whatsapp_message():
     to_number     = clean(data.get("to") or data.get("phone"))
     raw_msg       = clean(data.get("message") or data.get("text"))
     user_email    = clean(data.get("user_email")).lower()
-    lead_id       = clean(data.get("lead_id"))  # should be canonical lead.id from FE
+    lead_id       = clean(data.get("lead_id"))
     template_name = clean(data.get("template_name") or (os.getenv("WHATSAPP_TEMPLATE_DEFAULT") or ""))
     language_code = clean(data.get("language_code") or (os.getenv("WHATSAPP_TEMPLATE_LANG") or "en"))
 
@@ -2334,17 +2225,11 @@ def send_whatsapp_message():
                 return jsonify({"ok": False, "error": "Lead has opted out of WhatsApp messages"}), 403
 
     inside24 = within_24h(user_email, lead_id) if (user_email and lead_id) else False
-    requested_raw = language_code
     requested     = wa_normalize_lang(language_code)
     primary       = wa_primary_lang(requested)
     to_number     = wa_norm_number(to_number)
 
     waba_id = wa_resolve_waba_id()
-    try:
-        app.logger.info("[WA SEND] to=%s tpl=%s requested=%s (raw=%s) inside24h=%s waba=%s",
-                        to_number, template_name, requested, requested_raw, inside24, waba_id)
-    except Exception:
-        pass
 
     try:
         if inside24:
@@ -2367,11 +2252,6 @@ def send_whatsapp_message():
                     body = r_list.json()
                 except Exception:
                     body = {"raw": r_list.text}
-                try:
-                    app.logger.error("[WA SEND] list_templates failed status=%s body=%s",
-                                     getattr(r_list, "status_code", None), body)
-                except Exception:
-                    pass
                 return jsonify({
                     "ok": False,
                     "error": "Failed to fetch templates from Graph.",
@@ -2428,7 +2308,6 @@ def send_whatsapp_message():
             sent_text = f"[template:{template_name}/{used_lang}] {raw_msg or ''}"
             mode = "template"
 
-        # Parse Graph response
         try:
             result = resp.json()
         except Exception:
@@ -2457,7 +2336,7 @@ def send_whatsapp_message():
             if isinstance(arr, list) and arr:
                 msg_id = arr[0].get("id")
 
-        # Persist chat + warm cache (only if we know where to store it)
+        # Persist chat + warm cache
         try:
             if user_email and lead_id:
                 chats = load_chats()
@@ -2505,9 +2384,8 @@ def send_whatsapp_message():
 
     except RuntimeError as e:
         return jsonify({"ok": False, "error": str(e)}), 500
-    except requests.RequestException as e:
+    except pyrequests.RequestException as e:
         return jsonify({"ok": False, "error": f"Network error: {e}"}), 502
-
 
 @app.get("/api/whatsapp/debug/template-locales")
 def debug_template_locales():
@@ -2525,7 +2403,6 @@ def debug_template_locales():
         "raw_status": r.status_code
     }), 200
 
-
 def _verify_meta_signature(raw_body: bytes, header_sig: str) -> bool:
     secret = os.getenv("APP_SECRET") or os.getenv("META_APP_SECRET")
     if not secret or not header_sig:
@@ -2538,7 +2415,6 @@ def _verify_meta_signature(raw_body: bytes, header_sig: str) -> bool:
         return hmac.compare_digest(mac.hexdigest(), sent)
     except Exception:
         return False
-
 
 @app.route("/api/whatsapp/webhook", methods=["GET", "POST"])
 def whatsapp_webhook():
@@ -2621,7 +2497,6 @@ def whatsapp_webhook():
                             except Exception:
                                 pass
 
-                    # save inbound to proper thread (GUARD: don't write to None)
                     user_email = find_user_by_whatsapp(sender_waid) if sender_waid else None
                     lead_id = find_lead_by_whatsapp(sender_waid) if sender_waid else None
                     if not user_email or not lead_id:
@@ -2651,36 +2526,20 @@ def whatsapp_webhook():
 
 
 # ============================================================
-# AI: lightweight prompt for chat composer
+# AI: prompt endpoints
 # ============================================================
 @app.route("/api/generate_prompt", methods=["POST", "OPTIONS"])
 def generate_prompt_compat():
     if request.method == "OPTIONS":
         return ("", 204)
 
-    # Raw + headers (keep for now; remove later)
-    raw = request.get_data(as_text=True) or ""
-    ct = request.headers.get("Content-Type", "")
-    print("[GEN_PROMPT] content-type:", ct)
-    print("[GEN_PROMPT] raw body:", raw[:500])
-
-    # Accept JSON, form-encoded, or query args
-    data = request.get_json(silent=True)
-    if not isinstance(data, dict):
-        data = {}
-
-    form = request.form.to_dict(flat=True) if request.form else {}
-    args = request.args.to_dict(flat=True) if request.args else {}
-
-    # Merge with precedence: JSON > form > args
     merged = {}
-    merged.update(args)
-    merged.update(form)
-    merged.update(data)
+    merged.update(request.args.to_dict(flat=True) if request.args else {})
+    merged.update(request.form.to_dict(flat=True) if request.form else {})
+    j = request.get_json(silent=True)
+    if isinstance(j, dict):
+        merged.update(j)
 
-    print("[GEN_PROMPT] merged keys:", list(merged.keys()))
-
-    # Extract email / lead id from many shapes
     user_email = (
         merged.get("user_email")
         or merged.get("email")
@@ -2698,7 +2557,6 @@ def generate_prompt_compat():
     )
     lead_id = str(lead_id).strip()
 
-    # If nothing provided, still generate something from notes/tags
     lead = merged.get("lead") if isinstance(merged.get("lead"), dict) else {}
     notes = (merged.get("notes") or lead.get("notes") or "").strip()
     tags = merged.get("tags") or lead.get("tags") or []
@@ -2707,11 +2565,9 @@ def generate_prompt_compat():
     if not isinstance(tags, list):
         tags = []
 
-    # If OpenRouter not configured, return a clear error
     if not OPENROUTER_API_KEY:
         return jsonify({"error": "OPENROUTER_API_KEY is not configured"}), 500
 
-    # If user_email+lead_id exist, use your canonical lead context if possible
     if user_email and lead_id:
         users = load_users() or {}
         leads_by_user = load_leads() or {}
@@ -2762,7 +2618,6 @@ def generate_prompt_compat():
 
         return jsonify({"prompt": txt, "meta": meta, "used": "lead_context"}), 200
 
-    # Fallback: generate from notes/tags even if email/lead_id missing
     sys_msg = "You are a CRM messaging assistant. Output only the message body (no greeting line, no signature)."
     user_msg = (
         "Write a short warm follow-up message to a lead. "
@@ -2785,13 +2640,7 @@ def generate_prompt_compat():
 
 @app.post("/api/ai-prompt")
 def ai_prompt():
-    import re as _re
-
-    try:
-        data = request.get_json(force=True) or {}
-    except Exception:
-        data = {}
-
+    data = request.get_json(force=True) or {}
     user_email = (data.get("user_email") or "").strip().lower()
     lead_id = str(data.get("lead_id") or "").strip()
 
@@ -2825,8 +2674,7 @@ def ai_prompt():
                 last_inbound = t.strip()
                 break
 
-    OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY")
-    if not OPENROUTER_API_KEY:
+    if not os.getenv("OPENROUTER_API_KEY"):
         return jsonify({"error": "OPENROUTER_API_KEY is not configured"}), 500
 
     sys_msg = "You are a CRM messaging assistant. Output only the message body (no greetings or signatures)."
@@ -2841,32 +2689,17 @@ def ai_prompt():
         f"Reply as if you were {user_name or 'the business owner'} at {business}."
     )
 
-    try:
-        ok, txt, meta = _complete_openrouter_prompt(
-            [{"role": "system", "content": sys_msg}, {"role": "user", "content": user_msg}],
-            max_tokens=220,
-            temperature=0.7,
-            timeout=30,
-        )
+    ok, txt, meta = _complete_openrouter_prompt(
+        [{"role": "system", "content": sys_msg}, {"role": "user", "content": user_msg}],
+        max_tokens=220,
+        temperature=0.7,
+        timeout=30,
+    )
+    if not ok or not txt:
+        return jsonify({"error": "ai_failed", "detail": meta}), 502
 
-        if not ok or not txt:
-            return jsonify({"error": "ai_failed", "detail": meta}), 502
+    return jsonify({"prompt": _clean_ai_text(txt), "meta": meta}), 200
 
-        def _clean(t: str) -> str:
-            s = str(t or "")
-            s = _re.sub(r"^(Subject|Lead Name|Recipient)\s*:\s*.*\n?", "", s, flags=_re.I | _re.M)
-            s = _re.sub(r"^\s*[\w ]+:\s*$", "", s, flags=_re.M)
-            s = _re.sub(r"^\s*\n+", "", s)
-            return s.strip()
-
-        return jsonify({"prompt": _clean(txt), "meta": meta}), 200
-
-    except Exception as e:
-        try:
-            app.logger.warning("[AI PROMPT ERROR] %s", e)
-        except Exception:
-            pass
-        return jsonify({"error": "Failed to get AI response"}), 502
 
 # =================================================================
 # AUTOMATIONS (INLINE) — Blueprint + Engine (prod-ready routes)
@@ -2874,18 +2707,14 @@ def ai_prompt():
 CHANNEL_EMAIL = "email"
 CHANNEL_WHATSAPP = "whatsapp"
 
-FILE_AUTOMATIONS = os.getenv("FILE_AUTOMATIONS", "automations.json")
-FILE_STATE = os.getenv("FILE_STATE", "automations_state.json")
-FILE_NOTIFICATIONS = os.getenv("FILE_NOTIFICATIONS", "notifications.json")
-FILE_USERS = os.getenv("FILE_USERS", "automation_users.json")
-
-# Persisted subscriptions (fixes in-memory loss on restarts)
-FILE_SUBSCRIPTIONS = os.getenv("FILE_SUBSCRIPTIONS", "subscriptions.json")
-
+FILE_AUTOMATIONS = os.path.join(DATA_ROOT, os.getenv("FILE_AUTOMATIONS", "automations.json"))
+FILE_STATE = os.path.join(DATA_ROOT, os.getenv("FILE_STATE", "automations_state.json"))
+FILE_NOTIFICATIONS = os.path.join(DATA_ROOT, os.getenv("FILE_NOTIFICATIONS", "notifications.json"))
+FILE_USERS = os.path.join(DATA_ROOT, os.getenv("FILE_USERS", "automation_users.json"))
+FILE_SUBSCRIPTIONS = os.path.join(DATA_ROOT, os.getenv("FILE_SUBSCRIPTIONS", "subscriptions.json"))
 
 def now_utc() -> datetime.datetime:
     return datetime.datetime.now(datetime.timezone.utc)
-
 
 def read_json(path: str, default: Any):
     try:
@@ -2894,15 +2723,14 @@ def read_json(path: str, default: Any):
     except Exception:
         return default
 
-
 def write_json(path: str, data: Any):
     tmp = path + ".tmp"
     with open(tmp, "w", encoding="utf-8") as f:
         json.dump(data, f, indent=2, ensure_ascii=False)
     os.replace(tmp, path)
 
-
 def ensure_files():
+    os.makedirs(DATA_ROOT, exist_ok=True)
     if not os.path.exists(FILE_AUTOMATIONS):
         write_json(FILE_AUTOMATIONS, {"users": {}})
     if not os.path.exists(FILE_STATE):
@@ -2914,11 +2742,10 @@ def ensure_files():
     if not os.path.exists(FILE_SUBSCRIPTIONS):
         write_json(FILE_SUBSCRIPTIONS, {"subscriptions": {}})
 
-
 def create_notification(owner_email: str, title: str, body: str):
     data = read_json(FILE_NOTIFICATIONS, {"notifications": []})
     notif = {
-        "id": str(uuid.uuid4()),
+        "id": str(uuid4()),
         "owner": (owner_email or "").lower(),
         "title": title,
         "body": body,
@@ -2927,36 +2754,29 @@ def create_notification(owner_email: str, title: str, body: str):
     data.setdefault("notifications", []).insert(0, notif)
     write_json(FILE_NOTIFICATIONS, data)
 
-
 def load_user_profile(user_email: str) -> Dict[str, Any]:
     db = read_json(FILE_USERS, {"users": {}})
     return db.get("users", {}).get((user_email or "").lower(), {}) or {}
-
 
 def save_user_profile(user_email: str, profile: Dict[str, Any]):
     db = read_json(FILE_USERS, {"users": {}})
     db.setdefault("users", {})[(user_email or "").lower()] = profile
     write_json(FILE_USERS, db)
 
-
 def load_user_flows(user_email: str) -> List[Dict[str, Any]]:
     db = read_json(FILE_AUTOMATIONS, {"users": {}})
     return db.get("users", {}).get((user_email or "").lower(), []) or []
-
 
 def save_user_flows(user_email: str, flows: List[Dict[str, Any]]):
     db = read_json(FILE_AUTOMATIONS, {"users": {}})
     db.setdefault("users", {})[(user_email or "").lower()] = flows
     write_json(FILE_AUTOMATIONS, db)
 
-
 def load_state() -> Dict[str, Any]:
     return read_json(FILE_STATE, {}) or {}
 
-
 def save_state(state: Dict[str, Any]):
     write_json(FILE_STATE, state)
-
 
 def user_from_request() -> str:
     h = request.headers.get("X-User-Email")
@@ -2965,13 +2785,11 @@ def user_from_request() -> str:
     q = request.args.get("user") or (request.json.get("user") if request.is_json else None)
     return (q or "demo@retainai.ca").strip().lower()
 
-
 def dt_parse(s: Optional[str]) -> Optional[datetime.datetime]:
     try:
         return datetime.datetime.fromisoformat(s) if s else None
     except Exception:
         return None
-
 
 def is_valid_url(u: str) -> bool:
     try:
@@ -2979,7 +2797,6 @@ def is_valid_url(u: str) -> bool:
         return p.scheme in ("http", "https") and bool(p.netloc)
     except Exception:
         return False
-
 
 def in_quiet_hours(now: datetime.datetime, profile: Dict[str, Any]) -> bool:
     qs = profile.get("quiet_hours_start")
@@ -2991,10 +2808,7 @@ def in_quiet_hours(now: datetime.datetime, profile: Dict[str, Any]) -> bool:
         return hour >= qs or hour < qe
     return qs <= hour < qe
 
-
-# ---------- Triggers & Conditions ----------
 _td = datetime.timedelta
-
 
 def trig_no_reply(lead: Dict[str, Any], days: int) -> bool:
     last_inbound = dt_parse(lead.get("last_inbound_at"))
@@ -3007,11 +2821,9 @@ def trig_no_reply(lead: Dict[str, Any], days: int) -> bool:
         return False
     return now_utc() - last_any >= _td(days=days)
 
-
 def trig_new_lead(lead: Dict[str, Any], within_hours: int = 24) -> bool:
     created = dt_parse(lead.get("createdAt")) or dt_parse(lead.get("created_at"))
     return bool(created and (now_utc() - created <= _td(hours=within_hours)))
-
 
 def trig_no_show(lead: Dict[str, Any]) -> bool:
     for appt in (lead.get("appointments") or []):
@@ -3019,11 +2831,9 @@ def trig_no_show(lead: Dict[str, Any]) -> bool:
             return True
     return False
 
-
 def cond_no_reply_since(lead: Dict[str, Any], days: int) -> bool:
     last_inbound = dt_parse(lead.get("last_inbound_at"))
     return (not last_inbound) or (now_utc() - last_inbound >= _td(days=days))
-
 
 def cond_no_booking_since(lead: Dict[str, Any], days: int = 2) -> bool:
     for appt in (lead.get("appointments") or []):
@@ -3033,10 +2843,7 @@ def cond_no_booking_since(lead: Dict[str, Any], days: int = 2) -> bool:
                 return False
     return True
 
-
-# ---------- Token rendering ----------
 MISSING = "⛔"
-
 
 def render_text(tmpl: str, lead: Dict[str, Any], run: Dict[str, Any], profile: Dict[str, Any]) -> str:
     if not isinstance(tmpl, str):
@@ -3051,15 +2858,11 @@ def render_text(tmpl: str, lead: Dict[str, Any], run: Dict[str, Any], profile: D
     out = out.replace("{{last_ai_text}}", (run.get("memo", {}).get("last_ai_text") or ""))
     return out
 
-
 def contains_blockers(text: str) -> bool:
     return MISSING in (text or "")
 
-
-# ---------- Duplicate-click guard ----------
 _LAST_SEND_CACHE: Dict[str, Dict[str, Any]] = {}
 _LAST_SEND_TTL_SEC = 120
-
 
 def dedupe_ok(key: str) -> bool:
     now = time.time()
@@ -3069,8 +2872,6 @@ def dedupe_ok(key: str) -> bool:
     _LAST_SEND_CACHE[key] = {"at": now}
     return True
 
-
-# ---------- WhatsApp selection for automations (uses canonical WA helpers above) ----------
 def choose_wa_template(preferred_name: Optional[str], preferred_lang: Optional[str]):
     name = (preferred_name or os.getenv("WHATSAPP_TEMPLATE_DEFAULT", "")).strip()
     if not name:
@@ -3095,7 +2896,6 @@ def choose_wa_template(preferred_name: Optional[str], preferred_lang: Optional[s
         any_appr = next((x for x in locales if x["status"] == "APPROVED"), None)
         used_lang = (same_primary or any_appr or {"language": requested})["language"]
 
-    # BODY param count (best-effort)
     body_param_count = 0
     try:
         for t in items:
@@ -3104,25 +2904,15 @@ def choose_wa_template(preferred_name: Optional[str], preferred_lang: Optional[s
                 body = next((c for c in comps if (c.get("type") or "").upper() == "BODY"), {}) or {}
                 ex = (body.get("example") or {})
                 body_text = None
-                # typical: example.body_text = ["Hi {{1}} ... {{2}}"]
                 if isinstance(ex.get("body_text"), list) and ex.get("body_text"):
                     body_text = ex.get("body_text")[0]
                 if isinstance(body_text, str):
                     body_param_count = len(set(re.findall(r"\{\{(\d+)\}\}", body_text)))
-                else:
-                    # fallback: example.body_text as list of lists etc
-                    params_list = ex.get("body_text") or body.get("parameters") or []
-                    if isinstance(params_list, list):
-                        if params_list and isinstance(params_list[0], list):
-                            body_param_count = max((len(x) for x in params_list), default=0)
-                        else:
-                            body_param_count = len(params_list)
                 break
     except Exception:
         body_param_count = 0
 
     return name, used_lang, int(body_param_count or 0)
-
 
 def build_wa_params(count: int, lead: dict, profile: dict, run: dict, rendered_text: Optional[str]):
     vals: List[str] = []
@@ -3137,7 +2927,6 @@ def build_wa_params(count: int, lead: dict, profile: dict, run: dict, rendered_t
         vals.append(str(rendered_text))
     vals = (vals + [""] * count)[:count]
     return vals
-
 
 def append_chat_message(user_email: str, lead_id: str, text: str):
     try:
@@ -3155,8 +2944,6 @@ def append_chat_message(user_email: str, lead_id: str, text: str):
     except Exception as e:
         print("[Automations] append_chat_message error:", e)
 
-
-# ---------- Rate-limit helpers ----------
 def can_send(run: Dict[str, Any], channel: str, per_hours: int) -> bool:
     last = (run.get("last_sent") or {}).get(channel)
     if not last:
@@ -3167,12 +2954,9 @@ def can_send(run: Dict[str, Any], channel: str, per_hours: int) -> bool:
         return True
     return (now_utc() - last_dt) >= _td(hours=per_hours)
 
-
 def mark_sent(run: Dict[str, Any], channel: str):
     run.setdefault("last_sent", {})[channel] = now_utc().isoformat()
 
-
-# ---------- WhatsApp send for engine ----------
 def send_whatsapp_with_window(flow, step, lead, run, caps, profile) -> bool:
     if caps.get("respect_quiet_hours", True) and in_quiet_hours(now_utc(), profile):
         return False
@@ -3184,7 +2968,6 @@ def send_whatsapp_with_window(flow, step, lead, run, caps, profile) -> bool:
     user_email = (lead.get("owner") or flow.get("owner") or "").lower()
     lead_id = str(lead.get("id") or "")
     if not user_email or not lead_id:
-        # if you don't have canonical lead.id, don't attempt; prevents split threads
         return True
 
     to = lead.get("phone") or lead.get("whatsapp")
@@ -3237,8 +3020,6 @@ def send_whatsapp_with_window(flow, step, lead, run, caps, profile) -> bool:
         append_chat_message(user_email, lead_id, shown)
     return True
 
-
-# ---------- Engine state helpers ----------
 def get_run(state: Dict[str, Any], flow_id: str, lead_key: str) -> Dict[str, Any]:
     return state.setdefault(flow_id, {}).setdefault(lead_key, {
         "step": 0,
@@ -3249,11 +3030,9 @@ def get_run(state: Dict[str, Any], flow_id: str, lead_key: str) -> Dict[str, Any
         "memo": {}
     })
 
-
 def advance(run: Dict[str, Any]):
     run["step"] = int(run.get("step", 0)) + 1
     run["last_step_at"] = now_utc().isoformat()
-
 
 def trigger_met(trigger: Dict[str, Any], lead: Dict[str, Any]) -> bool:
     t = trigger.get("type")
@@ -3265,7 +3044,6 @@ def trigger_met(trigger: Dict[str, Any], lead: Dict[str, Any]) -> bool:
         return trig_no_show(lead)
     return False
 
-
 def should_auto_stop(flow: Dict[str, Any], lead: Dict[str, Any], run: Dict[str, Any]) -> bool:
     if flow.get("auto_stop_on_reply", True):
         last_inbound = dt_parse(lead.get("last_inbound_at"))
@@ -3273,18 +3051,12 @@ def should_auto_stop(flow: Dict[str, Any], lead: Dict[str, Any], run: Dict[str, 
             return True
     return False
 
-
-# NOTE: your email sender is assumed; plug in your existing SendGrid function.
 def send_email_sendgrid_auto(to_email: str, subject: str, html: str, business_name: str) -> bool:
-    # If you already have send_email_with_template or a SendGrid client, use that.
-    # This keeps behavior non-breaking by simulating success when missing key.
     if not globals().get("SENDGRID_API_KEY"):
         print("[Automations] SENDGRID_API_KEY missing; skipping email send (simulated).")
         return True
     try:
-        import sendgrid
-        from sendgrid.helpers.mail import Mail, Email
-        sg = sendgrid.SendGridAPIClient(globals()["SENDGRID_API_KEY"])
+        sg = SendGridAPIClient(globals()["SENDGRID_API_KEY"])
         msg = Mail(
             from_email=Email(globals().get("SENDER_EMAIL", "noreply@retainai.ca"), business_name or "RetainAI"),
             to_emails=to_email,
@@ -3297,7 +3069,6 @@ def send_email_sendgrid_auto(to_email: str, subject: str, html: str, business_na
     except Exception as e:
         print("[Automations] SendGrid error:", e)
         return False
-
 
 def ai_draft_message(context: Dict[str, Any]) -> str:
     business_name = context.get("business_name") or f"{MISSING} add your business name in Automations > Settings"
@@ -3313,7 +3084,7 @@ def ai_draft_message(context: Dict[str, Any]) -> str:
             f"Lead context: {json.dumps(context.get('lead', {}))}.\n"
             "Tone: warm, human, no emojis, 1 sentence if possible."
         )
-        r = requests.post(
+        r = pyrequests.post(
             "https://openrouter.ai/api/v1/chat/completions",
             headers={"Authorization": f"Bearer {os.getenv('OPENROUTER_API_KEY')}", "Content-Type": "application/json"},
             json={
@@ -3332,7 +3103,6 @@ def ai_draft_message(context: Dict[str, Any]) -> str:
     except Exception as e:
         print("[Automations] AI draft error:", e)
         return f"Quick check-in — want to grab a spot with {business_name}? {booking}"
-
 
 def execute_step(flow: Dict[str, Any], step: Dict[str, Any], lead: Dict[str, Any], run: Dict[str, Any],
                  caps: Dict[str, Any], profile: Dict[str, Any]) -> bool:
@@ -3421,8 +3191,8 @@ def execute_step(flow: Dict[str, Any], step: Dict[str, Any], lead: Dict[str, Any
 
     return True
 
-
 def engine_tick():
+    ensure_files()
     flows_db = read_json(FILE_AUTOMATIONS, {"users": {}})
     state = load_state()
     leads_by_user = load_leads()
@@ -3434,7 +3204,7 @@ def engine_tick():
         for flow in (flows or []):
             if not flow.get("enabled", False):
                 continue
-            flow_id = flow.get("id") or str(uuid.uuid4())
+            flow_id = flow.get("id") or str(uuid4())
             steps = flow.get("steps", []) or []
             caps = flow.get("caps", {"per_lead_per_day": 1, "respect_quiet_hours": True}) or {}
             trigger = flow.get("trigger", {}) or {}
@@ -3444,7 +3214,6 @@ def engine_tick():
                 if owner != user:
                     continue
 
-                # Canonical lead key: prefer lead.id only
                 lead_id = lead.get("id")
                 if lead_id is None:
                     continue
@@ -3475,20 +3244,15 @@ def engine_tick():
 
     save_state(state)
 
-
-# ---------- Automations API (Blueprint) ----------
 automations_bp = Blueprint("automations", __name__)
-
 
 @automations_bp.before_request
 def _bf_ensure_files():
     ensure_files()
 
-
 @automations_bp.route("/health", methods=["GET"])
 def automations_health():
     return jsonify({"ok": True, "message": "automations alive"})
-
 
 @automations_bp.route("/user/profile", methods=["GET"])
 def get_user_profile_route():
@@ -3503,7 +3267,6 @@ def get_user_profile_route():
         }
     })
 
-
 def _vp_int(v, name):
     if v is None:
         return None
@@ -3515,14 +3278,12 @@ def _vp_int(v, name):
         pass
     raise ValueError(f"{name} must be an integer 0-23")
 
-
 def _vp_url(u):
     if u is None or u == "":
         return None
     if is_valid_url(u):
         return u
     raise ValueError("booking_link must be http(s) URL")
-
 
 @automations_bp.route("/user/profile", methods=["POST"])
 def set_user_profile_route():
@@ -3543,7 +3304,6 @@ def set_user_profile_route():
         return jsonify({"ok": False, "error": str(e)}), 400
     save_user_profile(user, prof)
     return jsonify({"ok": True, "profile": prof})
-
 
 def builtin_templates() -> List[Dict[str, Any]]:
     return [
@@ -3598,11 +3358,9 @@ def builtin_templates() -> List[Dict[str, Any]]:
         }
     ]
 
-
 @automations_bp.route("/templates", methods=["GET"])
 def automations_templates():
     return jsonify({"templates": builtin_templates()})
-
 
 @automations_bp.route("/wa/templates", methods=["GET"])
 def list_wa_templates():
@@ -3616,29 +3374,26 @@ def list_wa_templates():
     approved.sort(key=lambda x: f"{x.get('name','')}-{x.get('language','')}".lower())
     return jsonify({"ok": True, "templates": approved})
 
-
 @automations_bp.route("/", methods=["GET"])
 def list_flows_route():
     user = user_from_request()
     flows = load_user_flows(user)
     for f in flows:
-        f.setdefault("id", str(uuid.uuid4()))
+        f.setdefault("id", str(uuid4()))
     return jsonify({"flows": flows})
-
 
 @automations_bp.route("/", methods=["POST"])
 def create_flow_route():
     user = user_from_request()
     body = request.get_json(force=True) or {}
     flow = body.get("flow", {}) or {}
-    flow.setdefault("id", str(uuid.uuid4()))
+    flow.setdefault("id", str(uuid4()))
     flow.setdefault("enabled", False)
     flow["owner"] = user
     flows = load_user_flows(user)
     flows.append(flow)
     save_user_flows(user, flows)
     return jsonify({"ok": True, "flow": flow})
-
 
 @automations_bp.route("/<flow_id>", methods=["PUT"])
 def update_flow_route(flow_id):
@@ -3654,7 +3409,6 @@ def update_flow_route(flow_id):
             return jsonify({"ok": True, "flow": merged})
     return jsonify({"ok": False, "error": "not_found"}), 404
 
-
 @automations_bp.route("/enable/<flow_id>", methods=["POST"])
 def enable_flow_route(flow_id):
     user = user_from_request()
@@ -3668,7 +3422,6 @@ def enable_flow_route(flow_id):
             return jsonify({"ok": True, "flow": f})
     return jsonify({"ok": False, "error": "not_found"}), 404
 
-
 @automations_bp.route("/<flow_id>", methods=["DELETE"])
 def delete_flow_route(flow_id):
     user = user_from_request()
@@ -3681,8 +3434,6 @@ def delete_flow_route(flow_id):
         save_state(state)
     return jsonify({"ok": True})
 
-
-# Register blueprint under /api/automations only once.
 if "automations" not in getattr(app, "blueprints", {}):
     app.register_blueprint(automations_bp, url_prefix="/api/automations")
 
@@ -3690,21 +3441,18 @@ if "automations" not in getattr(app, "blueprints", {}):
 # ----------------------------
 # VAPID Push — persisted subscriptions
 # ----------------------------
-VAPID_PUBLIC_KEY = os.getenv("VAPID_PUBLIC_KEY", "")
-
 @app.route("/api/vapid-public-key", methods=["GET"])
 def get_vapid_key():
     return jsonify({"publicKey": VAPID_PUBLIC_KEY})
 
-
 def subs_load() -> Dict[str, Any]:
+    ensure_files()
     data = read_json(FILE_SUBSCRIPTIONS, {"subscriptions": {}})
     return (data.get("subscriptions") or {})
 
-
 def subs_save(subs: Dict[str, Any]):
+    ensure_files()
     write_json(FILE_SUBSCRIPTIONS, {"subscriptions": subs})
-
 
 @app.route("/api/save-subscription", methods=["POST"])
 def save_subscription():
@@ -3720,6 +3468,7 @@ def save_subscription():
     subs_save(subs)
     return jsonify({"message": "Subscription saved"}), 200
 
+
 # ----------------------------
 # Blueprints (import AFTER helpers)
 # ----------------------------
@@ -3731,6 +3480,7 @@ app.register_blueprint(imports_bp)
 app.register_blueprint(team_bp)
 app.register_blueprint(WA_AUTO_BP)
 
+
 # ----------------------------
 # JSON 404 for /api/*
 # ----------------------------
@@ -3740,12 +3490,13 @@ def json_404(err):
         return jsonify({"error": "not_found", "path": request.path}), 404
     return err
 
+
 # ----------------------------
-# Scheduler setup
+# Scheduler setup (safe + once)
 # ----------------------------
 scheduler = APScheduler()
 scheduler.init_app(app)
-# every 10 minutes (automations engine)
+
 scheduler.add_job(
     id="automations_tick",
     func=engine_tick,
@@ -3756,16 +3507,13 @@ scheduler.add_job(
 
 def _start_scheduler_once():
     try:
-        if not scheduler.running:
-            # every 6 hours
-            scheduler.add_job(id="lead_reminders", func=check_for_lead_reminders, trigger="interval", hours=6, replace_existing=True)
-            # daily at 09:05 UTC
-            scheduler.add_job(id="birthdays", func=send_birthday_greetings, trigger="cron", hour=9, minute=5, replace_existing=True)
-            # daily at 09:10 UTC
-            scheduler.add_job(id="trial_ending", func=send_trial_ending_soon, trigger="cron", hour=9, minute=10, replace_existing=True)
-
-            scheduler.start()
-            print("[Scheduler] started")
+        if scheduler.running:
+            return
+        scheduler.add_job(id="lead_reminders", func=check_for_lead_reminders, trigger="interval", hours=6, replace_existing=True)
+        scheduler.add_job(id="birthdays", func=send_birthday_greetings, trigger="cron", hour=9, minute=5, replace_existing=True)
+        scheduler.add_job(id="trial_ending", func=send_trial_ending_soon, trigger="cron", hour=9, minute=10, replace_existing=True)
+        scheduler.start()
+        print("[Scheduler] started")
     except Exception as e:
         print("[Scheduler] failed to start:", e)
 
@@ -3775,12 +3523,11 @@ SCHEDULER_ENABLED = (os.getenv("RUN_SCHEDULER", "0") == "1")
 def _bootstrap_scheduler():
     if not SCHEDULER_ENABLED:
         return
-    _start_scheduler_once()
+    if not app.config.get("BOOTSTRAP_DONE"):
+        app.config["BOOTSTRAP_DONE"] = True
+        _start_scheduler_once()
 
-@app.get("/api/health")
-def health():
-    return jsonify({"ok": True, "ts": int(time.time())}), 200
-z
+
 # ----------------------------
 # Run local
 # ----------------------------
