@@ -808,6 +808,19 @@ def send_trial_ending_soon():
     if changed:
         save_users(users)
 
+@app.route("/api/leads/<path:user_email>", methods=["GET", "OPTIONS"])
+def get_leads(user_email):
+    if request.method == "OPTIONS":
+        return ("", 204)
+
+    user_email = (user_email or "").strip().lower()
+    leads_by_user = load_leads() or {}
+    leads = []
+
+    if isinstance(leads_by_user, dict):
+        leads = leads_by_user.get(user_email, []) or []
+
+    return jsonify({"leads": leads}), 200
 
 # ----------------------------
 # Appointments
