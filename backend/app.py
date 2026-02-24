@@ -808,6 +808,10 @@ def send_trial_ending_soon():
     if changed:
         save_users(users)
 
+# ----------------------------
+# LEADS API — PRODUCTION READY
+# ----------------------------
+
 @app.route("/api/leads/<path:user_email>", methods=["GET", "OPTIONS"])
 def get_leads(user_email):
     if request.method == "OPTIONS":
@@ -815,12 +819,96 @@ def get_leads(user_email):
 
     user_email = (user_email or "").strip().lower()
     leads_by_user = load_leads() or {}
-    leads = []
 
+    leads = []
     if isinstance(leads_by_user, dict):
         leads = leads_by_user.get(user_email, []) or []
 
-    return jsonify({"leads": leads}), 200
+    # Frontend expects ARRAY
+    return jsonify(leads), 200
+
+
+@app.route("/api/leads/<path:user_email>", methods=["POST"])
+def create_lead(user_email):
+    user_email = (user_email or "").strip().lower()
+    data = request.get_json(silent=True) or {}
+
+    leads_by_user = load_leads() or {}
+    user_leads = leads_by_user.get(user_email, [])
+
+    new_lead = {
+        "id": str(uuid4()),
+        "name": data.get("name", "").strip(),
+        "email": data.get("email", "").strip().lower(),
+        "phone": data.get("phone", "").strip(),
+        "notes": data.get("notes", "").strip(),
+        "status": data.get("status", "new"),
+        "tags": data.get("tags", []),
+        "createdAt": datetime.datetime.utcnow().isoformat() + "Z",
+        "last_contacted": data.get("last_contacted") or ""
+    }
+
+    user_leads.append(new_lead)
+    leads_by_user[user_email] = user_leads
+    save_leads(leads_by_user)
+
+    return jsonify(new_lead), 201
+
+
+@app.route("/api/leads/<path:user_email>/<lead_id>", methods=["PUT"])
+def update_lead(user_email, lead_id):
+    user_email = (user_email or "").strip().lower()
+    data = request.get_json(silent=True) or {}
+
+    leads_by_user = load_leads() or {}
+    user_leads = leads_by_user.get(user_email, [])
+
+    updated_lead = None
+
+    for i, lead in enumerate(user_leads):
+        if lead.get("id") == lead_id:
+            # Update fields safely
+            for field in [
+                "name",
+                "email",
+                "phone",
+                "notes",
+                "status",
+                "tags",
+                "last_contacted"
+            ]:
+                if field in data:
+                    user_leads[i][field] = data[field]
+
+            updated_lead = user_leads[i]
+            break
+
+    leads_by_user[user_email] = user_leads
+    save_leads(leads_by_user)
+
+    if not updated_lead:
+        return jsonify({"error": "lead_not_found"}), 404
+
+    return jsonify(updated_lead), 200
+
+
+@app.route("/api/leads/<path:user_email>/<lead_id>", methods=["DELETE"])
+def delete_lead(user_email, lead_id):
+    user_email = (user_email or "").strip().lower()
+
+    leads_by_user = load_leads() or {}
+    user_leads = leads_by_user.get(user_email, [])
+
+    before = len(user_leads)
+    user_leads = [l for l in user_leads if l.get("id") != lead_id]
+    after = len(user_leads)
+
+    leads_by_user[user_email] = user_leads
+    save_leads(leads_by_user)
+
+    return jsonify({
+        "deleted": before - after
+    }), 200
 
 # ----------------------------
 # Appointments
