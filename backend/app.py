@@ -1943,6 +1943,7 @@ _MSG_CACHE_TTL_SECONDS = 2
 _WABA_RES = {"id": None, "checked_at": None}
 _WABA_TTL_SECONDS = 300
 
+
 def wa_normalize_lang(code: str) -> str:
     default = (os.getenv("WHATSAPP_TEMPLATE_LANG") or "en").strip()
     if not code:
@@ -1955,10 +1956,12 @@ def wa_normalize_lang(code: str) -> str:
         return parts[0].lower() + "_" + parts[1].upper()
     return c.lower()
 
+
 def wa_primary_lang(code: str) -> str:
     if not code:
         return ""
     return code.replace("-", "_").split("_", 1)[0].lower()
+
 
 def wa_norm_number(s: str) -> str:
     d = re.sub(r"\D", "", s or "")
@@ -1967,11 +1970,13 @@ def wa_norm_number(s: str) -> str:
         d = dcc + d
     return d
 
+
 def lead_matches_wa(lead: dict, wa_digits: str) -> bool:
     for key in ("whatsapp", "phone"):
         if wa_norm_number(lead.get(key)) == wa_digits:
             return True
     return False
+
 
 def find_user_by_whatsapp(wa_id: str) -> Optional[str]:
     wa = wa_norm_number(wa_id)
@@ -1981,6 +1986,7 @@ def find_user_by_whatsapp(wa_id: str) -> Optional[str]:
             if lead_matches_wa(lead, wa):
                 return user_email
     return None
+
 
 def find_lead_by_whatsapp(wa_id: str) -> Optional[str]:
     wa = wa_norm_number(wa_id)
@@ -1992,12 +1998,14 @@ def find_lead_by_whatsapp(wa_id: str) -> Optional[str]:
                 return str(lid) if lid is not None else None
     return None
 
+
 def wa_env() -> Tuple[str, str]:
     token = os.getenv("WHATSAPP_TOKEN")
     phone_id = os.getenv("WHATSAPP_PHONE_ID")
     if not token or not phone_id:
         raise RuntimeError("WhatsApp credentials missing (WHATSAPP_TOKEN / WHATSAPP_PHONE_ID)")
     return token, phone_id
+
 
 def wa_resolve_waba_id(force: bool = False) -> str:
     now = datetime.datetime.utcnow()
@@ -2015,14 +2023,18 @@ def wa_resolve_waba_id(force: bool = False) -> str:
         headers = {"Authorization": f"Bearer {token}"}
         params = {"fields": "whatsapp_business_account{id},display_phone_number"}
         r = pyrequests.get(url, headers=headers, params=params, timeout=30)
+
         wid = None
         if r.ok:
             wid = (((r.json() or {}).get("whatsapp_business_account") or {}).get("id"))
+
         if not wid:
             wid = os.getenv("WHATSAPP_WABA_ID") or os.getenv("WHATSAPP_BUSINESS_ID", "")
+
         _WABA_RES["id"] = wid
         _WABA_RES["checked_at"] = now
         return wid
+
     except Exception as e:
         try:
             app.logger.warning("[WA WABA] resolve error: %s", e)
@@ -2030,15 +2042,20 @@ def wa_resolve_waba_id(force: bool = False) -> str:
             pass
         return os.getenv("WHATSAPP_WABA_ID") or os.getenv("WHATSAPP_BUSINESS_ID", "")
 
+
 def wa_fetch_templates_for_waba(waba_id: str):
+    if not waba_id:
+        raise RuntimeError("WhatsApp WABA ID could not be resolved")
     headers = {"Authorization": f"Bearer {os.getenv('WHATSAPP_TOKEN')}"}
     params = {"fields": "name,language,status,category,components", "limit": 200}
     url = f"https://graph.facebook.com/v20.0/{waba_id}/message_templates"
     return pyrequests.get(url, headers=headers, params=params, timeout=30)
 
+
 def wa_fetch_templates_raw():
     waba_id = wa_resolve_waba_id()
     return wa_fetch_templates_for_waba(waba_id)
+
 
 def wa_lookup_template_status(name: str, lang_api: str, force: bool = False) -> str:
     if not (os.getenv("WHATSAPP_TOKEN") and (os.getenv("WHATSAPP_WABA_ID") or os.getenv("WHATSAPP_PHONE_ID"))):
@@ -2075,6 +2092,7 @@ def wa_lookup_template_status(name: str, lang_api: str, force: bool = False) -> 
         status = exact_status or fallback_status or "PENDING"
         _TEMPLATE_CACHE[key] = {"status": status, "checked_at": now}
         return status
+
     except Exception as e:
         try:
             app.logger.warning("[WA TPL CHECK ERROR] %s", e)
@@ -2083,8 +2101,10 @@ def wa_lookup_template_status(name: str, lang_api: str, force: bool = False) -> 
         _TEMPLATE_CACHE[key] = {"status": "UNKNOWN", "checked_at": now}
         return "UNKNOWN"
 
+
 def wa_is_template_approved(name: str, lang: str, force: bool = False) -> bool:
     return wa_lookup_template_status(name, lang, force).upper() == "APPROVED"
+
 
 def get_last_inbound_ts(user_email: str, lead_id: str) -> Optional[str]:
     chats = load_chats()
@@ -2093,6 +2113,7 @@ def get_last_inbound_ts(user_email: str, lead_id: str) -> Optional[str]:
         if m.get("from") == "lead":
             return m.get("time")
     return None
+
 
 def within_24h(user_email: str, lead_id: str) -> bool:
     ts = get_last_inbound_ts(user_email, lead_id)
@@ -2104,13 +2125,19 @@ def within_24h(user_email: str, lead_id: str) -> bool:
         return False
     return (datetime.datetime.utcnow() - last_dt) <= datetime.timedelta(hours=24)
 
+
 def wa_send_text(to_number: str, body: str):
     to = wa_norm_number(to_number)
     token, phone_id = wa_env()
     ver = os.getenv("WHATSAPP_API_VERSION", "v20.0")
     url = f"https://graph.facebook.com/{ver}/{phone_id}/messages"
     headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
-    payload = {"messaging_product": "whatsapp", "to": to, "type": "text", "text": {"body": body}}
+    payload = {
+        "messaging_product": "whatsapp",
+        "to": to,
+        "type": "text",
+        "text": {"body": body}
+    }
     resp = pyrequests.post(url, headers=headers, json=payload, timeout=30)
     if resp.status_code >= 400:
         try:
@@ -2119,7 +2146,13 @@ def wa_send_text(to_number: str, body: str):
             pass
     return resp
 
-def wa_send_template(to_number: str, template_name: str, lang_code: str, parameters: Optional[List[Any]] = None):
+
+def wa_send_template(
+    to_number: str,
+    template_name: str,
+    lang_code: str,
+    parameters: Optional[List[Any]] = None
+):
     to = wa_norm_number(to_number)
     token, phone_id = wa_env()
     ver = os.getenv("WHATSAPP_API_VERSION", "v20.0")
@@ -2128,7 +2161,10 @@ def wa_send_template(to_number: str, template_name: str, lang_code: str, paramet
 
     components = []
     if parameters is not None:
-        components = [{"type": "body", "parameters": [{"type": "text", "text": str(p)} for p in parameters]}]
+        components = [{
+            "type": "body",
+            "parameters": [{"type": "text", "text": str(p)} for p in parameters]
+        }]
 
     payload = {
         "messaging_product": "whatsapp",
@@ -2140,6 +2176,7 @@ def wa_send_template(to_number: str, template_name: str, lang_code: str, paramet
             "components": components
         }
     }
+
     resp = pyrequests.post(url, headers=headers, json=payload, timeout=30)
     if resp.status_code >= 400:
         try:
@@ -2147,6 +2184,7 @@ def wa_send_template(to_number: str, template_name: str, lang_code: str, paramet
         except Exception:
             pass
     return resp
+
 
 @app.get("/api/whatsapp/health")
 def whatsapp_health():
@@ -2160,20 +2198,132 @@ def whatsapp_health():
         "default_lang_api": wa_normalize_lang(os.getenv("WHATSAPP_TEMPLATE_LANG", "en")),
     }), 200
 
+
 @app.get("/api/whatsapp/templates")
 def list_templates():
     if not os.getenv("WHATSAPP_TOKEN") or not os.getenv("WHATSAPP_PHONE_ID"):
         return jsonify({"error": "Missing token or phone id"}), 400
 
-    waba_id = wa_resolve_waba_id()
-    r = wa_fetch_templates_raw()
     try:
-        data = r.json()
-        for t in (data.get("data", []) or []):
-            t["normalized_language"] = wa_normalize_lang(t.get("language", ""))
-    except Exception:
-        data = {"raw": r.text}
-    return jsonify({"status": r.status_code, "waba_id": waba_id, "data": data}), r.status_code
+        waba_id = wa_resolve_waba_id()
+        r = wa_fetch_templates_raw()
+
+        try:
+            data = r.json()
+            for t in (data.get("data", []) or []):
+                t["normalized_language"] = wa_normalize_lang(t.get("language", ""))
+        except Exception:
+            data = {"raw": r.text}
+
+        return jsonify({
+            "status": r.status_code,
+            "waba_id": waba_id,
+            "data": data
+        }), r.status_code
+
+    except RuntimeError as e:
+        return jsonify({"error": str(e)}), 500
+    except Exception as e:
+        return jsonify({"error": f"Failed to load templates: {e}"}), 500
+
+
+@app.get("/api/whatsapp/template-info")
+def whatsapp_template_info():
+    """
+    Frontend expects:
+    {
+      "ok": true,
+      "templates": [
+        {
+          "name": "...",
+          "language": "en_US",
+          "normalized_language": "en_US",
+          "status": "APPROVED",
+          "category": "...",
+          "components": [...],
+          "body_text": "...",
+          "body_param_count": 3
+        }
+      ]
+    }
+    """
+    name = (request.args.get("name") or "").strip()
+    lang_code = wa_normalize_lang(request.args.get("language_code") or "")
+
+    if not name:
+        return jsonify({"ok": False, "error": "name is required", "templates": []}), 400
+
+    try:
+        r = wa_fetch_templates_raw()
+        if not getattr(r, "ok", False):
+            try:
+                body = r.json()
+            except Exception:
+                body = {"raw": r.text}
+            return jsonify({
+                "ok": False,
+                "error": "Failed to fetch templates from Graph",
+                "templates": [],
+                "status": getattr(r, "status_code", None),
+                "resp": body
+            }), 502
+
+        items = (r.json() or {}).get("data", []) or []
+        out = []
+
+        def build_template_row(t: dict) -> dict:
+            components = t.get("components") or []
+            body_comp = next(
+                (c for c in components if str(c.get("type") or "").upper() == "BODY"),
+                {}
+            )
+            body_text = body_comp.get("text") or ""
+            matches = re.findall(r"\{\{\s*(\d+)\s*\}\}", body_text)
+            body_param_count = max([int(x) for x in matches], default=0)
+
+            return {
+                "name": t.get("name"),
+                "language": t.get("language"),
+                "normalized_language": wa_normalize_lang(t.get("language") or ""),
+                "status": (t.get("status") or "").upper(),
+                "category": t.get("category"),
+                "components": components,
+                "body_text": body_text,
+                "body_param_count": body_param_count,
+            }
+
+        # exact name + optional exact language
+        for t in items:
+            if (t.get("name") or "").strip() != name:
+                continue
+            t_lang = wa_normalize_lang(t.get("language") or "")
+            if lang_code and t_lang != lang_code:
+                continue
+            out.append(build_template_row(t))
+
+        # fallback to same-name all locales if requested locale not found
+        if not out and lang_code:
+            for t in items:
+                if (t.get("name") or "").strip() != name:
+                    continue
+                out.append(build_template_row(t))
+
+        return jsonify({
+            "ok": True,
+            "templates": out
+        }), 200
+
+    except Exception as e:
+        try:
+            app.logger.exception("[WA TEMPLATE INFO ERROR] %s", e)
+        except Exception:
+            pass
+        return jsonify({
+            "ok": False,
+            "error": str(e),
+            "templates": []
+        }), 500
+
 
 @app.get("/api/whatsapp/template-state")
 def template_state():
@@ -2189,13 +2339,14 @@ def template_state():
         "checked_at": datetime.datetime.utcnow().isoformat() + "Z"
     }), 200
 
+
 @app.get("/api/whatsapp/window-state")
 def whatsapp_window_state():
     user_email = (request.args.get("user_email") or "").strip().lower()
-    lead_id    = (request.args.get("lead_id") or "").strip()
+    lead_id = (request.args.get("lead_id") or "").strip()
 
     template_name = (request.args.get("template_name") or os.getenv("WHATSAPP_TEMPLATE_DEFAULT", "") or "").strip()
-    lang_code     = request.args.get("language_code") or os.getenv("WHATSAPP_TEMPLATE_LANG", "en") or ""
+    lang_code = request.args.get("language_code") or os.getenv("WHATSAPP_TEMPLATE_LANG", "en") or ""
     force = request.args.get("force") == "1"
 
     lang_norm = wa_normalize_lang(lang_code)
@@ -2212,6 +2363,7 @@ def whatsapp_window_state():
         "canTemplate": (not inside) and (status.upper() == "APPROVED")
     }), 200
 
+
 def _get_thread_cached(user_email: str, lead_id: str):
     key = (str(user_email or ""), str(lead_id or ""))
     now = datetime.datetime.utcnow()
@@ -2224,12 +2376,14 @@ def _get_thread_cached(user_email: str, lead_id: str):
     _MSG_CACHE[key] = {"at": now, "data": msgs}
     return msgs, False
 
+
 @app.route("/api/whatsapp/messages", methods=["GET"])
 def get_whatsapp_messages():
     user_email = (request.args.get("user_email") or "").strip().lower()
     lead_id = (request.args.get("lead_id") or "").strip()
     msgs, _ = _get_thread_cached(user_email, lead_id)
     return jsonify({"messages": msgs}), 200
+
 
 @app.get("/api/whatsapp/status")
 def get_message_status():
@@ -2239,12 +2393,14 @@ def get_message_status():
     statuses = load_statuses()
     return jsonify(statuses.get(mid) or {}), 200
 
+
 @app.post("/api/whatsapp/optout")
 def set_optout():
     data = request.get_json(force=True) or {}
     user_email = (data.get("user_email") or "").strip().lower()
     lead_id = str(data.get("lead_id") or "").strip()
     opt_out = bool(data.get("opt_out", True))
+
     if not user_email or not lead_id:
         return jsonify({"error": "user_email and lead_id required"}), 400
 
@@ -2255,15 +2411,19 @@ def set_optout():
             ld["wa_opt_out"] = bool(opt_out)
     leads[user_email] = arr
     save_leads(leads)
+
     return jsonify({"ok": True, "opt_out": opt_out}), 200
+
 
 @app.route("/api/whatsapp/send", methods=["POST"])
 def send_whatsapp_message():
     """
-    Inside 24h: free text (requires 'message') — sends EXACTLY what the user typed.
-    Outside 24h: template send with locale fallback.
+    Inside 24h:
+      - free text (requires message)
 
-    Returns 409 if template exists but no approved locale.
+    Outside 24h:
+      - template send with locale fallback
+      - template_params become BODY parameters
     """
     data = request.get_json(force=True) or {}
 
@@ -2273,10 +2433,10 @@ def send_whatsapp_message():
         except Exception:
             return ""
 
-    to_number     = clean(data.get("to") or data.get("phone"))
-    raw_msg       = clean(data.get("message") or data.get("text"))
-    user_email    = clean(data.get("user_email")).lower()
-    lead_id       = clean(data.get("lead_id"))
+    to_number = clean(data.get("to") or data.get("phone"))
+    raw_msg = clean(data.get("message") or data.get("text"))
+    user_email = clean(data.get("user_email")).lower()
+    lead_id = clean(data.get("lead_id"))
     template_name = clean(data.get("template_name") or (os.getenv("WHATSAPP_TEMPLATE_DEFAULT") or ""))
     language_code = clean(data.get("language_code") or (os.getenv("WHATSAPP_TEMPLATE_LANG") or "en"))
 
@@ -2285,6 +2445,7 @@ def send_whatsapp_message():
         raw_params = [p.strip() for p in raw_params.split(",") if p.strip()]
     elif not isinstance(raw_params, list):
         raw_params = None
+
     params = raw_params if raw_params else None
 
     if not to_number:
@@ -2297,9 +2458,9 @@ def send_whatsapp_message():
                 return jsonify({"ok": False, "error": "Lead has opted out of WhatsApp messages"}), 403
 
     inside24 = within_24h(user_email, lead_id) if (user_email and lead_id) else False
-    requested     = wa_normalize_lang(language_code)
-    primary       = wa_primary_lang(requested)
-    to_number     = wa_norm_number(to_number)
+    requested = wa_normalize_lang(language_code)
+    primary = wa_primary_lang(requested)
+    to_number = wa_norm_number(to_number)
 
     waba_id = wa_resolve_waba_id()
 
@@ -2307,6 +2468,7 @@ def send_whatsapp_message():
         if inside24:
             if not raw_msg:
                 return jsonify({"ok": False, "error": "Message text required inside 24h"}), 400
+
             resp = wa_send_text(to_number, raw_msg)
             mode = "free_text"
             sent_text = raw_msg
@@ -2316,7 +2478,11 @@ def send_whatsapp_message():
 
         else:
             if not template_name:
-                return jsonify({"ok": False, "error": "Template name is required outside 24h.", "code": "TEMPLATE_REQUIRED_OUTSIDE_24H"}), 422
+                return jsonify({
+                    "ok": False,
+                    "error": "Template name is required outside 24h.",
+                    "code": "TEMPLATE_REQUIRED_OUTSIDE_24H"
+                }), 422
 
             r_list = wa_fetch_templates_for_waba(waba_id)
             if not getattr(r_list, "ok", False):
@@ -2333,8 +2499,8 @@ def send_whatsapp_message():
                 }), 502
 
             items = (r_list.json() or {}).get("data", [])
-
             locales = []
+
             for t in items:
                 if (t.get("name") or "") == template_name:
                     ln = wa_normalize_lang(t.get("language") or "")
@@ -2377,7 +2543,15 @@ def send_whatsapp_message():
                 }), 409
 
             resp = wa_send_template(to_number, template_name, used_lang, params)
-            sent_text = f"[template:{template_name}/{used_lang}] {raw_msg or ''}"
+
+            preview_parts = []
+            if params:
+                preview_parts.append(" | ".join([str(p) for p in params]))
+            if raw_msg:
+                preview_parts.append(raw_msg)
+            preview = " — ".join([p for p in preview_parts if p]).strip()
+
+            sent_text = f"[template:{template_name}/{used_lang}] {preview}".strip()
             mode = "template"
 
         try:
@@ -2391,6 +2565,7 @@ def send_whatsapp_message():
                 err = result.get("error", {})
             except Exception:
                 pass
+
             return jsonify({
                 "ok": False,
                 "mode": mode,
@@ -2414,7 +2589,11 @@ def send_whatsapp_message():
                 chats = load_chats()
                 user_chats = (chats.get(user_email, {}) or {})
                 thread = (user_chats.get(str(lead_id), []) or [])
-                thread.append({"from": "user", "text": sent_text, "time": datetime.datetime.utcnow().isoformat() + "Z"})
+                thread.append({
+                    "from": "user",
+                    "text": sent_text,
+                    "time": datetime.datetime.utcnow().isoformat() + "Z"
+                })
                 user_chats[str(lead_id)] = thread
                 chats[user_email] = user_chats
                 save_chats(chats)
@@ -2431,7 +2610,11 @@ def send_whatsapp_message():
                     }
                     save_statuses(statuses)
 
-                _MSG_CACHE[(str(user_email or ""), str(lead_id or ""))] = {"at": datetime.datetime.utcnow(), "data": thread}
+                _MSG_CACHE[(str(user_email or ""), str(lead_id or ""))] = {
+                    "at": datetime.datetime.utcnow(),
+                    "data": thread
+                }
+
         except Exception as e:
             try:
                 app.logger.warning("[WHATSAPP] save message/status error: %s", e)
@@ -2448,10 +2631,12 @@ def send_whatsapp_message():
             "waba_id": waba_id,
             "fallbackUsed": (used_lang is not None and used_lang != requested)
         }
+
         if mode == "template":
             out["availableLanguages"] = locales
             if out["fallbackUsed"] and fallback_reason:
                 out["fallbackReason"] = fallback_reason
+
         return jsonify(out), resp.status_code
 
     except RuntimeError as e:
@@ -2459,13 +2644,22 @@ def send_whatsapp_message():
     except pyrequests.RequestException as e:
         return jsonify({"ok": False, "error": f"Network error: {e}"}), 502
 
+
 @app.get("/api/whatsapp/debug/template-locales")
 def debug_template_locales():
     r = wa_fetch_templates_raw()
     name = (request.args.get("name") or "").strip()
     items = (r.json() or {}).get("data", []) if r.ok else []
-    locales = [{"language": wa_normalize_lang(t.get("language") or ""), "status": (t.get("status") or "").upper()}
-               for t in items if (t.get("name") or "") == name] if name else []
+
+    locales = [
+        {
+            "language": wa_normalize_lang(t.get("language") or ""),
+            "status": (t.get("status") or "").upper()
+        }
+        for t in items
+        if (t.get("name") or "") == name
+    ] if name else []
+
     token, phone_id = wa_env()
     return jsonify({
         "phone_id": phone_id,
@@ -2474,6 +2668,7 @@ def debug_template_locales():
         "locales": locales,
         "raw_status": r.status_code
     }), 200
+
 
 def _verify_meta_signature(raw_body: bytes, header_sig: str) -> bool:
     secret = os.getenv("APP_SECRET") or os.getenv("META_APP_SECRET")
@@ -2487,6 +2682,7 @@ def _verify_meta_signature(raw_body: bytes, header_sig: str) -> bool:
         return hmac.compare_digest(mac.hexdigest(), sent)
     except Exception:
         return False
+
 
 @app.route("/api/whatsapp/webhook", methods=["GET", "POST"])
 def whatsapp_webhook():
@@ -2537,6 +2733,7 @@ def whatsapp_webhook():
                     # opt-out / opt-in (best-effort)
                     if sender_waid and isinstance(text, str):
                         up = text.strip().upper()
+
                         if up in ("STOP", "UNSUBSCRIBE", "STOP ALL", "CANCEL"):
                             wa = wa_norm_number(sender_waid)
                             data = load_leads()
@@ -2571,9 +2768,14 @@ def whatsapp_webhook():
 
                     user_email = find_user_by_whatsapp(sender_waid) if sender_waid else None
                     lead_id = find_lead_by_whatsapp(sender_waid) if sender_waid else None
+
                     if not user_email or not lead_id:
                         try:
-                            app.logger.warning("[WA WEBHOOK] inbound from unknown sender waid=%s text=%s", sender_waid, text)
+                            app.logger.warning(
+                                "[WA WEBHOOK] inbound from unknown sender waid=%s text=%s",
+                                sender_waid,
+                                text
+                            )
                         except Exception:
                             pass
                         continue
@@ -2581,12 +2783,19 @@ def whatsapp_webhook():
                     chats = load_chats()
                     user_chats = (chats.get(user_email, {}) or {})
                     thread = (user_chats.get(str(lead_id), []) or [])
-                    thread.append({"from": "lead", "text": text, "time": datetime.datetime.utcnow().isoformat() + "Z"})
+                    thread.append({
+                        "from": "lead",
+                        "text": text,
+                        "time": datetime.datetime.utcnow().isoformat() + "Z"
+                    })
                     user_chats[str(lead_id)] = thread
                     chats[user_email] = user_chats
                     save_chats(chats)
 
-                    _MSG_CACHE[(str(user_email or ""), str(lead_id or ""))] = {"at": datetime.datetime.utcnow(), "data": thread}
+                    _MSG_CACHE[(str(user_email or ""), str(lead_id or ""))] = {
+                        "at": datetime.datetime.utcnow(),
+                        "data": thread
+                    }
 
     except Exception as e:
         try:

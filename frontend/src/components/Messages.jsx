@@ -13,8 +13,11 @@ const C = {
   sub: "#9aa3ab",
   accent: "#f7cb53",
   wa: "#25D366",
+  danger: "#e66565",
+  success: "#25D366",
   in: "#202c33",
   out: "#005c4b",
+  soft: "#1e2326",
 };
 const PANEL_H = "72vh";
 
@@ -23,30 +26,28 @@ const PANEL_H = "72vh";
 function cleanAIText(t) {
   let s = String(t || "");
 
-  // 1) remove common headers + our template echo
   s = s
     .replace(/^(Subject|Lead Name|Recipient):.*(\n|$)/gi, "")
     .replace(/^\s*[\w ]+:\s*$/gim, "")
     .replace(/^\s*\n+/g, "")
     .replace(/^\s*\[template:[^\]]+\]\s*/i, "");
 
-  // 2) remove intro anywhere (iteratively); keep the leading delimiter if present
   const introAnywhere = new RegExp(
-    String.raw`(^|[\s]*[,;:\-\u2013\u2014]\s*)` +        // optional delimiter we keep
-    String.raw`(?:it'?s|it\u2019s|this\s+is)\s+` +       // it's / it’s / this is
-    String.raw`[^,\n\r;:\-\u2013\u2014]{1,60}\s+` +      // name part
-    String.raw`(?:from|at)\s+` +                         // from/at
-    String.raw`[^,\n\r;:\-\u2013\u2014]{1,120}\s*` +     // business
-    String.raw`[\-\u2013\u2014:]\s*`,                    // end punct
+    String.raw`(^|[\s]*[,;:\-\u2013\u2014]\s*)` +
+      String.raw`(?:it'?s|it\u2019s|this\s+is)\s+` +
+      String.raw`[^,\n\r;:\-\u2013\u2014]{1,60}\s+` +
+      String.raw`(?:from|at)\s+` +
+      String.raw`[^,\n\r;:\-\u2013\u2014]{1,120}\s*` +
+      String.raw`[\-\u2013\u2014:]\s*`,
     "gi"
   );
+
   let prev = null;
   while (prev !== s) {
     prev = s;
-    s = s.replace(introAnywhere, (_m, keep) => (keep || ""));
+    s = s.replace(introAnywhere, (_m, keep) => keep || "");
   }
 
-  // 3) tidy
   s = s.replace(/[ \t]{2,}/g, " ");
   return s.trim();
 }
@@ -69,6 +70,7 @@ const initials = (name, email) =>
         .slice(0, 2);
 
 const digits = (s = "") => (s || "").replace(/\D/g, "");
+
 const fmtNA = (num) => {
   const n = digits(num);
   return n.length === 11 && n.startsWith("1")
@@ -94,7 +96,9 @@ const toUiLang = (api) => {
 const ping = (name) => window.dispatchEvent(new Event(name));
 
 /** ===== light NLP for appointment text ===== */
-function pad2(n) { return String(n).padStart(2, "0"); }
+function pad2(n) {
+  return String(n).padStart(2, "0");
+}
 function nextDow(from, targetDow, allowToday = false) {
   const d = new Date(from.getFullYear(), from.getMonth(), from.getDate());
   const curr = d.getDay();
@@ -112,7 +116,9 @@ function thisOrNextDow(from, targetDow) {
   d.setDate(d.getDate() + delta);
   return d;
 }
-function toISODate(d) { return `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}`; }
+function toISODate(d) {
+  return `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}`;
+}
 function parseApptFromText(text) {
   if (!text) return null;
   const t = text.toLowerCase();
@@ -170,9 +176,11 @@ function parseApptFromText(text) {
 
   if (!targetDate) return null;
   if (hours == null) return null;
-  const dateISO = toISODate(targetDate);
-  const timeStr = `${pad2(hours)}:${pad2(minutes)}`;
-  return { date: dateISO, time: timeStr };
+
+  return {
+    date: toISODate(targetDate),
+    time: `${pad2(hours)}:${pad2(minutes)}`,
+  };
 }
 
 /** ===== Suggestion persistence ===== */
@@ -180,9 +188,18 @@ const SUG_KEYS = (email) => ({
   consumed: `msg_suggestions_consumed_${email || "anon"}`,
 });
 const loadJSON = (k, fallback) => {
-  try { const v = localStorage.getItem(k); return v ? JSON.parse(v) : fallback; } catch { return fallback; }
+  try {
+    const v = localStorage.getItem(k);
+    return v ? JSON.parse(v) : fallback;
+  } catch {
+    return fallback;
+  }
 };
-const saveJSON = (k, obj) => { try { localStorage.setItem(k, JSON.stringify(obj || {})); } catch {} };
+const saveJSON = (k, obj) => {
+  try {
+    localStorage.setItem(k, JSON.stringify(obj || {}));
+  } catch {}
+};
 const sigForSuggestion = (leadId, sug) => `${String(leadId || "lead")}|${sug?.date || ""}|${sug?.time || ""}`;
 
 /** ===== Automation log persistence ===== */
@@ -201,7 +218,6 @@ const between = (txt, startIdx, endIdx, span = 32) => {
   };
 };
 
-// Guess a semantic "kind" for {{n}} using text around it
 function inferParamKindsFromBody(bodyText, count) {
   const kinds = Array.from({ length: count }, () => null);
   if (!bodyText || !count) return kinds;
@@ -215,42 +231,48 @@ function inferParamKindsFromBody(bodyText, count) {
     const L = ctx.left;
     const R = ctx.right;
 
-    // Heuristics
     if (/(^|\s)(hi|hello|hey|dear)\s*$/.test(L) || /(client|customer|name)\s*$/.test(L)) {
-      kinds[i - 1] = "lead_name"; continue;
+      kinds[i - 1] = "lead_name";
+      continue;
     }
     if (/(i'?m|i am|this is)\s*$/.test(L)) {
-      kinds[i - 1] = "user_name"; continue;
+      kinds[i - 1] = "user_name";
+      continue;
     }
     if (/(from|at)\s*$/.test(L) || /^(\s*(from|at)\b)/.test(R)) {
-      kinds[i - 1] = "business"; continue;
+      kinds[i - 1] = "business";
+      continue;
     }
     if (/\b(date|day)\b/.test(L + " " + R)) {
-      kinds[i - 1] = "date"; continue;
+      kinds[i - 1] = "date";
+      continue;
     }
     if (/\b(time|slot)\b/.test(L + " " + R)) {
-      kinds[i - 1] = "time"; continue;
+      kinds[i - 1] = "time";
+      continue;
     }
     if (/\b(location|address|studio|office)\b/.test(L + " " + R)) {
-      kinds[i - 1] = "location"; continue;
+      kinds[i - 1] = "location";
+      continue;
     }
     if (/\b(service|treatment|package)\b/.test(L + " " + R)) {
-      kinds[i - 1] = "service"; continue;
+      kinds[i - 1] = "service";
+      continue;
     }
     if (/\b(price|quote|budget)\b/.test(L + " " + R)) {
-      kinds[i - 1] = "price"; continue;
+      kinds[i - 1] = "price";
+      continue;
     }
     if (/\bemail\b/.test(L + " " + R)) {
-      kinds[i - 1] = "email"; continue;
+      kinds[i - 1] = "email";
+      continue;
     }
     if (/\bphone|number\b/.test(L + " " + R)) {
-      kinds[i - 1] = "phone"; continue;
+      kinds[i - 1] = "phone";
+      continue;
     }
-
-    // Unknown — leave null and we’ll apply index-based defaults
   }
 
-  // Fill remaining nulls by index-based sane defaults
   for (let i = 0; i < kinds.length; i++) {
     if (!kinds[i]) {
       kinds[i] =
@@ -259,7 +281,8 @@ function inferParamKindsFromBody(bodyText, count) {
         i === 2 ? "business" :
         i === 3 ? "details" :
         i === 4 ? "location" :
-        i === 5 ? "email" : "details";
+        i === 5 ? "email" :
+        "details";
     }
   }
   return kinds;
@@ -312,20 +335,25 @@ function labelForKind(kind, i) {
   }
 }
 
+function renderTemplatePreview(bodyText, values = []) {
+  let out = String(bodyText || "");
+  values.forEach((v, idx) => {
+    const re = new RegExp(`\\{\\{\\s*${idx + 1}\\s*\\}\\}`, "g");
+    out = out.replace(re, v || `{{${idx + 1}}}`);
+  });
+  return out;
+}
+
 /** ===== COMPONENT ===== */
 export default function Messages({ user, leads = [], defaultTemplate = "", language = "en" }) {
-  // Always hit localhost in dev, same-origin in prod.
-// Falls back to env if you set REACT_APP_API_URL or REACT_APP_API_BASE.
-const API = (() => {
-  const env = v => (v && v.trim()) || "";
-  const fromEnv =
-    env(process.env.REACT_APP_API_URL) ||
-    env(process.env.REACT_APP_API_BASE);
-  if (fromEnv) return fromEnv.replace(/\/$/, "");
-  return API_BASE;
-})();
-console.log("[API BASE]", API);
-
+  const API = (() => {
+    const env = (v) => (v && v.trim()) || "";
+    const fromEnv =
+      env(process.env.REACT_APP_API_URL) ||
+      env(process.env.REACT_APP_API_BASE);
+    if (fromEnv) return fromEnv.replace(/\/$/, "");
+    return API_BASE;
+  })();
 
   /** --- selection & list filter --- */
   const [q, setQ] = useState("");
@@ -366,11 +394,9 @@ console.log("[API BASE]", API);
   const chatRef = useRef(null);
   const pollTimer = useRef(null);
 
-  // automation log (for current lead)
   const [autoLog, setAutoLog] = useState([]);
   const [showAutoLog, setShowAutoLog] = useState(false);
 
-  // hard reset when switching leads
   useEffect(() => {
     setThread([]);
     setInput("");
@@ -380,7 +406,6 @@ console.log("[API BASE]", API);
     }
     setSuggestion(null);
 
-    // load per-lead automation log
     if (user?.email && lead?.id) {
       const key = AUTO_LOG_KEY(user.email, lead.id);
       setAutoLog(loadJSON(key, []));
@@ -390,7 +415,6 @@ console.log("[API BASE]", API);
     setShowAutoLog(false);
   }, [activeLeadId, user?.email, lead?.id]);
 
-  // poll the server for this lead
   useEffect(() => {
     if (!API || !user?.email || !lead?.id) return;
     let stop = false;
@@ -415,7 +439,6 @@ console.log("[API BASE]", API);
     };
   }, [API, user?.email, lead?.id]);
 
-  // scroll to bottom on new messages
   useEffect(() => {
     chatRef.current?.scrollTo({ top: 1e9, behavior: "smooth" });
   }, [thread.length, activeLeadId]);
@@ -430,6 +453,8 @@ console.log("[API BASE]", API);
   });
 
   const [templates, setTemplates] = useState([]);
+  const [templatesLoading, setTemplatesLoading] = useState(false);
+  const [templatesError, setTemplatesError] = useState("");
   const [templateName, setTemplateName] = useState(defaultTemplate);
   const [templateLangUI, setTemplateLangUI] = useState(language);
 
@@ -449,11 +474,20 @@ console.log("[API BASE]", API);
   useEffect(() => {
     if (!API) return;
     (async () => {
+      setTemplatesLoading(true);
+      setTemplatesError("");
       try {
         const r = await fetch(`${API}/api/whatsapp/templates`);
         const j = await r.json();
-        const rows = Array.isArray(j?.data?.data) ? j.data.data : [];
+
+        const rows =
+          Array.isArray(j?.data?.data) ? j.data.data :
+          Array.isArray(j?.data) ? j.data :
+          Array.isArray(j?.templates) ? j.templates :
+          [];
+
         const cleaned = rows.filter((t) => String(t?.name || "").toLowerCase() !== "hello_world");
+
         setTemplates(
           cleaned.map((t) => ({
             name: t.name,
@@ -461,11 +495,18 @@ console.log("[API BASE]", API);
             status: String(t.status || "").toUpperCase(),
           }))
         );
-      } catch {}
+
+        if (!cleaned.length) {
+          setTemplatesError("No WhatsApp templates were found for this account.");
+        }
+      } catch {
+        setTemplatesError("Could not load WhatsApp templates.");
+      } finally {
+        setTemplatesLoading(false);
+      }
     })();
   }, [API]);
 
-  // choose a default approved template
   useEffect(() => {
     if (!templates.length) return;
     const hasCurrent = templateName && templates.some((t) => t.name === templateName && t.languageUI === templateLangUI);
@@ -487,7 +528,6 @@ console.log("[API BASE]", API);
     }
   }, [templates, health, defaultTemplate, language, templateName, templateLangUI]);
 
-  // window state (24h / template)
   const refreshWindow = async (force = false) => {
     if (!API || !user?.email || !lead?.id) return;
     const langApi = normApi(toApiLang(templateLangUI));
@@ -509,34 +549,46 @@ console.log("[API BASE]", API);
       });
     } catch {}
   };
+
   useEffect(() => {
     refreshWindow(false);
   }, [API, user?.email, lead?.id, templateName, templateLangUI]); // eslint-disable-line
+
   useEffect(() => {
     refreshWindow(true);
   }, []); // eslint-disable-line
 
-  /** --- template params (minimal) --- */
+  /** --- template params --- */
   const [expectedParams, setExpectedParams] = useState(null);
   const [paramValues, setParamValues] = useState([]);
   const [templateBodyText, setTemplateBodyText] = useState("");
   const [templateExample, setTemplateExample] = useState(null);
-  const [paramKinds, setParamKinds] = useState([]); // NEW: inferred kinds for labels + autofill
+  const [paramKinds, setParamKinds] = useState([]);
+  const [templateInfoLoading, setTemplateInfoLoading] = useState(false);
+  const [templateInfoError, setTemplateInfoError] = useState("");
 
   useEffect(() => {
     if (!API) return;
     const name = (templateName || "").trim();
+    const languageCode = normApi(toApiLang(templateLangUI));
+
     if (!name || name.toLowerCase() === "hello_world") {
       setExpectedParams(null);
       setTemplateBodyText("");
       setTemplateExample(null);
       setParamValues([]);
       setParamKinds([]);
+      setTemplateInfoError("");
       return;
     }
+
     (async () => {
+      setTemplateInfoLoading(true);
+      setTemplateInfoError("");
       try {
-        const r = await fetch(`${API}/api/whatsapp/template-info?name=${encodeURIComponent(name)}`);
+        const r = await fetch(
+          `${API}/api/whatsapp/template-info?name=${encodeURIComponent(name)}&language_code=${encodeURIComponent(languageCode)}`
+        );
         const j = await r.json();
         const t = (j.templates || [])[0];
 
@@ -552,7 +604,6 @@ console.log("[API BASE]", API);
           const ex = body?.example?.body_text;
           setTemplateExample(Array.isArray(ex) && ex.length ? ex[0] : null);
 
-          // infer param kinds for ANY template
           if (typeof count === "number" && count > 0) {
             const inferred = inferParamKindsFromBody(bodyText || "", count);
             setParamKinds(inferred);
@@ -567,6 +618,7 @@ console.log("[API BASE]", API);
           setTemplateExample(null);
           setParamKinds([]);
           setParamValues([]);
+          setTemplateInfoError("Could not read this template’s placeholders.");
         }
       } catch {
         setExpectedParams(null);
@@ -574,11 +626,13 @@ console.log("[API BASE]", API);
         setTemplateExample(null);
         setParamKinds([]);
         setParamValues([]);
+        setTemplateInfoError("Could not load this template’s details.");
+      } finally {
+        setTemplateInfoLoading(false);
       }
     })();
-  }, [API, templateName]);
+  }, [API, templateName, templateLangUI]);
 
-  // Fill params for ANY template using inferred kinds + fallbacks
   const autofillParams = () => {
     if (typeof expectedParams !== "number" || expectedParams <= 0) return;
     const values = Array.from({ length: expectedParams }, (_, idx) => {
@@ -649,8 +703,8 @@ console.log("[API BASE]", API);
         appointment_location: lead?.location || user?.location || "TBD",
         duration: 30,
         notes: "Auto-created from WhatsApp confirmation",
-        lead_id: String(lead?.id || ""),     // <-- tie to the lead
-        status: "booked"                     // <-- many UIs filter by status
+        lead_id: String(lead?.id || ""),
+        status: "booked",
       };
 
       const res = await fetch(`${API}/api/appointments/${encodeURIComponent(user.email)}`, {
@@ -691,6 +745,7 @@ console.log("[API BASE]", API);
     const text = input.trim();
     setLoading(true);
     setBanner(null);
+
     try {
       const payload = {
         to: toE164,
@@ -704,7 +759,6 @@ console.log("[API BASE]", API);
           setLoading(false);
           return;
         }
-        // EXACT raw text inside 24h — ask backend not to personalize (belt & suspenders)
         payload.message = text;
         payload.skip_personalization = true;
       } else {
@@ -713,6 +767,13 @@ console.log("[API BASE]", API);
           setLoading(false);
           return;
         }
+
+        if (!gate.templateApproved) {
+          setBanner(`This template is not approved for sending right now (${gate.templateStatus}).`);
+          setLoading(false);
+          return;
+        }
+
         payload.template_name = templateName;
         payload.language_code = normApi(toApiLang(templateLangUI));
 
@@ -742,6 +803,7 @@ console.log("[API BASE]", API);
 
       setBanner(data.mode === "template" ? `Sent via template (${data.usedLanguage || "?"}).` : null);
       setInput("");
+
       if (typeof expectedParams === "number" && expectedParams > 0) {
         setParamValues(Array.from({ length: expectedParams }, () => ""));
       }
@@ -764,12 +826,10 @@ console.log("[API BASE]", API);
     }
   };
 
-  // Send on Ctrl/⌘+Enter
   const onKeyDown = (e) => {
     if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) onSend();
   };
 
-  // AI draft — strip headers/prefix from the generated text before inserting
   const onDraftAI = async () => {
     if (!API || !lead) return;
     setBanner(null);
@@ -816,7 +876,6 @@ console.log("[API BASE]", API);
       });
       if (!matched.length) return;
 
-      // append to thread (as "user" messages) + store in per-lead log
       const bubbles = matched.map((it) => ({
         from: "user",
         text: htmlToText(it.text || it.subject || it.html || ""),
@@ -828,7 +887,9 @@ console.log("[API BASE]", API);
       const key = AUTO_LOG_KEY(user.email, lead.id);
       setAutoLog((prev) => {
         const next = [...prev, ...matched];
-        try { localStorage.setItem(key, JSON.stringify(next)); } catch {}
+        try {
+          localStorage.setItem(key, JSON.stringify(next));
+        } catch {}
         return next;
       });
     };
@@ -840,7 +901,7 @@ console.log("[API BASE]", API);
   /** --- Detect WA template echoes from background engine --- */
   useEffect(() => {
     if (!user?.email || !lead?.id) return;
-    // detect messages like: “[template:name/lang] body…”
+
     const detected = thread
       .filter((m) => m?.from === "user" && typeof m?.text === "string" && /^\[template:[^\/]+\/[^\]]+\]/i.test(m.text))
       .map((m) => {
@@ -862,12 +923,13 @@ console.log("[API BASE]", API);
 
     const key = AUTO_LOG_KEY(user.email, lead.id);
     setAutoLog((prev) => {
-      // de-dup by created_at+text
       const seen = new Set(prev.map((x) => `${x.created_at}|${(x.text || x.subject || x.html || "").slice(0, 40)}`));
       const add = detected.filter((d) => !seen.has(`${d.created_at}|${(d.text || "").slice(0, 40)}`));
       if (!add.length) return prev;
       const next = [...prev, ...add];
-      try { localStorage.setItem(key, JSON.stringify(next)); } catch {}
+      try {
+        localStorage.setItem(key, JSON.stringify(next));
+      } catch {}
       return next;
     });
   }, [thread, user?.email, lead?.id, lead?.email, lead?.whatsapp]);
@@ -883,6 +945,8 @@ console.log("[API BASE]", API);
   }
 
   const paramLabel = (i) => labelForKind(paramKinds?.[i], i);
+  const hasTemplateParams = typeof expectedParams === "number" && expectedParams > 0;
+  const templatePreview = renderTemplatePreview(templateBodyText, paramValues);
 
   return (
     <div style={{ width: "100%", minHeight: "100vh", background: C.bg }}>
@@ -1045,7 +1109,6 @@ console.log("[API BASE]", API);
             </div>
 
             <div style={{ marginLeft: "auto", display: "flex", gap: 8, alignItems: "center" }}>
-              {/* Automation sends toggle */}
               <button
                 onClick={() => setShowAutoLog((s) => !s)}
                 style={{
@@ -1076,7 +1139,7 @@ console.log("[API BASE]", API);
             </div>
           </div>
 
-          {/* Template controls (only when needed) */}
+          {/* Template controls */}
           {!gate.inside24h && (
             <div
               style={{
@@ -1089,106 +1152,188 @@ console.log("[API BASE]", API);
                 background: C.panel,
               }}
             >
-              <span style={{ color: C.sub, fontSize: 12 }}>Template</span>
-              <select
-                value={`${templateName}|${templateLangUI}`}
-                onChange={(e) => {
-                  const [n, l] = e.target.value.split("|");
-                  setTemplateName(n);
-                  setTemplateLangUI(l);
-                  setTimeout(() => refreshWindow(true), 0);
-                }}
+              <div style={{ width: "100%", display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+                <span style={{ color: C.sub, fontSize: 12, fontWeight: 700 }}>Approved template required</span>
+
+                <select
+                  value={`${templateName}|${templateLangUI}`}
+                  onChange={(e) => {
+                    const [n, l] = e.target.value.split("|");
+                    setTemplateName(n);
+                    setTemplateLangUI(l);
+                    setTimeout(() => refreshWindow(true), 0);
+                  }}
+                  style={{
+                    background: C.bg,
+                    color: C.text,
+                    border: `1px solid ${C.border}`,
+                    borderRadius: 10,
+                    padding: "8px 10px",
+                    fontSize: 13,
+                    minWidth: 240,
+                  }}
+                  disabled={templatesLoading}
+                >
+                  {!templates.find((t) => t.name === templateName && t.languageUI === templateLangUI) && templateName && (
+                    <option value={`${templateName}|${templateLangUI}`}>{templateName} ({templateLangUI})</option>
+                  )}
+                  {templates.map((t) => (
+                    <option key={`${t.name}-${t.languageUI}`} value={`${t.name}|${t.languageUI}`}>
+                      {t.name} ({t.languageUI}) {t.status === "APPROVED" ? "✓" : "•"}
+                    </option>
+                  ))}
+                </select>
+
+                <div style={{ marginLeft: "auto", display: "flex", gap: 8 }}>
+                  <button onClick={autofillParams} style={btn("ghost")} title="Autofill common fields" disabled={!hasTemplateParams}>
+                    Autofill
+                  </button>
+                  <button
+                    onClick={() => setParamValues(Array.from({ length: expectedParams || 0 }, () => ""))}
+                    style={btn("outline")}
+                    title="Clear params"
+                    disabled={!hasTemplateParams}
+                  >
+                    Clear
+                  </button>
+                </div>
+              </div>
+
+              <div
                 style={{
-                  background: C.bg,
-                  color: C.text,
+                  width: "100%",
+                  background: C.soft,
                   border: `1px solid ${C.border}`,
                   borderRadius: 10,
-                  padding: "6px 8px",
-                  fontSize: 13,
+                  padding: "10px 12px",
+                  marginTop: 4,
                 }}
               >
-                {!templates.find((t) => t.name === templateName && t.languageUI === templateLangUI) && templateName && (
-                  <option value={`${templateName}|${templateLangUI}`}>{templateName} ({templateLangUI})</option>
-                )}
-                {templates.map((t) => (
-                  <option key={`${t.name}-${t.languageUI}`} value={`${t.name}|${t.languageUI}`}>
-                    {t.name} ({t.languageUI}) {t.status === "APPROVED" ? "✓" : "•"}
-                  </option>
-                ))}
-              </select>
-
-              <div style={{ marginLeft: "auto", display: "flex", gap: 8 }}>
-                <button onClick={autofillParams} style={btn("ghost")} title="Autofill common fields">
-                  Autofill
-                </button>
-                <button
-                  onClick={() => setParamValues(Array.from({ length: expectedParams || 0 }, () => ""))}
-                  style={btn("outline")}
-                  title="Clear params"
-                >
-                  Clear
-                </button>
+                <div style={{ color: C.text, fontSize: 13, fontWeight: 800, marginBottom: 4 }}>
+                  How sending works outside 24 hours
+                </div>
+                <div style={{ color: C.sub, fontSize: 12, lineHeight: 1.4 }}>
+                  Pick an approved template, fill in any required placeholders below, then send. The message box at the bottom is optional and only helps with autofill or notes in your preview.
+                </div>
               </div>
+
+              {templatesLoading && (
+                <div style={{ width: "100%", color: C.sub, fontSize: 12 }}>Loading templates…</div>
+              )}
+
+              {!!templatesError && (
+                <div style={{ width: "100%", color: C.danger, fontSize: 12 }}>{templatesError}</div>
+              )}
+
+              {!templatesLoading && !templates.length && (
+                <div style={{ width: "100%", color: C.sub, fontSize: 12 }}>
+                  No templates available yet. Create and approve a WhatsApp template in Meta first.
+                </div>
+              )}
+
+              {!gate.templateApproved && templateName && (
+                <div style={{ width: "100%", color: C.danger, fontSize: 12, fontWeight: 700 }}>
+                  This selected template is not approved right now for sending outside the 24-hour window.
+                </div>
+              )}
+
+              {templateInfoLoading && (
+                <div style={{ width: "100%", color: C.sub, fontSize: 12 }}>Loading template fields…</div>
+              )}
+
+              {!!templateInfoError && (
+                <div style={{ width: "100%", color: C.danger, fontSize: 12 }}>{templateInfoError}</div>
+              )}
 
               {!!templateBodyText && (
                 <div
                   style={{
                     width: "100%",
-                    color: C.sub,
-                    fontSize: 12,
-                    lineHeight: 1.3,
+                    background: C.bg,
+                    border: `1px solid ${C.border}`,
+                    borderRadius: 10,
+                    padding: "10px 12px",
                     marginTop: 4,
-                    whiteSpace: "nowrap",
-                    overflow: "hidden",
-                    textOverflow: "ellipsis",
                   }}
-                  title={templateBodyText}
                 >
-                  {templateBodyText}
+                  <div style={{ color: C.sub, fontSize: 11, marginBottom: 6, fontWeight: 700 }}>Template body</div>
+                  <div style={{ color: C.text, fontSize: 13, lineHeight: 1.4, whiteSpace: "pre-wrap" }}>
+                    {templateBodyText}
+                  </div>
                 </div>
               )}
 
-              {typeof expectedParams === "number" && expectedParams > 0 && (
-                <div
-                  style={{
-                    display: "grid",
-                    gridTemplateColumns: "repeat(auto-fit,minmax(210px,1fr))",
-                    gap: 8,
-                    width: "100%",
-                    marginTop: 8,
-                  }}
-                >
-                  {Array.from({ length: expectedParams }).map((_, i) => (
-                    <div key={i} style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-                      <label style={{ fontSize: 12, color: C.sub }}>{paramLabel(i)}</label>
-                      <input
-                        value={paramValues?.[i] ?? ""}
-                        onChange={(e) => {
-                          const v = e.target.value;
-                          setParamValues((prev) => {
-                            const next = Array.from({ length: expectedParams }, (_, idx) => prev?.[idx] ?? "");
-                            next[i] = v;
-                            return next;
-                          });
-                        }}
-                        placeholder={templateExample?.[i] ?? `value for {{${i + 1}}}`}
-                        style={{
-                          background: C.bg,
-                          color: C.text,
-                          border: `1px solid ${C.border}`,
-                          borderRadius: 10,
-                          padding: "8px 10px",
-                          fontSize: 13,
-                        }}
-                      />
+              {hasTemplateParams && (
+                <>
+                  <div style={{ width: "100%", color: C.text, fontSize: 13, fontWeight: 800, marginTop: 4 }}>
+                    Fill in the template placeholders
+                  </div>
+
+                  <div
+                    style={{
+                      display: "grid",
+                      gridTemplateColumns: "repeat(auto-fit,minmax(230px,1fr))",
+                      gap: 8,
+                      width: "100%",
+                      marginTop: 4,
+                    }}
+                  >
+                    {Array.from({ length: expectedParams }).map((_, i) => (
+                      <div key={i} style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+                        <label style={{ fontSize: 12, color: C.sub, fontWeight: 700 }}>{paramLabel(i)}</label>
+                        <input
+                          value={paramValues?.[i] ?? ""}
+                          onChange={(e) => {
+                            const v = e.target.value;
+                            setParamValues((prev) => {
+                              const next = Array.from({ length: expectedParams }, (_, idx) => prev?.[idx] ?? "");
+                              next[i] = v;
+                              return next;
+                            });
+                          }}
+                          placeholder={templateExample?.[i] ?? `value for {{${i + 1}}}`}
+                          style={{
+                            background: C.bg,
+                            color: C.text,
+                            border: `1px solid ${C.border}`,
+                            borderRadius: 10,
+                            padding: "10px 12px",
+                            fontSize: 13,
+                          }}
+                        />
+                      </div>
+                    ))}
+                  </div>
+
+                  {!!templateBodyText && (
+                    <div
+                      style={{
+                        width: "100%",
+                        background: "#15181a",
+                        border: `1px solid ${C.border}`,
+                        borderRadius: 10,
+                        padding: "10px 12px",
+                        marginTop: 4,
+                      }}
+                    >
+                      <div style={{ color: C.sub, fontSize: 11, marginBottom: 6, fontWeight: 700 }}>Live preview</div>
+                      <div style={{ color: C.text, fontSize: 13, lineHeight: 1.4, whiteSpace: "pre-wrap" }}>
+                        {templatePreview}
+                      </div>
                     </div>
-                  ))}
+                  )}
+                </>
+              )}
+
+              {!templateInfoLoading && !hasTemplateParams && !!templateName && !!templateBodyText && (
+                <div style={{ width: "100%", color: C.sub, fontSize: 12 }}>
+                  This template does not appear to require any body placeholders.
                 </div>
               )}
             </div>
           )}
 
-          {/* Automation sends panel (toggle) */}
+          {/* Automation sends panel */}
           {showAutoLog && (
             <div
               style={{
@@ -1284,7 +1429,11 @@ console.log("[API BASE]", API);
               paddingBottom: 110,
             }}
           >
-            {thread.length === 0 && <div style={{ textAlign: "center", color: C.sub, marginTop: 8 }}>No messages yet. Say hello 👋</div>}
+            {thread.length === 0 && (
+              <div style={{ textAlign: "center", color: C.sub, marginTop: 8 }}>
+                No messages yet. Say hello 👋
+              </div>
+            )}
             {thread.map((m, i) => (
               <Bubble key={i} from={m.from} text={m.text} time={m.time} />
             ))}
@@ -1316,10 +1465,10 @@ console.log("[API BASE]", API);
                     !toE164
                       ? "No WhatsApp number on this lead"
                       : gate.inside24h
-                      ? "Type a message…  (Ctrl/⌘ + Enter to send)"
-                      : typeof expectedParams === "number" && expectedParams > 0
-                      ? "Outside 24h — fill the params above and add any extra details here"
-                      : "Outside 24h — pick a template"
+                      ? "Type a message… (Ctrl/⌘ + Enter to send)"
+                      : hasTemplateParams
+                      ? "Optional notes or extra details for yourself while filling the template above"
+                      : "Outside 24h — choose an approved template above"
                   }
                   style={{
                     flex: 1,
@@ -1337,11 +1486,21 @@ console.log("[API BASE]", API);
                   maxLength={2000}
                 />
 
-                <button onClick={onDraftAI} disabled={!canSendBase} style={btn("ghost", !canSendBase)} title="Draft with AI">
+                <button
+                  onClick={onDraftAI}
+                  disabled={!canSendBase}
+                  style={btn("ghost", !canSendBase)}
+                  title="Draft with AI"
+                >
                   AI Reply
                 </button>
 
-                <button onClick={onSend} disabled={!canSendBase || loading} style={btn("primary", !canSendBase || loading)} title="Send (Ctrl/⌘ + Enter)">
+                <button
+                  onClick={onSend}
+                  disabled={!canSendBase || loading || (!gate.inside24h && !templateName)}
+                  style={btn("primary", !canSendBase || loading || (!gate.inside24h && !templateName))}
+                  title="Send (Ctrl/⌘ + Enter)"
+                >
                   {loading ? "Sending…" : "Send"}
                 </button>
               </div>
@@ -1424,7 +1583,6 @@ function btn(kind, disabled = false) {
       opacity: disabled ? 0.7 : 1,
     };
   }
-  // ghost
   return {
     ...base,
     background: "#1e2a30",
