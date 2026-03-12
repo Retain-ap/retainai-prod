@@ -2125,7 +2125,113 @@ def within_24h(user_email: str, lead_id: str) -> bool:
         return False
     return (datetime.datetime.utcnow() - last_dt) <= datetime.timedelta(hours=24)
 
+@app.route("/api/generate-message", methods=["POST"])
+def generate_message():
+    data = request.get_json(silent=True) or {}
 
+    lead = data.get("lead") or {}
+    last_message = str(data.get("last_message") or "").strip()
+    user_business = str(data.get("user_business") or "business").strip()
+    user_name = str(data.get("user_name") or "").strip()
+
+    lead_name = str(lead.get("name") or "").strip()
+    lead_tags = lead.get("tags") or []
+    if not isinstance(lead_tags, list):
+        lead_tags = []
+    lead_notes = str(lead.get("notes") or "-").strip()
+
+    if not OPENROUTER_API_KEY:
+        return jsonify({"error": "OPENROUTER_API_KEY is missing on the backend."}), 500
+
+    prompt = (
+        f"You are a professional, emotionally intelligent assistant for a {user_business} business. "
+        f"Given the context below, write ONLY a direct, warm, natural message that could be sent in chat or email, "
+        f"with no greeting lines, subjects, or sign-offs. Only output the message body.\n\n"
+        f"Lead Name: {lead_name or 'Client'}\n"
+        f"User Name: {user_name or 'Business Owner'}\n"
+        f"Tags: {', '.join([str(t) for t in lead_tags]) or '-'}\n"
+        f"Notes: {lead_notes or '-'}\n"
+        f"Most recent message from the lead: \"{last_message or '-'}\"\n\n"
+        "Your reply should be concise, helpful, and conversational. "
+        "Do NOT include subject lines, greetings, or closings. "
+        "Reply as if you were the business owner responding to the client."
+    )
+
+    try:
+        resp = pyrequests.post(
+            "https://openrouter.ai/api/v1/chat/completions",
+            headers={
+                "Authorization": f"Bearer {OPENROUTER_API_KEY}",
+                "Content-Type": "application/json",
+            },
+            json={
+                "model": "openai/gpt-4o",
+                "messages": [
+                    {
+                        "role": "system",
+                        "content": "You are a CRM messaging assistant. Output only the message body."
+                    },
+                    {
+                        "role": "user",
+                        "content": prompt
+                    }
+                ],
+                "max_tokens": 200,
+                "temperature": 0.7
+            },
+            timeout=30
+        )
+
+        # Handle non-200 upstream cleanly
+        if not resp.ok:
+            try:
+                err_json = resp.json()
+            except Exception:
+                err_json = {"raw": resp.text}
+
+            try:
+                app.logger.error("[AI GENERATE] OpenRouter error %s %s", resp.status_code, err_json)
+            except Exception:
+                pass
+
+            return jsonify({
+                "error": "OpenRouter request failed.",
+                "status": resp.status_code,
+                "details": err_json
+            }), 502
+
+        try:
+            result = resp.json()
+        except Exception:
+            try:
+                app.logger.error("[AI GENERATE] Non-JSON response: %s", resp.text[:500])
+            except Exception:
+                pass
+            return jsonify({"error": "AI provider returned invalid JSON."}), 502
+
+        choices = result.get("choices") or []
+        if choices and choices[0].get("message", {}).get("content"):
+            reply = choices[0]["message"]["content"].strip()
+            return jsonify({"reply": reply}), 200
+
+        return jsonify({
+            "error": (result.get("error") or {}).get("message") or "AI response was incomplete."
+        }), 500
+
+    except pyrequests.RequestException as ex:
+        try:
+            app.logger.error("[AI GENERATE] Request exception: %s", str(ex))
+        except Exception:
+            pass
+        return jsonify({"error": f"Failed to contact AI provider: {str(ex)}"}), 502
+
+    except Exception as ex:
+        try:
+            app.logger.exception("[AI GENERATE] Unexpected error: %s", str(ex))
+        except Exception:
+            pass
+        return jsonify({"error": "Failed to get AI response"}), 500
+        
 def wa_send_text(to_number: str, body: str):
     to = wa_norm_number(to_number)
     token, phone_id = wa_env()
