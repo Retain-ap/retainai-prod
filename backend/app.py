@@ -3033,7 +3033,7 @@ def generate_prompt():
         except Exception:
             pass
         return jsonify({"error": "Failed to get AI response"}), 500
-        
+
 
 @app.post("/api/ai-prompt")
 def ai_prompt():
@@ -3097,7 +3097,196 @@ def ai_prompt():
 
     return jsonify({"prompt": _clean_ai_text(txt), "meta": meta}), 200
 
+from sendgrid.helpers.mail import Email
 
+@app.route("/api/send-ai-message", methods=["POST"])
+def send_ai_message():
+    """
+    Sends the AI-written message via SendGrid dynamic templates.
+
+    From:     "<Business Name>" <noreply@retainai.ca>
+    Reply-To: owner (user) email
+    Subject:  EXACTLY what the caller provides
+    Body:     EXACT AI text provided in `message` (mirrored to several keys)
+    """
+    try:
+        data = request.get_json(force=True) or {}
+    except Exception:
+        return jsonify({"ok": False, "error": "Invalid JSON body"}), 400
+
+    # recipient
+    lead = data.get("lead") or {}
+    to_email = (
+        data.get("to")
+        or data.get("email")
+        or data.get("lead_email")
+        or data.get("leadEmail")
+        or lead.get("email")
+        or ""
+    )
+    to_email = str(to_email).strip().lower()
+
+    if not to_email:
+        return jsonify({"ok": False, "error": "Recipient 'to' is required"}), 400
+
+    # owner / user
+    owner_email = str(data.get("user_email") or request.headers.get("X-User-Email") or "").strip().lower()
+
+    # infer owner from leads if missing
+    if not owner_email:
+        try:
+            lbsu = load_leads() or {}
+            if isinstance(lbsu, dict):
+                for owner, arr in lbsu.items():
+                    for ld in (arr or []):
+                        if str(ld.get("email") or "").strip().lower() == to_email:
+                            owner_email = str(owner or "").strip().lower()
+                            break
+                    if owner_email:
+                        break
+        except Exception as e:
+            try:
+                app.logger.warning("[SEND AI MESSAGE] owner inference failed: %s", e)
+            except Exception:
+                pass
+
+    # user profile
+    try:
+        users = load_users() or {}
+    except Exception:
+        users = {}
+
+    user_profile = users.get(owner_email, {}) if isinstance(users, dict) and owner_email else {}
+    if not isinstance(user_profile, dict):
+        user_profile = {}
+
+    # display name / business name
+    business_name = (
+        str(data.get("businessName") or data.get("business") or data.get("user_business") or "").strip()
+        or str(user_profile.get("business") or "").strip()
+        or str(user_profile.get("businessType") or "").strip()
+        or "Your Business"
+    )
+    user_name = str(data.get("userName") or data.get("user_name") or user_profile.get("name") or "").strip()
+    lead_name = str(data.get("leadName") or lead.get("name") or "").strip()
+
+    # prompt type -> SendGrid template
+    prompt_type = str(data.get("promptType") or data.get("type") or "reengage").strip().lower()
+
+    TEMPLATE_MAP = {
+        "followup": SG_TEMPLATE_FOLLOWUP_LEAD,
+        "reengage": SG_TEMPLATE_REENGAGE_LEAD,
+        "apology": SG_TEMPLATE_APOLOGY_LEAD,
+        "upsell": SG_TEMPLATE_UPSELL_LEAD,
+        "birthday": SG_TEMPLATE_BIRTHDAY,
+        "appointment": SG_TEMPLATE_APPT_CONFIRM,
+    }
+    template_id = TEMPLATE_MAP.get(prompt_type, SG_TEMPLATE_FOLLOWUP_LEAD)
+
+    if not template_id:
+        return jsonify({"ok": False, "error": f"No SendGrid template configured for prompt type '{prompt_type}'"}), 500
+
+    # AI body text
+    model_text = (
+        data.get("message")
+        or data.get("prompt")
+        or data.get("ai_text")
+        or data.get("body")
+        or data.get("text")
+        or ""
+    )
+    model_text = str(model_text).strip()
+
+    if not model_text:
+        return jsonify({"ok": False, "error": "No AI text provided (pass it in 'message')."}), 422
+
+    # subject = exactly what caller sends
+    subject = str(
+        data.get("subject")
+        or data.get("emailSubject")
+        or data.get("subjectLine")
+        or "Quick note"
+    ).strip()
+
+    # optional extras
+    tags_val = data.get("tags") or lead.get("tags") or []
+    if isinstance(tags_val, list):
+        tags = ", ".join([str(t) for t in tags_val if str(t).strip()])
+    else:
+        tags = str(tags_val or "").strip()
+
+    notes = str(data.get("notes") or lead.get("notes") or "").strip()
+    booking_link = str(
+        data.get("booking_link")
+        or data.get("bookingLink")
+        or user_profile.get("booking_link")
+        or ""
+    ).strip()
+
+    dynamic_data = {
+        "subject": subject,
+        "lead_first_name": (lead_name.split(" ")[0] if lead_name else ""),
+        "lead_name": lead_name,
+        "business_name": business_name,
+        "user_name": user_name,
+        "user_email": owner_email,
+        "tags": tags,
+        "notes": notes,
+        "booking_link": booking_link,
+        # expose AI body under multiple keys so templates remain flexible
+        "ai_text": model_text,
+        "message": model_text,
+        "content": model_text,
+        "text": model_text,
+        "body": model_text,
+        "prompt": model_text,
+    }
+
+    try:
+        ok = send_email_with_template(
+            to_email=to_email,
+            template_id=template_id,
+            dynamic_data=dynamic_data,
+            subject=subject,
+            from_email=Email(SENDER_EMAIL, business_name),
+            reply_to_email=owner_email or None,
+        )
+    except Exception as e:
+        try:
+            app.logger.exception("[SEND AI MESSAGE] send_email_with_template failed: %s", e)
+        except Exception:
+            pass
+        return jsonify({
+            "ok": False,
+            "error": "Failed to send AI message",
+            "details": str(e),
+        }), 502
+
+    if not ok:
+        return jsonify({
+            "ok": False,
+            "sent": False,
+            "error": "SendGrid send failed",
+            "template_id": template_id,
+            "subject": subject,
+            "to": to_email,
+            "from_display": business_name,
+            "from_email": SENDER_EMAIL,
+            "reply_to": owner_email or None,
+        }), 502
+
+    return jsonify({
+        "ok": True,
+        "sent": True,
+        "template_id": template_id,
+        "subject": subject,
+        "to": to_email,
+        "from_display": business_name,
+        "from_email": SENDER_EMAIL,
+        "reply_to": owner_email or None,
+        "used_text": model_text,
+    }), 200
+    
 # =================================================================
 # AUTOMATIONS (INLINE) — Blueprint + Engine (prod-ready routes)
 # =================================================================
