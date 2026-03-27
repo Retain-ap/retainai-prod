@@ -2915,115 +2915,125 @@ def whatsapp_webhook():
 # ============================================================
 # AI: prompt endpoints
 # ============================================================
-@app.route("/api/generate_prompt", methods=["POST", "OPTIONS"])
-def generate_prompt_compat():
-    if request.method == "OPTIONS":
-        return ("", 204)
+@app.route("/api/generate_prompt", methods=["POST"])
+def generate_prompt():
+    try:
+        data = request.get_json(force=True) or {}
+    except Exception:
+        return jsonify({"error": "Invalid JSON body"}), 400
 
-    merged = {}
-    merged.update(request.args.to_dict(flat=True) if request.args else {})
-    merged.update(request.form.to_dict(flat=True) if request.form else {})
-    j = request.get_json(silent=True)
-    if isinstance(j, dict):
-        merged.update(j)
+    lead = data.get("lead") or {}
+    lead_name = str(data.get("leadName") or lead.get("name") or "").strip()
+    business_name = str(
+        data.get("businessName") or
+        data.get("business") or
+        data.get("user_business") or
+        ""
+    ).strip()
+    prompt_type = str(data.get("promptType") or "").strip()
+    instruction = str(data.get("instruction") or "").strip()
+    user_name = str(data.get("userName") or "").strip()
 
-    user_email = (
-        merged.get("user_email")
-        or merged.get("email")
-        or merged.get("userEmail")
-        or request.headers.get("X-User-Email")
-        or ""
-    ).strip().lower()
+    tags_val = data.get("tags") or lead.get("tags") or []
+    if isinstance(tags_val, list):
+        tags = ", ".join([str(t) for t in tags_val if str(t).strip()])
+    else:
+        tags = str(tags_val or "").strip()
 
-    lead_id = (
-        merged.get("lead_id")
-        or merged.get("leadId")
-        or merged.get("id")
-        or (merged.get("lead", {}) or {}).get("id")
-        or ""
-    )
-    lead_id = str(lead_id).strip()
-
-    lead = merged.get("lead") if isinstance(merged.get("lead"), dict) else {}
-    notes = (merged.get("notes") or lead.get("notes") or "").strip()
-    tags = merged.get("tags") or lead.get("tags") or []
-    if isinstance(tags, str):
-        tags = [t.strip() for t in tags.split(",") if t.strip()]
-    if not isinstance(tags, list):
-        tags = []
+    notes = str(data.get("notes") or lead.get("notes") or "").strip()
+    last_message = str(data.get("last_message") or data.get("lastMessage") or "").strip()
 
     if not OPENROUTER_API_KEY:
-        return jsonify({"error": "OPENROUTER_API_KEY is not configured"}), 500
+        return jsonify({"error": "OPENROUTER_API_KEY is missing on the backend."}), 500
 
-    if user_email and lead_id:
-        users = load_users() or {}
-        leads_by_user = load_leads() or {}
-        chats_by_user = load_chats() or {}
-
-        user = users.get(user_email, {}) if isinstance(users, dict) else {}
-        user_name = (user.get("name") or "").strip()
-        business  = (user.get("business") or user.get("businessType") or "business").strip()
-
-        found_lead = None
-        for ld in (leads_by_user.get(user_email, []) or []):
-            if str(ld.get("id")) == str(lead_id):
-                found_lead = ld
-                break
-
-        lead_name = ((found_lead or {}).get("name") or "")
-        lead_tags = ", ".join(((found_lead or {}).get("tags") or []))
-        lead_notes = ((found_lead or {}).get("notes") or "-")
-
-        last_inbound = ""
-        thread = (chats_by_user.get(user_email, {}) or {}).get(str(lead_id), []) or []
-        for m in reversed(thread):
-            if m.get("from") == "lead":
-                t = m.get("text")
-                if isinstance(t, str) and t.strip():
-                    last_inbound = t.strip()
-                    break
-
-        sys_msg = "You are a CRM messaging assistant. Output only the message body (no greeting line, no signature)."
-        user_msg = (
-            f"You are a professional, emotionally intelligent assistant for a {business} business.\n"
-            f"Write ONLY the message body (no greeting line, no sign-off). 1-3 sentences.\n\n"
-            f"Lead Name: {lead_name}\n"
-            f"Tags: {lead_tags}\n"
-            f"Notes: {lead_notes}\n"
-            f"Most recent message from lead: \"{last_inbound}\"\n"
-            f"Reply as if you were {user_name or 'the owner'}."
-        )
-
-        ok, txt, meta = _complete_openrouter_prompt(
-            [{"role": "system", "content": sys_msg}, {"role": "user", "content": user_msg}],
-            max_tokens=220,
-            temperature=0.7,
-            timeout=30,
-        )
-        if not ok or not txt:
-            return jsonify({"error": "ai_failed", "detail": meta}), 502
-
-        return jsonify({"prompt": txt, "meta": meta, "used": "lead_context"}), 200
-
-    sys_msg = "You are a CRM messaging assistant. Output only the message body (no greeting line, no signature)."
-    user_msg = (
-        "Write a short warm follow-up message to a lead. "
-        "No greeting line, no sign-off. 1-2 sentences.\n\n"
-        f"Tags: {', '.join([str(t) for t in tags])}\n"
+    prompt = (
+        f"You are an emotionally intelligent CRM assistant for a business named '{business_name or 'this business'}'. "
+        f"Write a message that matches the prompt type and instructions below. "
+        f"ONLY output the message body (no greeting, no subject, no signature).\n"
+        f"Recipient: {lead_name or 'Client'}\n"
+        f"Business owner: {user_name or 'Business Owner'}\n"
+        f"Tags: {tags or '-'}\n"
         f"Notes: {notes or '-'}\n"
+        f"Prompt Type: {prompt_type or '-'}\n"
+        f"Instruction: {instruction or '-'}\n"
+        f"Most recent inbound: \"{last_message or '-'}\"\n"
+        "No sign-offs; one concise, helpful message."
     )
 
-    ok, txt, meta = _complete_openrouter_prompt(
-        [{"role": "system", "content": sys_msg}, {"role": "user", "content": user_msg}],
-        max_tokens=160,
-        temperature=0.7,
-        timeout=30,
-    )
-    if not ok or not txt:
-        return jsonify({"error": "ai_failed", "detail": meta}), 502
+    try:
+        resp = pyrequests.post(
+            "https://openrouter.ai/api/v1/chat/completions",
+            headers={
+                "Authorization": f"Bearer {OPENROUTER_API_KEY}",
+                "Content-Type": "application/json",
+            },
+            json={
+                "model": "openai/gpt-4o",
+                "messages": [
+                    {
+                        "role": "system",
+                        "content": "You are a CRM messaging assistant. Output only the message body."
+                    },
+                    {
+                        "role": "user",
+                        "content": prompt
+                    },
+                ],
+                "max_tokens": 150,
+                "temperature": 0.7,
+            },
+            timeout=30
+        )
 
-    return jsonify({"prompt": txt, "meta": meta, "used": "fallback"}), 200
+        if not resp.ok:
+            try:
+                err_json = resp.json()
+            except Exception:
+                err_json = {"raw": resp.text}
 
+            try:
+                app.logger.error("[AI GENERATE PROMPT] OpenRouter error %s %s", resp.status_code, err_json)
+            except Exception:
+                pass
+
+            return jsonify({
+                "error": "OpenRouter request failed.",
+                "status": resp.status_code,
+                "details": err_json
+            }), 502
+
+        try:
+            j = resp.json()
+        except Exception:
+            try:
+                app.logger.error("[AI GENERATE PROMPT] Non-JSON response: %s", resp.text[:500])
+            except Exception:
+                pass
+            return jsonify({"error": "AI provider returned invalid JSON."}), 502
+
+        choices = j.get("choices") or []
+        if choices and choices[0].get("message", {}).get("content"):
+            msg = choices[0]["message"]["content"].strip()
+            return jsonify({"prompt": msg}), 200
+
+        return jsonify({
+            "error": (j.get("error") or {}).get("message") or "AI response was empty"
+        }), 502
+
+    except pyrequests.RequestException as ex:
+        try:
+            app.logger.error("[AI GENERATE PROMPT] Request exception: %s", str(ex))
+        except Exception:
+            pass
+        return jsonify({"error": f"Failed to contact AI provider: {str(ex)}"}), 502
+
+    except Exception as ex:
+        try:
+            app.logger.exception("[AI GENERATE PROMPT] Unexpected error: %s", str(ex))
+        except Exception:
+            pass
+        return jsonify({"error": "Failed to get AI response"}), 500
+        
 
 @app.post("/api/ai-prompt")
 def ai_prompt():
