@@ -401,6 +401,22 @@ def add_notification(
     save_notifications(all_notes)
     return note
 
+def _require_user_email_arg():
+    ue = request.args.get("user_email")
+    return _norm_email(ue) if ue else None
+
+
+def _connected_acct_for(email: str):
+    users = load_users() or {}
+    if not isinstance(users, dict):
+        return (None, None, None, None)
+
+    role, org_email, org_owner, _subject = _resolve_org_and_role(email, users)
+    if not role:
+        return (None, None, None, None)
+
+    return (role, org_email, org_owner, org_owner.get("stripe_account_id"))
+
 # ----------------------------
 # /api/profile (SINGLE SOURCE OF TRUTH) — FIXED (no duplicates)
 # ----------------------------
@@ -1194,6 +1210,9 @@ def get_stripe_connect_url():
     if not user_email:
         return jsonify({"error": "Missing user_email"}), 400
 
+    if not STRIPE_SECRET_KEY:
+        return jsonify({"error": "STRIPE_SECRET_KEY is missing"}), 500
+
     users = load_users() or {}
     if not isinstance(users, dict):
         return jsonify({"error": "storage_not_ready"}), 500
@@ -1204,23 +1223,41 @@ def get_stripe_connect_url():
     if role != "owner":
         return jsonify({"error": "forbidden"}), 403
 
-    acct = stripe.Account.create(type="express", email=org_email)
+    try:
+        acct_id = org_owner.get("stripe_account_id")
+        acct = None
 
-    org_owner = users.get(org_email, {}) or {}
-    org_owner["stripe_account_id"] = acct.id
-    org_owner["stripe_connected"] = True
-    users[org_email] = org_owner
-    save_users(users)
+        if acct_id:
+            try:
+                acct = stripe.Account.retrieve(acct_id)
+            except Exception:
+                acct = None
 
-    return_url  = f"{FRONTEND_URL}/app?stripe_connected=1"
-    refresh_url = f"{FRONTEND_URL}/app?stripe_refresh=1"
-    link = stripe.AccountLink.create(
-        account=acct.id,
-        refresh_url=refresh_url,
-        return_url=return_url,
-        type="account_onboarding",
-    )
-    return jsonify({"url": link.url}), 200
+        if not acct:
+            acct = stripe.Account.create(type="express", email=org_email)
+            org_owner["stripe_account_id"] = acct.id
+            org_owner["stripe_connected"] = True
+            users[org_email] = org_owner
+            save_users(users)
+
+        return_url = f"{FRONTEND_URL}/app/settings?stripe_connected=1"
+        refresh_url = f"{FRONTEND_URL}/app/settings?stripe_refresh=1"
+
+        link = stripe.AccountLink.create(
+            account=acct.id,
+            refresh_url=refresh_url,
+            return_url=return_url,
+            type="account_onboarding",
+        )
+
+        return jsonify({"url": link.url}), 200
+
+    except Exception as e:
+        try:
+            app.logger.exception("[STRIPE CONNECT URL] %s", e)
+        except Exception:
+            pass
+        return jsonify({"error": str(e)}), 500
 
 @app.route("/api/stripe/oauth/connect", methods=["GET"])
 def stripe_oauth_connect():
@@ -1228,6 +1265,9 @@ def stripe_oauth_connect():
     if not user_email:
         return jsonify({"error": "Missing user_email"}), 400
 
+    if not STRIPE_CONNECT_CLIENT_ID or not STRIPE_REDIRECT_URI:
+        return jsonify({"error": "Stripe Connect not configured"}), 500
+
     users = load_users() or {}
     if not isinstance(users, dict):
         return jsonify({"error": "storage_not_ready"}), 500
@@ -1237,8 +1277,6 @@ def stripe_oauth_connect():
         return jsonify({"error": "User not found"}), 404
     if role != "owner":
         return jsonify({"error": "forbidden"}), 403
-    if not STRIPE_CONNECT_CLIENT_ID or not STRIPE_REDIRECT_URI:
-        return jsonify({"error": "Stripe Connect not configured"}), 500
 
     oauth_url = (
         "https://connect.stripe.com/oauth/authorize"
@@ -1248,9 +1286,10 @@ def stripe_oauth_connect():
         f"&redirect_uri={urllib.parse.quote_plus(STRIPE_REDIRECT_URI)}"
         f"&state={org_email}"
     )
+
     return jsonify({"url": oauth_url}), 200
 
-@app.route("/api/stripe/oauth/callback", methods=["GET"])
+@@app.route("/api/stripe/oauth/callback", methods=["GET"])
 def stripe_oauth_callback():
     error = request.args.get("error")
     error_desc = request.args.get("error_description", "")
@@ -1258,30 +1297,35 @@ def stripe_oauth_callback():
 
     if error:
         msg = urllib.parse.quote_plus(error_desc or error)
-        return redirect(f"{FRONTEND_URL}/app?stripe_error=1&stripe_error_desc={msg}")
+        return redirect(f"{FRONTEND_URL}/app/settings?stripe_error=1&stripe_error_desc={msg}")
 
     code = request.args.get("code")
     if not code or not user_email:
-        return redirect(f"{FRONTEND_URL}/app?stripe_error=1&stripe_error_desc=missing_code_or_state")
+        return redirect(f"{FRONTEND_URL}/app/settings?stripe_error=1&stripe_error_desc=missing_code_or_state")
 
-    resp = stripe.OAuth.token(grant_type="authorization_code", code=code)
-    stripe_user_id = resp["stripe_user_id"]
+    try:
+        resp = stripe.OAuth.token(grant_type="authorization_code", code=code)
+        stripe_user_id = resp["stripe_user_id"]
 
-    users = load_users() or {}
-    if not isinstance(users, dict):
-        return redirect(f"{FRONTEND_URL}/app?stripe_error=1&stripe_error_desc=storage_not_ready")
+        users = load_users() or {}
+        if not isinstance(users, dict):
+            return redirect(f"{FRONTEND_URL}/app/settings?stripe_error=1&stripe_error_desc=storage_not_ready")
 
-    role, org_email, org_owner, _ = _resolve_org_and_role(user_email, users)
-    if not role:
-        return redirect(f"{FRONTEND_URL}/app?stripe_error=1&stripe_error_desc=user_not_found")
+        role, org_email, org_owner, _ = _resolve_org_and_role(user_email, users)
+        if not role:
+            return redirect(f"{FRONTEND_URL}/app/settings?stripe_error=1&stripe_error_desc=user_not_found")
 
-    org = users.get(org_email, {}) or {}
-    org["stripe_account_id"] = stripe_user_id
-    org["stripe_connected"] = True
-    users[org_email] = org
-    save_users(users)
+        org = users.get(org_email, {}) or {}
+        org["stripe_account_id"] = stripe_user_id
+        org["stripe_connected"] = True
+        users[org_email] = org
+        save_users(users)
 
-    return redirect(f"{FRONTEND_URL}/app?stripe_connected=1")
+        return redirect(f"{FRONTEND_URL}/app/settings?stripe_connected=1")
+
+    except Exception as e:
+        msg = urllib.parse.quote_plus(str(e))
+        return redirect(f"{FRONTEND_URL}/app/settings?stripe_error=1&stripe_error_desc={msg}")
 
 @app.route("/api/stripe/dashboard-link", methods=["GET"])
 def stripe_dashboard_link():
@@ -1297,12 +1341,16 @@ def stripe_dashboard_link():
     if not acct_id:
         return jsonify({"error": "Stripe account not connected"}), 400
 
-    acct = stripe.Account.retrieve(acct_id)
-    if getattr(acct, "type", None) in ("express", "custom"):
-        link = stripe.Account.create_login_link(acct_id)
-        return jsonify({"url": link.url}), 200
+    try:
+        acct = stripe.Account.retrieve(acct_id)
+        if getattr(acct, "type", None) in ("express", "custom"):
+            link = stripe.Account.create_login_link(acct_id)
+            return jsonify({"url": link.url}), 200
 
-    return jsonify({"url": f"https://dashboard.stripe.com/{acct_id}"}), 200
+        return jsonify({"url": f"https://dashboard.stripe.com/{acct_id}"}), 200
+
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
 
 @app.route("/api/stripe/account", methods=["GET"])
 def get_stripe_account():
@@ -1524,17 +1572,25 @@ def stripe_disconnect():
         return jsonify({"error": "No Stripe account to disconnect"}), 400
 
     try:
-        stripe.OAuth.deauthorize(client_id=STRIPE_CONNECT_CLIENT_ID, stripe_user_id=acct_id)
+        if STRIPE_CONNECT_CLIENT_ID:
+            try:
+                stripe.OAuth.deauthorize(
+                    client_id=STRIPE_CONNECT_CLIENT_ID,
+                    stripe_user_id=acct_id
+                )
+            except Exception as e:
+                app.logger.warning("[STRIPE DISCONNECT] deauth warning: %s", e)
+
+        org_owner = users.get(org_email, {}) or {}
+        org_owner.pop("stripe_account_id", None)
+        org_owner["stripe_connected"] = False
+        users[org_email] = org_owner
+        save_users(users)
+
+        return jsonify({"ok": True}), 200
+
     except Exception as e:
-        app.logger.warning(f"Stripe deauth failed for {acct_id}: {e}")
-
-    org_owner = users.get(org_email, {}) or {}
-    org_owner.pop("stripe_account_id", None)
-    org_owner["stripe_connected"] = False
-    users[org_email] = org_owner
-    save_users(users)
-    return ("", 204)
-
+        return jsonify({"error": str(e)}), 500
 
 # ----------------------------
 # Auth & Google OAuth (trial gated)
