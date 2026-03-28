@@ -1289,7 +1289,7 @@ def stripe_oauth_connect():
 
     return jsonify({"url": oauth_url}), 200
 
-@@app.route("/api/stripe/oauth/callback", methods=["GET"])
+@app.route("/api/stripe/oauth/callback", methods=["GET"])
 def stripe_oauth_callback():
     error = request.args.get("error")
     error_desc = request.args.get("error_description", "")
