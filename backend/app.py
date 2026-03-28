@@ -363,6 +363,43 @@ def _upsert_user(email: str, patch: dict) -> dict:
             pass
     return merged
 
+def add_notification(
+    user_email: str,
+    subject: str,
+    message: str = "",
+    channel: str = "app",
+    lead_email: str = "",
+    extra: dict | None = None,
+):
+    user_email = (user_email or "").strip().lower()
+    if not user_email:
+        return None
+
+    all_notes = load_notifications() or {}
+    if not isinstance(all_notes, dict):
+        all_notes = {}
+
+    user_notes = all_notes.get(user_email, []) or []
+    if not isinstance(user_notes, list):
+        user_notes = []
+
+    note = {
+        "id": f"note_{uuid4().hex[:10]}",
+        "subject": subject or "Notification",
+        "message": message or "",
+        "timestamp": datetime.datetime.utcnow().isoformat() + "Z",
+        "read": False,
+        "channel": channel or "app",
+        "lead_email": lead_email or "",
+    }
+
+    if isinstance(extra, dict):
+        note.update(extra)
+
+    user_notes.insert(0, note)
+    all_notes[user_email] = user_notes
+    save_notifications(all_notes)
+    return note
 
 # ----------------------------
 # /api/profile (SINGLE SOURCE OF TRUTH) — FIXED (no duplicates)
@@ -880,6 +917,101 @@ def api_save_leads():
         return jsonify({"ok": True, "email": email, "count": len(leads)}), 200
     except Exception as e:
         return jsonify({"ok": False, "error": str(e)[:300]}), 500
+
+# Notifications
+
+@app.route("/api/notifications/<path:user_email>", methods=["GET"])
+def get_notifications(user_email):
+    user_email = (user_email or "").strip().lower()
+
+    try:
+        all_notes = load_notifications() or {}
+        if not isinstance(all_notes, dict):
+            all_notes = {}
+    except Exception as e:
+        try:
+            app.logger.warning("[NOTIFICATIONS] load failed for %s: %s", user_email, e)
+        except Exception:
+            pass
+        return jsonify({"notifications": []}), 200
+
+    notes = all_notes.get(user_email, []) or []
+    if not isinstance(notes, list):
+        notes = []
+
+    normalized = []
+    for idx, n in enumerate(notes):
+        if not isinstance(n, dict):
+            continue
+
+        item = dict(n)
+        item.setdefault("id", item.get("_id") or item.get("uuid") or f"note_{idx}")
+        item.setdefault("read", False)
+        item.setdefault("timestamp", item.get("created_at") or item.get("time") or "")
+        item.setdefault("subject", item.get("title") or item.get("type") or "Notification")
+        item.setdefault("message", item.get("body") or item.get("text") or "")
+        item.setdefault("channel", item.get("channel") or "app")
+        item.setdefault("lead_email", item.get("lead_email") or "")
+
+        normalized.append(item)
+
+    return jsonify({"notifications": normalized}), 200
+
+
+@app.route("/api/notifications/<path:user_email>/<notif_id>/mark_read", methods=["POST"])
+def mark_notification_read(user_email, notif_id):
+    user_email = (user_email or "").strip().lower()
+    notif_id = str(notif_id or "").strip()
+
+    try:
+        all_notes = load_notifications() or {}
+        if not isinstance(all_notes, dict):
+            all_notes = {}
+    except Exception as e:
+        try:
+            app.logger.warning("[NOTIFICATIONS] load failed for mark_read %s: %s", user_email, e)
+        except Exception:
+            pass
+        return jsonify({"error": "Failed to load notifications"}), 500
+
+    user_notes = all_notes.get(user_email, []) or []
+    if not isinstance(user_notes, list):
+        user_notes = []
+
+    found = False
+
+    # prefer stable id match
+    for idx, n in enumerate(user_notes):
+        if not isinstance(n, dict):
+            continue
+        nid = str(n.get("id") or n.get("_id") or n.get("uuid") or idx)
+        if nid == notif_id:
+            n["read"] = True
+            found = True
+            break
+
+    # backward-compatible numeric fallback
+    if not found and notif_id.isdigit():
+        idx = int(notif_id)
+        if 0 <= idx < len(user_notes) and isinstance(user_notes[idx], dict):
+            user_notes[idx]["read"] = True
+            found = True
+
+    if not found:
+        return jsonify({"error": "Notification not found"}), 404
+
+    all_notes[user_email] = user_notes
+
+    try:
+        save_notifications(all_notes)
+    except Exception as e:
+        try:
+            app.logger.warning("[NOTIFICATIONS] save failed for %s: %s", user_email, e)
+        except Exception:
+            pass
+        return jsonify({"error": "Failed to save notification state"}), 500
+
+    return jsonify({"ok": True}), 200
 
 # ----------------------------
 # Appointments
@@ -3286,7 +3418,7 @@ def send_ai_message():
         "reply_to": owner_email or None,
         "used_text": model_text,
     }), 200
-    
+
 # =================================================================
 # AUTOMATIONS (INLINE) — Blueprint + Engine (prod-ready routes)
 # =================================================================
