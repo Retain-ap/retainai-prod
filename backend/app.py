@@ -1041,6 +1041,11 @@ def _req_user_email() -> str:
         or payload.get("email")
     )
 
+def _org_is_active(owner_record: dict) -> bool:
+    if not owner_record or not isinstance(owner_record, dict):
+        return False
+    return (owner_record.get("status") == "active") or _within_trial(owner_record, TRIAL_DAYS)
+    
 @app.route("/api/leads", methods=["GET", "OPTIONS"])
 def api_get_leads():
     if request.method == "OPTIONS":
