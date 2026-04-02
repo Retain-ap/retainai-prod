@@ -482,7 +482,7 @@ def get_user(email):
     }
 
     return jsonify(out), 200
-
+    
 @app.route("/api/profile", methods=["GET", "POST", "OPTIONS"])
 def api_profile():
     if request.method == "OPTIONS":
@@ -491,18 +491,51 @@ def api_profile():
     if request.method == "GET":
         try:
             email = (request.args.get("email") or request.headers.get("X-User-Email") or "").strip()
+            email = _norm_email(email)
             if not email:
                 return jsonify({"error": "missing_email"}), 400
 
-            raw = None
-            try:
-                raw = get_user(email)
-            except Exception:
-                raw = None
+            users = load_users() or {}
+            if not isinstance(users, dict):
+                return jsonify({"error": "storage_not_ready"}), 500
 
-            profile = _normalize_profile(email, raw)
-            if not profile.get("email"):
-                return jsonify({"error": "user_not_found", "email": _norm_email(email)}), 404
+            role, org_email, org_owner, subject = _resolve_org_and_role(email, users)
+            if not role:
+                return jsonify({"error": "user_not_found", "email": email}), 404
+
+            if not org_owner:
+                return jsonify({"error": "org_owner_not_found"}), 404
+
+            if not _org_is_active(org_owner):
+                return jsonify({"error": "account_inactive"}), 403
+
+            base = org_owner if role == "member" else subject
+            base = base or {}
+            subject = subject or {}
+
+            profile = {
+                "email": email,
+                "name": subject.get("name", "") if role == "member" else base.get("name", ""),
+                "logo": base.get("logo") or base.get("picture", ""),
+                "business": base.get("business", ""),
+                "businessName": base.get("business", ""),
+                "businessType": base.get("businessType", ""),
+                "lineOfBusiness": base.get("businessType", ""),
+                "location": base.get("location", ""),
+                "people": base.get("people") or base.get("teamSize", ""),
+                "teamSize": base.get("teamSize") or base.get("people", ""),
+                "stripe_account_id": base.get("stripe_account_id"),
+                "stripe_connected": bool(base.get("stripe_connected", False)),
+                "whatsapp": base.get("whatsapp", ""),
+                "gcal_connected": bool(base.get("gcal_connected", False)),
+                "gcal_calendars": base.get("gcal_calendars", []),
+                "status": base.get("status", ""),
+                "role": role,
+                "orgOwnerEmail": org_email,
+                "canInviteTeam": role == "owner",
+                "canEditBusiness": role == "owner",
+                "canManageBilling": role == "owner",
+            }
 
             return jsonify(profile), 200
 
@@ -514,8 +547,20 @@ def api_profile():
     try:
         data = request.get_json(silent=True) or {}
         email = (data.get("email") or request.headers.get("X-User-Email") or "").strip()
+        email = _norm_email(email)
         if not email:
             return jsonify({"error": "missing_email"}), 400
+
+        users = load_users() or {}
+        if not isinstance(users, dict):
+            return jsonify({"error": "storage_not_ready"}), 500
+
+        role, org_email, org_owner, subject = _resolve_org_and_role(email, users)
+        if not role:
+            return jsonify({"error": "user_not_found"}), 404
+
+        if not org_owner:
+            return jsonify({"error": "org_owner_not_found"}), 404
 
         def _int(v, default=0):
             try:
@@ -530,14 +575,64 @@ def api_profile():
             "logo": (data.get("logo") or "").strip(),
             "business": (data.get("business") or data.get("businessName") or "").strip(),
             "businessName": (data.get("businessName") or data.get("business") or "").strip(),
-            "businessType": (data.get("businessType") or "").strip(),
+            "businessType": (data.get("businessType") or data.get("lineOfBusiness") or "").strip(),
             "location": (data.get("location") or "").strip(),
             "people": people,
             "teamSize": _int(data.get("teamSize", people), people),
         }
 
-        merged = _upsert_user(email, patch)
-        return jsonify(_normalize_profile(email, merged)), 200
+        # owner edits org record
+        if role == "owner":
+            target_email = org_email
+            target = users.get(target_email, {}) or {}
+            for k, v in patch.items():
+                if v not in ("", None):
+                    target[k] = v
+            users[target_email] = target
+
+        # member can only edit own display fields
+        else:
+            member_key = f"user::{email}"
+            member = users.get(member_key, {}) or {}
+            if patch["name"]:
+                member["name"] = patch["name"]
+            if patch["logo"]:
+                member["logo"] = patch["logo"]
+            users[member_key] = member
+
+        save_users(users)
+
+        # return fresh normalized profile
+        role, org_email, org_owner, subject = _resolve_org_and_role(email, users)
+        base = org_owner if role == "member" else subject
+        base = base or {}
+        subject = subject or {}
+
+        profile = {
+            "email": email,
+            "name": subject.get("name", "") if role == "member" else base.get("name", ""),
+            "logo": base.get("logo") or base.get("picture", ""),
+            "business": base.get("business", ""),
+            "businessName": base.get("business", ""),
+            "businessType": base.get("businessType", ""),
+            "lineOfBusiness": base.get("businessType", ""),
+            "location": base.get("location", ""),
+            "people": base.get("people") or base.get("teamSize", ""),
+            "teamSize": base.get("teamSize") or base.get("people", ""),
+            "stripe_account_id": base.get("stripe_account_id"),
+            "stripe_connected": bool(base.get("stripe_connected", False)),
+            "whatsapp": base.get("whatsapp", ""),
+            "gcal_connected": bool(base.get("gcal_connected", False)),
+            "gcal_calendars": base.get("gcal_calendars", []),
+            "status": base.get("status", ""),
+            "role": role,
+            "orgOwnerEmail": org_email,
+            "canInviteTeam": role == "owner",
+            "canEditBusiness": role == "owner",
+            "canManageBilling": role == "owner",
+        }
+
+        return jsonify(profile), 200
 
     except Exception as e:
         current_app.logger.exception("POST /api/profile failed")
