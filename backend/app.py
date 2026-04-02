@@ -480,7 +480,7 @@ def get_user(email):
 
     return jsonify(out), 200
     
-@@app.route("/api/profile", methods=["GET", "POST", "OPTIONS"])
+@app.route("/api/profile", methods=["GET", "POST", "OPTIONS"])
 def api_profile():
     if request.method == "OPTIONS":
         return ("", 204)
