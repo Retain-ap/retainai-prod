@@ -54,6 +54,8 @@ function normalizeUser(u) {
     location: u.location || "",
     people: u.people ?? u.teamSize ?? "",
     teamSize: u.teamSize ?? u.people ?? "",
+    stripe_connected: Boolean(u.stripe_connected),
+    stripe_account_id: u.stripe_account_id || "",
   };
 }
 
@@ -79,7 +81,6 @@ async function fetchJson(url, opts = {}) {
     throw err;
   }
 
-  // If JSON, parse it; otherwise return raw
   if (ct.includes("application/json")) {
     try {
       return JSON.parse(raw);
@@ -87,6 +88,7 @@ async function fetchJson(url, opts = {}) {
       return null;
     }
   }
+
   return raw;
 }
 
@@ -107,13 +109,12 @@ export default function Settings({
   gcalStatus,
   setGcalStatus,
   initialTab,
-  refreshUser, // optional
+  refreshUser,
 }) {
   const { search } = useLocation();
 
   const [tab, setTab] = useState(initialTab || "profile");
 
-  // initial profile: props.user -> localStorage.user
   const [profile, setProfile] = useState(() => {
     const fromProps = normalizeUser(user);
     if (fromProps?.email) return fromProps;
@@ -134,19 +135,35 @@ export default function Settings({
   const [editMode, setEditMode] = useState(false);
   const [saving, setSaving] = useState(false);
 
-  // info banner + backend status for profile
   const [info, setInfo] = useState("");
-  const [profileBackendOk, setProfileBackendOk] = useState(null); // null unknown | true ok | false unavailable
+  const [profileBackendOk, setProfileBackendOk] = useState(null);
 
   useEffect(() => {
-    if (initialTab && TABS.some((t) => t.key === initialTab)) setTab(initialTab);
+    if (initialTab && TABS.some((t) => t.key === initialTab)) {
+      setTab(initialTab);
+    }
   }, [initialTab]);
 
-  // If user prop changes (login switch), update local profile + form immediately
   useEffect(() => {
     const next = normalizeUser(user);
-    if (next?.email && next.email !== profile?.email) {
-      setProfile(next);
+    if (next?.email) {
+      setProfile((prev) => {
+        if (!prev) return next;
+        if (
+          prev.email !== next.email ||
+          prev.name !== next.name ||
+          prev.business !== next.business ||
+          prev.businessType !== next.businessType ||
+          prev.location !== next.location ||
+          String(prev.people ?? "") !== String(next.people ?? "") ||
+          Boolean(prev.stripe_connected) !== Boolean(next.stripe_connected) ||
+          String(prev.stripe_account_id || "") !== String(next.stripe_account_id || "")
+        ) {
+          return next;
+        }
+        return prev;
+      });
+
       setForm({
         name: next.name || "",
         email: next.email || "",
@@ -155,52 +172,61 @@ export default function Settings({
         location: next.location || "",
         teamSize: String(next.people ?? next.teamSize ?? ""),
       });
+
       try {
         localStorage.setItem("user", JSON.stringify(next));
       } catch {}
+
       setInfo("");
-      setProfileBackendOk(null);
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [user?.email]);
+  }, [user]);
 
-  // Stripe callback refresh (kept)
-  useEffect(() => {
-    const params = new URLSearchParams(search);
-    if (params.get("stripe_connected") === "1") {
-      if (typeof refreshUser === "function") {
-        refreshUser().catch(() => {});
-      }
-    }
-  }, [search, refreshUser]);
-
-  // Try fetching profile from backend (if endpoint exists)
   const tryFetchProfileFromBackend = useCallback(async (email) => {
     if (!email) return null;
+
     const url = apiUrl(`profile?email=${encodeURIComponent(email)}`);
 
     try {
       const data = await fetchJson(url);
-      // backend might return {profile:{...}} or just the profile object
       const maybeProfile =
         data?.profile && typeof data.profile === "object" ? data.profile : data;
 
       const normalized = normalizeUser(maybeProfile);
+
       if (normalized?.email) {
         setProfileBackendOk(true);
         return normalized;
       }
-      // If response was OK but empty/weird, still consider backend reachable
+
       setProfileBackendOk(true);
       return null;
-    } catch (e) {
-      // 404 means route missing; other errors could be downtime, CORS, etc.
+    } catch {
       setProfileBackendOk(false);
       return null;
     }
   }, []);
 
-  // On mount / when profile.email changes: attempt backend fetch once
+  const syncProfileFromBackend = useCallback(async (email) => {
+    const fromBackend = await tryFetchProfileFromBackend(email);
+    if (!fromBackend?.email) return null;
+
+    setProfile(fromBackend);
+    setForm({
+      name: fromBackend.name || "",
+      email: fromBackend.email || "",
+      business: fromBackend.business || fromBackend.businessName || "",
+      type: fromBackend.businessType || fromBackend.lineOfBusiness || "",
+      location: fromBackend.location || "",
+      teamSize: String(fromBackend.people ?? fromBackend.teamSize ?? ""),
+    });
+
+    try {
+      localStorage.setItem("user", JSON.stringify(fromBackend));
+    } catch {}
+
+    return fromBackend;
+  }, [tryFetchProfileFromBackend]);
+
   useEffect(() => {
     let cancelled = false;
 
@@ -221,6 +247,7 @@ export default function Settings({
           location: fromBackend.location || "",
           teamSize: String(fromBackend.people ?? fromBackend.teamSize ?? ""),
         });
+
         try {
           localStorage.setItem("user", JSON.stringify(fromBackend));
         } catch {}
@@ -230,8 +257,30 @@ export default function Settings({
     return () => {
       cancelled = true;
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [profile?.email, tryFetchProfileFromBackend]);
+
+  useEffect(() => {
+    const params = new URLSearchParams(search);
+    const stripeConnected = params.get("stripe_connected") === "1";
+    const stripeRefresh = params.get("stripe_refresh") === "1";
+
+    if (stripeConnected || stripeRefresh) {
+      const email = profile?.email || user?.email;
+      if (!email) return;
+
+      (async () => {
+        try {
+          if (typeof refreshUser === "function") {
+            await refreshUser();
+          }
+        } catch {}
+
+        try {
+          await syncProfileFromBackend(email);
+        } catch {}
+      })();
+    }
+  }, [search, profile?.email, user?.email, refreshUser, syncProfileFromBackend]);
 
   const handleSave = useCallback(async () => {
     setSaving(true);
@@ -248,16 +297,17 @@ export default function Settings({
       location: form.location,
       people: form.teamSize,
       teamSize: form.teamSize,
+      stripe_connected: profile?.stripe_connected || false,
+      stripe_account_id: profile?.stripe_account_id || "",
     };
 
-    // Update UI immediately
     const merged = normalizeUser({ ...(profile || {}), ...payload });
     setProfile(merged);
+
     try {
       localStorage.setItem("user", JSON.stringify(merged));
     } catch {}
 
-    // Save to backend (single, correct endpoint)
     try {
       await postJson("profile", payload);
       setProfileBackendOk(true);
@@ -269,8 +319,9 @@ export default function Settings({
           await refreshUser();
         } catch {}
       }
+
+      await syncProfileFromBackend(form.email);
     } catch (e) {
-      // If backend missing/unavailable, keep local save and show clear message
       setProfileBackendOk(false);
       console.warn("Profile save failed (backend). Using localStorage only.", e);
       setInfo("Saved locally ✅ (backend profile endpoint unavailable)");
@@ -278,7 +329,7 @@ export default function Settings({
     } finally {
       setSaving(false);
     }
-  }, [form, profile, refreshUser]);
+  }, [form, profile, refreshUser, syncProfileFromBackend]);
 
   const leftOffset = sidebarCollapsed ? 60 : 245;
   const settingsWidth = `calc(100vw - ${leftOffset}px)`;
@@ -438,7 +489,20 @@ export default function Settings({
                 />
               </div>
 
-              <StripeConnectCard user={profile} refreshUser={() => {}} />
+              <StripeConnectCard
+                user={profile}
+                refreshUser={async () => {
+                  try {
+                    if (typeof refreshUser === "function") {
+                      await refreshUser();
+                    }
+                  } catch {}
+
+                  try {
+                    await syncProfileFromBackend(profile.email);
+                  } catch {}
+                }}
+              />
 
               <div className="integration-card coming-soon">
                 <SiInstagram className="integration-icon instagram" />
@@ -449,11 +513,22 @@ export default function Settings({
               </div>
             </div>
 
-            {gcalStatus && (
-              <div style={{ marginTop: 12, color: "#bbb" }}>
-                Google Calendar status: <b style={{ color: "#fff" }}>{gcalStatus}</b>
-              </div>
-            )}
+            <div style={{ marginTop: 12, color: "#bbb" }}>
+              Google Calendar status:{" "}
+              <b style={{ color: "#fff" }}>{gcalStatus || "Not connected"}</b>
+            </div>
+
+            <div style={{ marginTop: 8, color: "#bbb" }}>
+              Stripe status:{" "}
+              <b style={{ color: "#fff" }}>
+                {profile?.stripe_connected ? "Connected" : "Not connected"}
+              </b>
+              {profile?.stripe_account_id ? (
+                <span style={{ marginLeft: 8, color: "#8d8d93" }}>
+                  ({profile.stripe_account_id})
+                </span>
+              ) : null}
+            </div>
           </div>
         )}
 
