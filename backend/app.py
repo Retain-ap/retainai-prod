@@ -1465,13 +1465,40 @@ def stripe_oauth_callback():
     error = request.args.get("error")
     error_desc = request.args.get("error_description", "")
     state_email = _norm_email(request.args.get("state"))
+    code = request.args.get("code")
 
     if error:
         msg = urllib.parse.quote_plus(error_desc or error)
         return redirect(f"{FRONTEND_URL}/app/settings?stripe_error=1&stripe_error_desc={msg}")
 
-    code = request.args.get("code")
     if not code or not state_email:
+        return redirect(f"{FRONTEND_URL}/app/settings?stripe_error=1&stripe_error_desc=missing_code_or_state")
+
+    try:
+        resp = stripe.OAuth.token(
+            grant_type="authorization_code",
+            code=code,
+        )
+        stripe_user_id = resp["stripe_user_id"]
+    except Exception as e:
+        msg = urllib.parse.quote_plus(str(e))
+        return redirect(f"{FRONTEND_URL}/app/settings?stripe_error=1&stripe_error_desc={msg}")
+
+    users = load_users() or {}
+    if not isinstance(users, dict):
+        return redirect(f"{FRONTEND_URL}/app/settings?stripe_error=1&stripe_error_desc=storage_not_ready")
+
+    role, org_email, org_owner, _subject = _resolve_org_and_role(state_email, users)
+    if not role:
+        return redirect(f"{FRONTEND_URL}/app/settings?stripe_error=1&stripe_error_desc=user_not_found")
+
+    org_owner = org_owner or {}
+    org_owner["stripe_account_id"] = stripe_user_id
+    org_owner["stripe_connected"] = True
+    users[org_email] = org_owner
+    save_users(users)
+
+    return redirect(f"{FRONTEND_URL}/app/settings?stripe_connected=1")
 
 @app.route("/api/stripe/dashboard-link", methods=["GET"])
 def stripe_dashboard_link():
