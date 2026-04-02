@@ -1471,7 +1471,7 @@ def stripe_oauth_callback():
         return redirect(f"{FRONTEND_URL}/app/settings?stripe_error=1&stripe_error_desc={msg}")
 
     code = request.args.get("code")
-    if not code or not state_email
+    if not code or not state_email:
 
 @app.route("/api/stripe/dashboard-link", methods=["GET"])
 def stripe_dashboard_link():
