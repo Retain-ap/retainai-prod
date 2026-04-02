@@ -9,7 +9,7 @@ export default function StripeConnectCard({ user, refreshUser }) {
   const navigate = useNavigate();
 
   const API = useMemo(() => {
-    const env = (v) => (v && String(v).trim()) || "";
+    const env = (v) => (v && v.trim()) || "";
     const fromEnv =
       env(process.env.REACT_APP_API_URL) ||
       env(process.env.REACT_APP_API_BASE);
@@ -29,10 +29,17 @@ export default function StripeConnectCard({ user, refreshUser }) {
     const errorDesc = params.get("stripe_error_desc");
 
     if (connected || refreshed) {
-      if (refreshUser) refreshUser();
+      (async () => {
+        try {
+          if (typeof refreshUser === "function") {
+            await refreshUser();
+          }
+        } catch {}
+      })();
 
       params.delete("stripe_connected");
       params.delete("stripe_refresh");
+
       navigate(
         {
           pathname: location.pathname,
@@ -40,13 +47,13 @@ export default function StripeConnectCard({ user, refreshUser }) {
         },
         { replace: true }
       );
-      return;
     }
 
     if (hasError) {
       setError(decodeURIComponent(errorDesc || "Stripe connection failed."));
       params.delete("stripe_error");
       params.delete("stripe_error_desc");
+
       navigate(
         {
           pathname: location.pathname,
@@ -57,41 +64,32 @@ export default function StripeConnectCard({ user, refreshUser }) {
     }
   }, [location.pathname, location.search, navigate, refreshUser]);
 
-  async function parseResponse(res) {
-    const contentType = res.headers.get("content-type") || "";
-
-    if (contentType.toLowerCase().includes("application/json")) {
-      try {
-        return await res.json();
-      } catch {
-        throw new Error(`Invalid JSON response (${res.status})`);
-      }
-    }
-
-    const raw = await res.text().catch(() => "");
-    throw new Error(raw || `Invalid server response (${res.status})`);
-  }
-
   async function fetchStripeUrl(path, fallbackError) {
     if (!user?.email) {
       throw new Error("Missing user email");
     }
 
-    if (!API) {
-      throw new Error("API base is not configured");
-    }
-
     const url = `${API}${path}?user_email=${encodeURIComponent(user.email)}`;
-    console.log("[StripeConnectCard] Requesting:", url);
 
     const res = await fetch(url, {
       method: "GET",
-      headers: { Accept: "application/json" },
       credentials: "include",
+      headers: { Accept: "application/json" },
     });
 
-    const data = await parseResponse(res);
-    console.log("[StripeConnectCard] Response:", res.status, data);
+    const contentType = (res.headers.get("content-type") || "").toLowerCase();
+    const raw = await res.text();
+
+    let data = {};
+    if (contentType.includes("application/json")) {
+      try {
+        data = JSON.parse(raw);
+      } catch {
+        throw new Error(`Invalid JSON response (${res.status})`);
+      }
+    } else {
+      throw new Error(`Invalid server response (${res.status})`);
+    }
 
     if (!res.ok) {
       throw new Error(data?.error || fallbackError || `Request failed (${res.status})`);
@@ -114,8 +112,7 @@ export default function StripeConnectCard({ user, refreshUser }) {
       );
       window.location.assign(url);
     } catch (e) {
-      console.error("[StripeConnectCard] handleDashboard error:", e);
-      setError(e?.message || "Network error");
+      setError(e.message || "Network error");
     } finally {
       setLoading(false);
     }
@@ -131,8 +128,7 @@ export default function StripeConnectCard({ user, refreshUser }) {
       );
       window.location.assign(url);
     } catch (e) {
-      console.error("[StripeConnectCard] handleLinkExisting error:", e);
-      setError(e?.message || "Network error");
+      setError(e.message || "Network error");
     } finally {
       setLoading(false);
     }
@@ -148,8 +144,7 @@ export default function StripeConnectCard({ user, refreshUser }) {
       );
       window.location.assign(url);
     } catch (e) {
-      console.error("[StripeConnectCard] handleSignup error:", e);
-      setError(e?.message || "Network error");
+      setError(e.message || "Network error");
     } finally {
       setLoading(false);
     }
@@ -161,39 +156,38 @@ export default function StripeConnectCard({ user, refreshUser }) {
       return;
     }
 
-    if (!API) {
-      setError("API base is not configured");
-      return;
-    }
-
     setLoading(true);
     setError("");
     try {
-      const url = `${API}/api/stripe/disconnect?user_email=${encodeURIComponent(user.email)}`;
-      console.log("[StripeConnectCard] Disconnecting:", url);
+      const res = await fetch(
+        `${API}/api/stripe/disconnect?user_email=${encodeURIComponent(user.email)}`,
+        {
+          method: "POST",
+          credentials: "include",
+          headers: { Accept: "application/json" },
+        }
+      );
 
-      const res = await fetch(url, {
-        method: "POST",
-        headers: { Accept: "application/json" },
-        credentials: "include",
-      });
+      const contentType = (res.headers.get("content-type") || "").toLowerCase();
+      const raw = await res.text();
 
-      if (res.ok) {
-        if (refreshUser) await refreshUser();
+      let data = {};
+      if (contentType.includes("application/json") && raw) {
+        try {
+          data = JSON.parse(raw);
+        } catch {}
+      }
+
+      if (!res.ok) {
+        setError(data?.error || `Failed to disconnect (${res.status})`);
         return;
       }
 
-      let data = {};
-      try {
-        data = await parseResponse(res);
-      } catch (parseErr) {
-        console.error("[StripeConnectCard] disconnect parse error:", parseErr);
+      if (typeof refreshUser === "function") {
+        await refreshUser();
       }
-
-      setError(data?.error || `Failed to disconnect (${res.status})`);
     } catch (e) {
-      console.error("[StripeConnectCard] handleDisconnect error:", e);
-      setError(e?.message || "Network error");
+      setError(e.message || "Network error");
     } finally {
       setLoading(false);
     }
@@ -234,17 +228,20 @@ export default function StripeConnectCard({ user, refreshUser }) {
                 Connected
               </button>
 
-              <button
-                className="settings-btn"
-                onClick={handleDashboard}
-                disabled={loading}
-              >
+              <button className="settings-btn" onClick={handleDashboard} disabled={loading}>
                 {loading ? "Opening…" : "Open Stripe Dashboard"}
               </button>
 
               <button
                 className="settings-btn refresh"
-                onClick={refreshUser}
+                onClick={async () => {
+                  setError("");
+                  if (typeof refreshUser === "function") {
+                    try {
+                      await refreshUser();
+                    } catch {}
+                  }
+                }}
                 disabled={loading}
               >
                 Refresh Status
@@ -261,34 +258,18 @@ export default function StripeConnectCard({ user, refreshUser }) {
             </div>
           ) : (
             <div style={{ display: "flex", flexWrap: "wrap", justifyContent: "center", gap: 12 }}>
-              <button
-                className="settings-btn"
-                onClick={handleLinkExisting}
-                disabled={loading}
-              >
+              <button className="settings-btn" onClick={handleLinkExisting} disabled={loading}>
                 {loading ? "Redirecting…" : "Link Existing Stripe Account"}
               </button>
 
-              <button
-                className="settings-btn"
-                onClick={handleSignup}
-                disabled={loading}
-              >
+              <button className="settings-btn" onClick={handleSignup} disabled={loading}>
                 {loading ? "Redirecting…" : "Create Stripe Account"}
               </button>
             </div>
           )}
 
           {error && (
-            <div
-              className="integration-error"
-              style={{
-                color: "#e66565",
-                marginTop: 16,
-                whiteSpace: "pre-wrap",
-                wordBreak: "break-word",
-              }}
-            >
+            <div className="integration-error" style={{ color: "#e66565", marginTop: 16 }}>
               {error}
             </div>
           )}

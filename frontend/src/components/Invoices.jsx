@@ -1,11 +1,12 @@
-﻿import React, { useState, useEffect, useCallback } from "react";
+﻿import React, { useState, useEffect, useCallback, useMemo } from "react";
 import { EyeIcon, BellIcon, ArrowTopRightOnSquareIcon } from "@heroicons/react/24/outline";
+import { API_BASE } from "../config";
 
-const CURRENCIES = ["usd", "cad", "eur", "gbp", "aud"]; // short list
+const CURRENCIES = ["usd", "cad", "eur", "gbp", "aud"];
 
 export default function Invoices({ user, leads }) {
   const [invoices, setInvoices] = useState([]);
-  const [account, setAccount] = useState(null); // { id, default_currency, details_submitted, type, email }
+  const [account, setAccount] = useState(null);
   const [showModal, setShowModal] = useState(false);
   const [sending, setSending] = useState(false);
   const [message, setMessage] = useState("");
@@ -20,7 +21,39 @@ export default function Invoices({ user, leads }) {
     currency: "usd",
   });
 
-  // Load Stripe account info (currency, id) and dashboard link
+  const API = useMemo(() => (API_BASE || "").replace(/\/$/, ""), []);
+
+  const fetchJson = useCallback(async (url, options = {}) => {
+    const res = await fetch(url, {
+      credentials: "include",
+      ...options,
+      headers: {
+        Accept: "application/json",
+        ...(options.headers || {}),
+      },
+    });
+
+    const contentType = (res.headers.get("content-type") || "").toLowerCase();
+    const raw = await res.text();
+
+    if (!contentType.includes("application/json")) {
+      throw new Error(`Unexpected response type: ${contentType || "unknown"}`);
+    }
+
+    let data = {};
+    try {
+      data = raw ? JSON.parse(raw) : {};
+    } catch {
+      throw new Error("Response was not valid JSON");
+    }
+
+    if (!res.ok) {
+      throw new Error(data?.error || `Request failed (${res.status})`);
+    }
+
+    return data;
+  }, []);
+
   const loadAccount = useCallback(async () => {
     if (!user?.email || !user?.stripe_connected) {
       setAccount(null);
@@ -28,40 +61,54 @@ export default function Invoices({ user, leads }) {
       setForm((f) => ({ ...f, currency: "usd" }));
       return;
     }
+
     try {
-      const res = await fetch(`/api/stripe/account?user_email=${encodeURIComponent(user.email)}`);
-      const data = await res.json();
+      const data = await fetchJson(
+        `${API}/api/stripe/account?user_email=${encodeURIComponent(user.email)}`
+      );
+
       const acct = data?.account || null;
       setAccount(acct);
+
       const dc = (acct?.default_currency || "usd").toLowerCase();
       setForm((f) => ({ ...f, currency: dc }));
 
-      // prefetch dashboard link (ignore failure)
-      const d = await fetch(`/api/stripe/dashboard-link?user_email=${encodeURIComponent(user.email)}`).then(r => r.json()).catch(() => null);
-      if (d?.url) setDashboardUrl(d.url);
-    } catch {
-      /* ignore */
+      try {
+        const dash = await fetchJson(
+          `${API}/api/stripe/dashboard-link?user_email=${encodeURIComponent(user.email)}`
+        );
+        setDashboardUrl(dash?.url || "");
+      } catch {
+        setDashboardUrl("");
+      }
+    } catch (err) {
+      console.error("Failed to load Stripe account", err);
+      setAccount(null);
+      setDashboardUrl("");
     }
-  }, [user?.email, user?.stripe_connected]);
-
-  useEffect(() => {
-    loadAccount();
-  }, [loadAccount]);
+  }, [API, fetchJson, user?.email, user?.stripe_connected]);
 
   const loadInvoices = useCallback(async () => {
     if (!user?.email || !user?.stripe_connected) {
       setInvoices([]);
       return;
     }
+
     try {
-      const res = await fetch(`/api/stripe/invoices?user_email=${encodeURIComponent(user.email)}`);
-      const js = await res.json();
+      const js = await fetchJson(
+        `${API}/api/stripe/invoices?user_email=${encodeURIComponent(user.email)}`
+      );
       setInvoices(Array.isArray(js?.invoices) ? js.invoices : []);
     } catch (err) {
       console.error("Failed to load invoices", err);
       setInvoices([]);
+      setMessage(`❌ ${err.message || "Failed to load invoices"}`);
     }
-  }, [user?.email, user?.stripe_connected]);
+  }, [API, fetchJson, user?.email, user?.stripe_connected]);
+
+  useEffect(() => {
+    loadAccount();
+  }, [loadAccount]);
 
   useEffect(() => {
     loadInvoices();
@@ -87,6 +134,7 @@ export default function Invoices({ user, leads }) {
   const fmt = (amount, currency) => {
     const code = String(currency || account?.default_currency || "usd").toUpperCase();
     const safeNum = typeof amount === "number" ? amount : Number(amount || 0);
+
     try {
       return new Intl.NumberFormat(undefined, {
         style: "currency",
@@ -108,28 +156,34 @@ export default function Invoices({ user, leads }) {
     const price = parseFloat(form.price || 0);
     const calculatedAmount = price * quantity;
 
-    if (!form.customer_name || !form.customer_email || !form.item_name || !form.price || isNaN(calculatedAmount) || calculatedAmount <= 0) {
-      setMessage("âŒ Please fill all fields with valid data.");
+    if (
+      !form.customer_name ||
+      !form.customer_email ||
+      !form.item_name ||
+      !form.price ||
+      isNaN(calculatedAmount) ||
+      calculatedAmount <= 0
+    ) {
+      setMessage("❌ Please fill all fields with valid data.");
       setSending(false);
       return;
     }
 
     try {
-      const res = await fetch((process.env.REACT_APP_API_BASE || "") + "/api/stripe/invoice", {
+      const data = await fetchJson(`${API}/api/stripe/invoice`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           user_email: user.email,
           customer_name: form.customer_name,
           customer_email: form.customer_email,
-          amount: calculatedAmount,         // total passed (server also accepts unit_amount * quantity)
+          amount: calculatedAmount,
           description: form.item_name,
           currency: form.currency,
           quantity,
           unit_amount: price,
         }),
       });
-      const data = await res.json();
 
       if (data.success) {
         if (Array.isArray(data.invoices)) {
@@ -141,9 +195,7 @@ export default function Invoices({ user, leads }) {
         }
 
         const shownAmt = data.amount_total ?? data.amount_due;
-        setMessage(
-          `âœ… Invoice created${shownAmt ? ` for ${fmt(shownAmt, data.currency)}` : "!"}`
-        );
+        setMessage(`✅ Invoice created${shownAmt ? ` for ${fmt(shownAmt, data.currency)}` : "!"}`);
 
         setShowModal(false);
         setForm({
@@ -152,47 +204,47 @@ export default function Invoices({ user, leads }) {
           item_name: "",
           price: "",
           quantity: 1,
-          currency: (account?.default_currency || "usd"),
+          currency: (account?.default_currency || "usd").toLowerCase(),
         });
       } else {
-        const err = String(data.error || "Could not create invoice.");
-        if (/combine currencies/i.test(err) || /currency/i.test(err)) {
-          const acctCur = (account?.default_currency || "your account currency").toUpperCase();
-          setMessage(`âŒ ${err} â€” Try setting Currency to ${acctCur} to match your Stripe account.`);
-        } else {
-          setMessage(`âŒ ${err}`);
-        }
+        setMessage(`❌ ${data.error || "Could not create invoice."}`);
       }
     } catch (e2) {
       console.error(e2);
-      setMessage("âŒ Server error");
+      setMessage(`❌ ${e2.message || "Server error"}`);
     } finally {
       setSending(false);
     }
   };
 
   const handleView = (url) => {
-    if (url) window.open(url, "_blank");
+    if (url) window.open(url, "_blank", "noopener,noreferrer");
   };
 
   const handleResend = async (inv) => {
     setMessage("");
     try {
-      const res = await fetch((process.env.REACT_APP_API_BASE || "") + "/api/stripe/invoice/send", {
+      const data = await fetchJson(`${API}/api/stripe/invoice/send`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ invoice_id: inv.id, user_email: user.email }),
       });
-      const data = await res.json();
-      data.success ? setMessage("âœ… Invoice email re-sent!") : setMessage(`âŒ ${data.error || "Could not resend."}`);
+
+      if (data.success) {
+        setMessage("✅ Invoice email re-sent!");
+      } else {
+        setMessage(`❌ ${data.error || "Could not resend."}`);
+      }
     } catch (e3) {
       console.error(e3);
-      setMessage("âŒ Server error resending");
+      setMessage(`❌ ${e3.message || "Server error resending"}`);
     }
   };
 
   const openDashboard = () => {
-    if (dashboardUrl) window.open(dashboardUrl, "_blank");
+    if (dashboardUrl) {
+      window.open(dashboardUrl, "_blank", "noopener,noreferrer");
+    }
   };
 
   return (
@@ -205,17 +257,24 @@ export default function Invoices({ user, leads }) {
             <div style={styles.accountBadge}>
               <span>Connected account:</span>
               <code style={styles.code}>{account.id}</code>
-              <span>â€¢ Currency:</span>
-              <code style={styles.code}>{(account.default_currency || "usd").toUpperCase()}</code>
+              <span>• Currency:</span>
+              <code style={styles.code}>
+                {(account.default_currency || "usd").toUpperCase()}
+              </code>
             </div>
           )}
         </div>
+
         <div style={{ display: "flex", gap: 8 }}>
-          <button style={styles.secondaryBtn} onClick={loadInvoices}>Refresh</button>
+          <button style={styles.secondaryBtn} onClick={loadInvoices}>
+            Refresh
+          </button>
+
           <button style={styles.secondaryBtn} onClick={openDashboard} disabled={!dashboardUrl}>
             <ArrowTopRightOnSquareIcon style={{ width: 18, height: 18, marginRight: 6 }} />
             Open in Stripe
           </button>
+
           <button style={styles.newInvoiceBtn} onClick={() => setShowModal(true)}>
             + New Invoice
           </button>
@@ -233,7 +292,11 @@ export default function Invoices({ user, leads }) {
         </div>
       )}
 
-      {message && <div style={message.startsWith("âœ…") ? styles.successMsg : styles.errorMsg}>{message}</div>}
+      {message && (
+        <div style={message.startsWith("✅") ? styles.successMsg : styles.errorMsg}>
+          {message}
+        </div>
+      )}
 
       <div style={styles.tableWrapper}>
         <table style={styles.table}>
@@ -250,15 +313,24 @@ export default function Invoices({ user, leads }) {
                 <td style={styles.td}>{inv.customer_name || "-"}</td>
                 <td style={styles.td}>
                   {fmt(
-                    typeof inv.amount_display === "number" ? inv.amount_display
-                    : (typeof inv.amount_due === "number" ? inv.amount_due : inv.amount_total),
+                    typeof inv.amount_display === "number"
+                      ? inv.amount_display
+                      : typeof inv.amount_due === "number"
+                      ? inv.amount_due
+                      : inv.amount_total,
                     inv.currency || account?.default_currency || "usd"
                   )}
                 </td>
                 <td style={styles.td}>
-                  {inv.due_date ? new Date(inv.due_date * 1000).toLocaleDateString() : "â€”"}
+                  {inv.due_date ? new Date(inv.due_date * 1000).toLocaleDateString() : "—"}
                 </td>
-                <td style={{ ...styles.td, color: (inv.status || "").toLowerCase() === "paid" ? "#38ff98" : "#f7cb53", textTransform: "capitalize" }}>
+                <td
+                  style={{
+                    ...styles.td,
+                    color: (inv.status || "").toLowerCase() === "paid" ? "#38ff98" : "#f7cb53",
+                    textTransform: "capitalize",
+                  }}
+                >
                   {inv.status}
                 </td>
                 <td style={{ ...styles.td, display: "flex", gap: 12 }}>
@@ -275,6 +347,7 @@ export default function Invoices({ user, leads }) {
         <div style={styles.modalBg} onClick={() => setShowModal(false)}>
           <div style={styles.modal} onClick={(e) => e.stopPropagation()}>
             <h3 style={styles.modalTitle}>New Invoice</h3>
+
             <form onSubmit={handleSubmit}>
               {[
                 { label: "Customer Name", name: "customer_name", type: "text" },
@@ -288,14 +361,18 @@ export default function Invoices({ user, leads }) {
                     required
                     type={fld.type}
                     value={form[fld.name]}
-                    onChange={(e) => setForm((frm) => ({ ...frm, [fld.name]: e.target.value }))}
+                    onChange={(e) =>
+                      setForm((frm) => ({ ...frm, [fld.name]: e.target.value }))
+                    }
                   />
                 </div>
               ))}
 
               <div style={{ display: "flex", gap: 16 }}>
                 <div style={{ flex: 1 }}>
-                  <label style={styles.label}>Price ({(form.currency || "usd").toUpperCase()})</label>
+                  <label style={styles.label}>
+                    Price ({(form.currency || "usd").toUpperCase()})
+                  </label>
                   <input
                     style={styles.input}
                     required
@@ -303,9 +380,12 @@ export default function Invoices({ user, leads }) {
                     step="0.01"
                     min="0"
                     value={form.price}
-                    onChange={(e) => setForm((frm) => ({ ...frm, price: e.target.value }))}
+                    onChange={(e) =>
+                      setForm((frm) => ({ ...frm, price: e.target.value }))
+                    }
                   />
                 </div>
+
                 <div style={{ flex: 1 }}>
                   <label style={styles.label}>Quantity</label>
                   <input
@@ -314,7 +394,9 @@ export default function Invoices({ user, leads }) {
                     type="number"
                     min="1"
                     value={form.quantity}
-                    onChange={(e) => setForm((frm) => ({ ...frm, quantity: e.target.value }))}
+                    onChange={(e) =>
+                      setForm((frm) => ({ ...frm, quantity: e.target.value }))
+                    }
                   />
                 </div>
               </div>
@@ -324,7 +406,9 @@ export default function Invoices({ user, leads }) {
                 <select
                   style={{ ...styles.input, appearance: "none", cursor: "pointer" }}
                   value={form.currency}
-                  onChange={(e) => setForm((frm) => ({ ...frm, currency: e.target.value.toLowerCase() }))}
+                  onChange={(e) =>
+                    setForm((frm) => ({ ...frm, currency: e.target.value.toLowerCase() }))
+                  }
                 >
                   {(() => {
                     const dc = (account?.default_currency || "").toLowerCase();
@@ -333,11 +417,16 @@ export default function Invoices({ user, leads }) {
                     ) : null;
                   })()}
                   {CURRENCIES.map((c) => (
-                    <option key={c} value={c}>{c.toUpperCase()}</option>
+                    <option key={c} value={c}>
+                      {c.toUpperCase()}
+                    </option>
                   ))}
                 </select>
+
                 <div style={{ color: "#9aa3ab", fontSize: 12, marginTop: 6 }}>
-                  Tip: Set this to your Stripe account currency ({(account?.default_currency || "usd").toUpperCase()}) to avoid mixed-currency errors.
+                  Tip: Set this to your Stripe account currency (
+                  {(account?.default_currency || "usd").toUpperCase()}) to avoid mixed-currency
+                  errors.
                 </div>
               </div>
 
@@ -345,8 +434,9 @@ export default function Invoices({ user, leads }) {
                 <button type="button" style={styles.cancelBtn} onClick={() => setShowModal(false)}>
                   Cancel
                 </button>
+
                 <button type="submit" disabled={sending} style={styles.submitBtn}>
-                  {sending ? "Sendingâ€¦" : "Send Invoice"}
+                  {sending ? "Sending…" : "Send Invoice"}
                 </button>
               </div>
             </form>
@@ -465,6 +555,20 @@ const styles = {
     fontSize: 14,
   },
   modalActions: { display: "flex", justifyContent: "flex-end", gap: 12, marginTop: 12 },
-  cancelBtn: { background: "#444", color: "#fff", padding: "8px 16px", border: "none", borderRadius: 6, cursor: "pointer" },
-  submitBtn: { background: "#635bff", color: "#fff", padding: "8px 16px", border: "none", borderRadius: 6, cursor: "pointer" },
+  cancelBtn: {
+    background: "#444",
+    color: "#fff",
+    padding: "8px 16px",
+    border: "none",
+    borderRadius: 6,
+    cursor: "pointer",
+  },
+  submitBtn: {
+    background: "#635bff",
+    color: "#fff",
+    padding: "8px 16px",
+    border: "none",
+    borderRadius: 6,
+    cursor: "pointer",
+  },
 };

@@ -1,6 +1,6 @@
 // File: frontend/src/components/Settings.jsx
 import React, { useEffect, useMemo, useState, useCallback } from "react";
-import { useLocation } from "react-router-dom";
+import { useLocation, useNavigate } from "react-router-dom";
 import GoogleCalendarEvents from "./GoogleCalendarEvents";
 import StripeConnectCard from "./StripeConnectCard";
 import {
@@ -42,6 +42,17 @@ function safeParse(json) {
 
 function normalizeUser(u) {
   if (!u || typeof u !== "object") return null;
+
+  const people =
+    u.people !== undefined && u.people !== null && u.people !== ""
+      ? u.people
+      : u.teamSize ?? "";
+
+  const teamSize =
+    u.teamSize !== undefined && u.teamSize !== null && u.teamSize !== ""
+      ? u.teamSize
+      : u.people ?? "";
+
   return {
     ...u,
     email: u.email || "",
@@ -52,10 +63,14 @@ function normalizeUser(u) {
     businessType: u.businessType || u.lineOfBusiness || "",
     lineOfBusiness: u.lineOfBusiness || u.businessType || "",
     location: u.location || "",
-    people: u.people ?? u.teamSize ?? "",
-    teamSize: u.teamSize ?? u.people ?? "",
+    people,
+    teamSize,
     stripe_connected: Boolean(u.stripe_connected),
     stripe_account_id: u.stripe_account_id || "",
+    gcal_connected: Boolean(u.gcal_connected),
+    gcal_calendars: Array.isArray(u.gcal_calendars) ? u.gcal_calendars : [],
+    role: u.role || "",
+    orgOwnerEmail: u.orgOwnerEmail || "",
   };
 }
 
@@ -111,7 +126,9 @@ export default function Settings({
   initialTab,
   refreshUser,
 }) {
-  const { search } = useLocation();
+  const location = useLocation();
+  const navigate = useNavigate();
+  const { search } = location;
 
   const [tab, setTab] = useState(initialTab || "profile");
 
@@ -146,39 +163,40 @@ export default function Settings({
 
   useEffect(() => {
     const next = normalizeUser(user);
-    if (next?.email) {
-      setProfile((prev) => {
-        if (!prev) return next;
-        if (
-          prev.email !== next.email ||
-          prev.name !== next.name ||
-          prev.business !== next.business ||
-          prev.businessType !== next.businessType ||
-          prev.location !== next.location ||
-          String(prev.people ?? "") !== String(next.people ?? "") ||
-          Boolean(prev.stripe_connected) !== Boolean(next.stripe_connected) ||
-          String(prev.stripe_account_id || "") !== String(next.stripe_account_id || "")
-        ) {
-          return next;
-        }
-        return prev;
-      });
+    if (!next?.email) return;
 
-      setForm({
-        name: next.name || "",
-        email: next.email || "",
-        business: next.business || next.businessName || "",
-        type: next.businessType || next.lineOfBusiness || "",
-        location: next.location || "",
-        teamSize: String(next.people ?? next.teamSize ?? ""),
-      });
+    setProfile((prev) => {
+      if (!prev) return next;
 
-      try {
-        localStorage.setItem("user", JSON.stringify(next));
-      } catch {}
+      const changed =
+        prev.email !== next.email ||
+        prev.name !== next.name ||
+        prev.logo !== next.logo ||
+        prev.business !== next.business ||
+        prev.businessType !== next.businessType ||
+        prev.location !== next.location ||
+        String(prev.people ?? "") !== String(next.people ?? "") ||
+        Boolean(prev.stripe_connected) !== Boolean(next.stripe_connected) ||
+        String(prev.stripe_account_id || "") !== String(next.stripe_account_id || "") ||
+        Boolean(prev.gcal_connected) !== Boolean(next.gcal_connected);
 
-      setInfo("");
-    }
+      return changed ? next : prev;
+    });
+
+    setForm({
+      name: next.name || "",
+      email: next.email || "",
+      business: next.business || next.businessName || "",
+      type: next.businessType || next.lineOfBusiness || "",
+      location: next.location || "",
+      teamSize: String(next.people ?? next.teamSize ?? ""),
+    });
+
+    try {
+      localStorage.setItem("user", JSON.stringify(next));
+    } catch {}
+
+    setInfo("");
   }, [user]);
 
   const tryFetchProfileFromBackend = useCallback(async (email) => {
@@ -206,26 +224,29 @@ export default function Settings({
     }
   }, []);
 
-  const syncProfileFromBackend = useCallback(async (email) => {
-    const fromBackend = await tryFetchProfileFromBackend(email);
-    if (!fromBackend?.email) return null;
+  const syncProfileFromBackend = useCallback(
+    async (email) => {
+      const fromBackend = await tryFetchProfileFromBackend(email);
+      if (!fromBackend?.email) return null;
 
-    setProfile(fromBackend);
-    setForm({
-      name: fromBackend.name || "",
-      email: fromBackend.email || "",
-      business: fromBackend.business || fromBackend.businessName || "",
-      type: fromBackend.businessType || fromBackend.lineOfBusiness || "",
-      location: fromBackend.location || "",
-      teamSize: String(fromBackend.people ?? fromBackend.teamSize ?? ""),
-    });
+      setProfile(fromBackend);
+      setForm({
+        name: fromBackend.name || "",
+        email: fromBackend.email || "",
+        business: fromBackend.business || fromBackend.businessName || "",
+        type: fromBackend.businessType || fromBackend.lineOfBusiness || "",
+        location: fromBackend.location || "",
+        teamSize: String(fromBackend.people ?? fromBackend.teamSize ?? ""),
+      });
 
-    try {
-      localStorage.setItem("user", JSON.stringify(fromBackend));
-    } catch {}
+      try {
+        localStorage.setItem("user", JSON.stringify(fromBackend));
+      } catch {}
 
-    return fromBackend;
-  }, [tryFetchProfileFromBackend]);
+      return fromBackend;
+    },
+    [tryFetchProfileFromBackend]
+  );
 
   useEffect(() => {
     let cancelled = false;
@@ -263,12 +284,21 @@ export default function Settings({
     const params = new URLSearchParams(search);
     const stripeConnected = params.get("stripe_connected") === "1";
     const stripeRefresh = params.get("stripe_refresh") === "1";
+    const stripeError = params.get("stripe_error") === "1";
+    const stripeErrorDesc = params.get("stripe_error_desc");
 
-    if (stripeConnected || stripeRefresh) {
-      const email = profile?.email || user?.email;
-      if (!email) return;
+    if (!(stripeConnected || stripeRefresh || stripeError)) return;
 
-      (async () => {
+    const email = profile?.email || user?.email;
+
+    (async () => {
+      if (stripeError) {
+        setInfo(
+          stripeErrorDesc
+            ? decodeURIComponent(stripeErrorDesc)
+            : "Stripe connection failed."
+        );
+      } else if (email) {
         try {
           if (typeof refreshUser === "function") {
             await refreshUser();
@@ -278,9 +308,28 @@ export default function Settings({
         try {
           await syncProfileFromBackend(email);
         } catch {}
-      })();
-    }
-  }, [search, profile?.email, user?.email, refreshUser, syncProfileFromBackend]);
+
+        if (stripeConnected) {
+          setInfo("Stripe connected ✅");
+        } else if (stripeRefresh) {
+          setInfo("Stripe onboarding refreshed.");
+        }
+      }
+
+      params.delete("stripe_connected");
+      params.delete("stripe_refresh");
+      params.delete("stripe_error");
+      params.delete("stripe_error_desc");
+
+      navigate(
+        {
+          pathname: location.pathname,
+          search: params.toString(),
+        },
+        { replace: true }
+      );
+    })();
+  }, [search, profile?.email, user?.email, refreshUser, syncProfileFromBackend, navigate, location.pathname]);
 
   const handleSave = useCallback(async () => {
     setSaving(true);
@@ -547,7 +596,7 @@ export default function Settings({
 }
 
 /* ------------------------------------------------------------
-   Team tab (unchanged)
+   Team tab
 ------------------------------------------------------------ */
 
 function TeamTab({ ownerEmail, userEmail, maxWidth }) {
