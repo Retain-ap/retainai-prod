@@ -420,6 +420,69 @@ def _connected_acct_for(email: str):
 # ----------------------------
 # /api/profile (SINGLE SOURCE OF TRUTH) — FIXED (no duplicates)
 # ----------------------------
+@app.route('/api/user/<path:email>', methods=['GET'])
+def get_user(email):
+    email = _norm_email(email)
+    users = load_users() or {}
+
+    if not isinstance(users, dict):
+        return jsonify({"error": "storage_not_ready"}), 500
+
+    role, org_email, org_owner, subject = _resolve_org_and_role(email, users)
+    if not role:
+        return jsonify({"error": "User not found"}), 404
+
+    if not org_owner:
+        return jsonify({"error": "Org owner not found"}), 404
+
+    if not _org_is_active(org_owner):
+        return jsonify({"error": "account_inactive"}), 403
+
+    # Owner uses their own record.
+    # Member uses owner/org fields for business-level settings,
+    # but keeps their own display name if present.
+    base = org_owner if role == "member" else subject
+    subject = subject or {}
+    base = base or {}
+
+    out = {
+        "email": email,
+
+        # display/user identity
+        "name": subject.get("name", "") if role == "member" else base.get("name", ""),
+        "logo": base.get("logo") or base.get("picture", ""),
+
+        # business/profile fields
+        "business": base.get("business", ""),
+        "businessName": base.get("business", ""),
+        "businessType": base.get("businessType", ""),
+        "lineOfBusiness": base.get("businessType", ""),
+        "location": base.get("location", ""),
+        "people": base.get("people") or base.get("teamSize", ""),
+        "teamSize": base.get("teamSize") or base.get("people", ""),
+
+        # stripe
+        "stripe_account_id": base.get("stripe_account_id"),
+        "stripe_connected": bool(base.get("stripe_connected", False)),
+
+        # other integrations
+        "whatsapp": base.get("whatsapp", ""),
+        "gcal_connected": bool(base.get("gcal_connected", False)),
+        "gcal_calendars": base.get("gcal_calendars", []),
+
+        # auth/account state
+        "status": base.get("status", ""),
+        "role": role,
+        "orgOwnerEmail": org_email,
+
+        # permissions
+        "canInviteTeam": role == "owner",
+        "canEditBusiness": role == "owner",
+        "canManageBilling": role == "owner",
+    }
+
+    return jsonify(out), 200
+
 @app.route("/api/profile", methods=["GET", "POST", "OPTIONS"])
 def api_profile():
     if request.method == "OPTIONS":
@@ -1204,6 +1267,31 @@ def serialize_invoice(inv):
 
 # app.py (CONSOLIDATED + PROD-SAFE) — PART 2/2 (CONTINUATION)
 
+@app.route("/api/profile", methods=["GET"])
+def get_profile():
+    email = _norm_email(request.args.get("email"))
+    if not email:
+        return jsonify({"error": "Missing email"}), 400
+
+    users = load_users() or {}
+    user = users.get(email)
+    if not user:
+        return jsonify({"error": "User not found"}), 404
+
+    return jsonify({
+        "email": email,
+        "name": user.get("name", ""),
+        "logo": user.get("logo") or user.get("picture", ""),
+        "business": user.get("business", ""),
+        "businessName": user.get("business", ""),
+        "businessType": user.get("businessType", ""),
+        "location": user.get("location", ""),
+        "people": user.get("people") or user.get("teamSize", ""),
+        "teamSize": user.get("teamSize") or user.get("people", ""),
+        "stripe_connected": user.get("stripe_connected", False),
+        "stripe_account_id": user.get("stripe_account_id"),
+    }), 200
+
 @app.route("/api/stripe/connect-url", methods=["GET"])
 def get_stripe_connect_url():
     user_email = _require_user_email_arg()
@@ -1297,35 +1385,35 @@ def stripe_oauth_callback():
 
     if error:
         msg = urllib.parse.quote_plus(error_desc or error)
-        return redirect(f"{FRONTEND_URL}/app/settings?stripe_error=1&stripe_error_desc={msg}")
+        return redirect(f"{FRONTEND_URL}/app?stripe_error=1&stripe_error_desc={msg}")
 
     code = request.args.get("code")
     if not code or not user_email:
-        return redirect(f"{FRONTEND_URL}/app/settings?stripe_error=1&stripe_error_desc=missing_code_or_state")
+        return redirect(f"{FRONTEND_URL}/app?stripe_error=1&stripe_error_desc=missing_code_or_state")
 
     try:
-        resp = stripe.OAuth.token(grant_type="authorization_code", code=code)
+        resp = stripe.OAuth.token(
+            grant_type="authorization_code",
+            code=code,
+        )
         stripe_user_id = resp["stripe_user_id"]
-
-        users = load_users() or {}
-        if not isinstance(users, dict):
-            return redirect(f"{FRONTEND_URL}/app/settings?stripe_error=1&stripe_error_desc=storage_not_ready")
-
-        role, org_email, org_owner, _ = _resolve_org_and_role(user_email, users)
-        if not role:
-            return redirect(f"{FRONTEND_URL}/app/settings?stripe_error=1&stripe_error_desc=user_not_found")
-
-        org = users.get(org_email, {}) or {}
-        org["stripe_account_id"] = stripe_user_id
-        org["stripe_connected"] = True
-        users[org_email] = org
-        save_users(users)
-
-        return redirect(f"{FRONTEND_URL}/app/settings?stripe_connected=1")
-
     except Exception as e:
         msg = urllib.parse.quote_plus(str(e))
-        return redirect(f"{FRONTEND_URL}/app/settings?stripe_error=1&stripe_error_desc={msg}")
+        return redirect(f"{FRONTEND_URL}/app?stripe_error=1&stripe_error_desc={msg}")
+
+    users = load_users() or {}
+    email = _norm_email(user_email)
+
+    user = users.get(email)
+    if not user:
+        return redirect(f"{FRONTEND_URL}/app?stripe_error=1&stripe_error_desc=user_not_found")
+
+    user["stripe_account_id"] = stripe_user_id
+    user["stripe_connected"] = True
+    users[email] = user
+    save_users(users)
+
+    return redirect(f"{FRONTEND_URL}/app?stripe_connected=1")
 
 @app.route("/api/stripe/dashboard-link", methods=["GET"])
 def stripe_dashboard_link():
