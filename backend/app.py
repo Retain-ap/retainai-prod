@@ -3278,7 +3278,6 @@ def send_whatsapp_message():
                 app.logger.warning("[WHATSAPP] save message/status error: %s", e)
             except Exception:
                 pass
-
         out = {
             "ok": True,
             "mode": mode,
@@ -3295,7 +3294,7 @@ def send_whatsapp_message():
             if out["fallbackUsed"] and fallback_reason:
                 out["fallbackReason"] = fallback_reason
 
-            if user_email:
+        if user_email:
             lead_name = ""
             try:
                 leads_by_user = load_leads() or {}
