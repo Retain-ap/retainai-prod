@@ -60,14 +60,18 @@ app.config["BOOTSTRAP_DONE"] = False  # used to start scheduler once in prod
 # ----------------------------
 # CORS
 # ----------------------------
-ALLOWED = [o.strip() for o in os.getenv("ALLOWED_ORIGINS", "").split(",") if o.strip()]
+ALLOWED = [o.strip().rstrip("/") for o in os.getenv("ALLOWED_ORIGINS", "").split(",") if o.strip()]
 
 if not ALLOWED:
     # Safe fallback for dev if env missing
     ALLOWED = [
         "http://localhost:3000",
-        "https://retainai-prod-1-frontend.onrender.com"
+        "https://retainai-prod-1-frontend.onrender.com",
+        "https://www.retainai.ca",
+        "https://retainai.ca",
     ]
+
+print("[CORS] Allowed origins:", ALLOWED)
 
 CORS(
     app,
@@ -86,7 +90,11 @@ CORS(
 )
 
 # Cookies: secure in prod (Render/https), relax in local dev
-IS_LOCAL = (os.getenv("FLASK_ENV", "").lower() == "development") or ("localhost" in ",".join(ALLOWED))
+IS_LOCAL = (
+    os.getenv("FLASK_ENV", "").lower() == "development"
+    or any("localhost" in origin for origin in ALLOWED)
+)
+
 app.config.update(
     SESSION_COOKIE_SAMESITE="None",
     SESSION_COOKIE_SECURE=not IS_LOCAL,
@@ -94,22 +102,36 @@ app.config.update(
 
 @app.after_request
 def add_cors_headers(resp):
-    origin = request.headers.get("Origin")
-    if origin and origin in ALLOWED:
+    origin = (request.headers.get("Origin") or "").rstrip("/")
+
+    if origin in ALLOWED:
         resp.headers["Access-Control-Allow-Origin"] = origin
         resp.headers["Vary"] = "Origin"
         resp.headers["Access-Control-Allow-Credentials"] = "true"
-        resp.headers["Access-Control-Allow-Methods"] = "GET,POST,PUT,PATCH,DELETE,OPTIONS"
+        resp.headers["Access-Control-Allow-Methods"] = "GET, POST, PUT, PATCH, DELETE, OPTIONS"
         resp.headers["Access-Control-Allow-Headers"] = (
             "Content-Type, Authorization, X-Requested-With, "
             "X-User-Email, X-Owner-Email, X-Auth-Email"
         )
+
     return resp
 
 @app.route("/api/<path:_any>", methods=["OPTIONS"])
 def api_options(_any):
-    return ("", 204)
+    resp = current_app.make_response(("", 204))
+    origin = (request.headers.get("Origin") or "").rstrip("/")
 
+    if origin in ALLOWED:
+        resp.headers["Access-Control-Allow-Origin"] = origin
+        resp.headers["Vary"] = "Origin"
+        resp.headers["Access-Control-Allow-Credentials"] = "true"
+        resp.headers["Access-Control-Allow-Methods"] = "GET, POST, PUT, PATCH, DELETE, OPTIONS"
+        resp.headers["Access-Control-Allow-Headers"] = (
+            "Content-Type, Authorization, X-Requested-With, "
+            "X-User-Email, X-Owner-Email, X-Auth-Email"
+        )
+
+    return resp
 
 # ----------------------------
 # HEALTH / TEST
