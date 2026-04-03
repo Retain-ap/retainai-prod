@@ -4380,6 +4380,363 @@ def builtin_templates() -> List[Dict[str, Any]]:
         }
     ]
 
+def _flow_actions_preview(flow: Dict[str, Any], lead: Dict[str, Any], profile: Dict[str, Any]) -> List[Dict[str, Any]]:
+    run = {
+        "step": 0,
+        "created_at": now_utc().isoformat(),
+        "last_step_at": None,
+        "done": False,
+        "last_sent": {},
+        "memo": {},
+    }
+    caps = flow.get("caps", {"per_lead_per_day": 1, "respect_quiet_hours": True}) or {}
+    out = []
+
+    for step in (flow.get("steps") or []):
+        kind = step.get("type")
+
+        if kind == "ai_draft":
+            text = ai_draft_message({
+                "lead": lead,
+                "flow": flow,
+                "business_name": profile.get("business_name"),
+                "booking_link": profile.get("booking_link"),
+            })
+            run.setdefault("memo", {})["last_ai_text"] = text
+            out.append({
+                "type": "ai_draft",
+                "info": {"text": text},
+                "status": "would_run",
+            })
+            continue
+
+        if kind == "wait":
+            out.append({
+                "type": "wait",
+                "info": {
+                    "days": step.get("days", 0),
+                    "hours": step.get("hours", 0),
+                    "minutes": step.get("minutes", 0),
+                },
+                "status": "would_wait",
+            })
+            continue
+
+        if kind == "send_whatsapp":
+            body = render_text(step.get("text") or run.get("memo", {}).get("last_ai_text") or "", lead, run, profile)
+            info = {"text": body, "to": lead.get("phone") or lead.get("whatsapp") or ""}
+            template_cfg = step.get("template") or {}
+            if template_cfg:
+                info["template"] = template_cfg
+            out.append({
+                "type": "send_whatsapp",
+                "info": info,
+                "status": "would_send",
+            })
+            continue
+
+        if kind == "send_email":
+            subject = render_text(step.get("subject") or "Quick check-in", lead, run, profile)
+            html = render_text(
+                step.get("html") or step.get("body") or "<p>Hi {{lead.first_name}}, just checking in. <a href='{{booking_link}}'>Book here</a>.</p>",
+                lead,
+                run,
+                profile,
+            )
+            html = html.replace("\n", "<br>")
+            out.append({
+                "type": "send_email",
+                "info": {
+                    "to": lead.get("email") or "",
+                    "subject": subject,
+                    "html": html,
+                },
+                "status": "would_send",
+            })
+            continue
+
+        if kind == "push_owner":
+            out.append({
+                "type": "push_owner",
+                "info": {
+                    "title": step.get("title") or "Lead to call",
+                    "message": step.get("message") or str(lead.get("email") or ""),
+                },
+                "status": "would_push",
+            })
+            continue
+
+        if kind == "add_tag":
+            out.append({
+                "type": "add_tag",
+                "info": {"tag": step.get("tag") or ""},
+                "status": "would_add",
+            })
+            continue
+
+        if kind == "if_no_reply":
+            nested = step.get("then") or []
+            out.append({
+                "type": "if_no_reply",
+                "info": {"within_days": int(step.get("within_days", 2))},
+                "status": "branch_check",
+            })
+            for s in nested:
+                nested_kind = s.get("type")
+                if nested_kind == "send_email":
+                    subject = render_text(s.get("subject") or "Quick check-in", lead, run, profile)
+                    html = render_text(
+                        s.get("html") or s.get("body") or "",
+                        lead,
+                        run,
+                        profile,
+                    ).replace("\n", "<br>")
+                    out.append({
+                        "type": "send_email",
+                        "info": {"to": lead.get("email") or "", "subject": subject, "html": html},
+                        "status": "would_send",
+                    })
+                elif nested_kind == "send_whatsapp":
+                    txt = render_text(s.get("text") or run.get("memo", {}).get("last_ai_text") or "", lead, run, profile)
+                    out.append({
+                        "type": "send_whatsapp",
+                        "info": {"to": lead.get("phone") or lead.get("whatsapp") or "", "text": txt},
+                        "status": "would_send",
+                    })
+                elif nested_kind == "wait":
+                    out.append({
+                        "type": "wait",
+                        "info": {
+                            "days": s.get("days", 0),
+                            "hours": s.get("hours", 0),
+                            "minutes": s.get("minutes", 0),
+                        },
+                        "status": "would_wait",
+                    })
+            continue
+
+        if kind == "if_no_booking":
+            nested = step.get("then") or []
+            out.append({
+                "type": "if_no_booking",
+                "info": {"within_days": int(step.get("within_days", 2))},
+                "status": "branch_check",
+            })
+            for s in nested:
+                nested_kind = s.get("type")
+                if nested_kind == "send_email":
+                    subject = render_text(s.get("subject") or "Quick check-in", lead, run, profile)
+                    html = render_text(
+                        s.get("html") or s.get("body") or "",
+                        lead,
+                        run,
+                        profile,
+                    ).replace("\n", "<br>")
+                    out.append({
+                        "type": "send_email",
+                        "info": {"to": lead.get("email") or "", "subject": subject, "html": html},
+                        "status": "would_send",
+                    })
+                elif nested_kind == "send_whatsapp":
+                    txt = render_text(s.get("text") or run.get("memo", {}).get("last_ai_text") or "", lead, run, profile)
+                    out.append({
+                        "type": "send_whatsapp",
+                        "info": {"to": lead.get("phone") or lead.get("whatsapp") or "", "text": txt},
+                        "status": "would_send",
+                    })
+                elif nested_kind == "add_tag":
+                    out.append({
+                        "type": "add_tag",
+                        "info": {"tag": s.get("tag") or ""},
+                        "status": "would_add",
+                    })
+            continue
+
+    return out
+
+
+def _find_lead_for_test(user: str, lead_email: str) -> Optional[Dict[str, Any]]:
+    leads_by_user = load_leads()
+    arr = leads_by_user.get(user, []) or []
+    target = (lead_email or "").strip().lower()
+
+    for ld in arr:
+        if (ld.get("email") or "").strip().lower() == target:
+            return ld
+
+    return None
+
+@automations_bp.route("/test", methods=["POST"])
+def automations_test_route():
+    user = user_from_request()
+    body = request.get_json(force=True) or {}
+
+    mode = (body.get("mode") or "dryrun").strip().lower()
+    lead_email = (body.get("lead_email") or "").strip().lower()
+
+    if not lead_email:
+        return jsonify({"ok": False, "error": "lead_email is required"}), 400
+
+    lead = _find_lead_for_test(user, lead_email)
+    if not lead:
+        return jsonify({"ok": False, "error": "Lead not found for this user"}), 404
+
+    profile = load_user_profile(user)
+
+    flow = body.get("flow")
+    if not flow:
+        flow_id = body.get("flow_id")
+        if not flow_id:
+            return jsonify({"ok": False, "error": "flow or flow_id is required"}), 400
+        flows = load_user_flows(user)
+        flow = next((f for f in flows if f.get("id") == flow_id), None)
+        if not flow:
+            return jsonify({"ok": False, "error": "flow not found"}), 404
+
+    flow = _normalize_flow_for_user(flow, user)
+
+    if mode == "dryrun":
+        would = _flow_actions_preview(flow, lead, profile)
+        return jsonify({"ok": True, "mode": "dryrun", "would": would})
+
+    if mode == "execute":
+        run = {
+            "step": 0,
+            "created_at": now_utc().isoformat(),
+            "last_step_at": None,
+            "done": False,
+            "last_sent": {},
+            "memo": {},
+        }
+        caps = flow.get("caps", {"per_lead_per_day": 1, "respect_quiet_hours": True}) or {}
+        did = []
+
+        for step in (flow.get("steps") or []):
+            kind = step.get("type")
+
+            if kind == "wait" and body.get("ignore_waits", True):
+                did.append({
+                    "type": "wait",
+                    "status": "skipped",
+                    "info": {"reason": "ignore_waits"},
+                })
+                continue
+
+            if kind == "ai_draft":
+                text = ai_draft_message({
+                    "lead": lead,
+                    "flow": flow,
+                    "business_name": profile.get("business_name"),
+                    "booking_link": profile.get("booking_link"),
+                })
+                run.setdefault("memo", {})["last_ai_text"] = text
+                did.append({
+                    "type": "ai_draft",
+                    "status": "ok",
+                    "info": {"text": text},
+                })
+                continue
+
+            if kind == "send_whatsapp":
+                txt = render_text(step.get("text") or run.get("memo", {}).get("last_ai_text") or "", lead, run, profile)
+                did.append({
+                    "type": "send_whatsapp",
+                    "status": "ok",
+                    "info": {
+                        "to": lead.get("phone") or lead.get("whatsapp") or lead_email,
+                        "text": txt,
+                        "template": step.get("template") or {},
+                    },
+                })
+                continue
+
+            if kind == "send_email":
+                subject = render_text(step.get("subject") or "Quick check-in", lead, run, profile)
+                html = render_text(
+                    step.get("html") or step.get("body") or "",
+                    lead,
+                    run,
+                    profile,
+                ).replace("\n", "<br>")
+                did.append({
+                    "type": "send_email",
+                    "status": "ok",
+                    "info": {
+                        "to": lead.get("email") or lead_email,
+                        "subject": subject,
+                        "html": html,
+                    },
+                })
+                continue
+
+            if kind == "push_owner":
+                did.append({
+                    "type": "push_owner",
+                    "status": "ok",
+                    "info": {
+                        "title": step.get("title") or "Lead to call",
+                        "message": step.get("message") or "",
+                    },
+                })
+                continue
+
+            if kind == "add_tag":
+                did.append({
+                    "type": "add_tag",
+                    "status": "ok",
+                    "info": {"tag": step.get("tag") or ""},
+                })
+                continue
+
+            if kind in ("if_no_reply", "if_no_booking"):
+                nested = step.get("then") or []
+                for s in nested:
+                    nk = s.get("type")
+                    if nk == "send_email":
+                        subject = render_text(s.get("subject") or "Quick check-in", lead, run, profile)
+                        html = render_text(
+                            s.get("html") or s.get("body") or "",
+                            lead,
+                            run,
+                            profile,
+                        ).replace("\n", "<br>")
+                        did.append({
+                            "type": "send_email",
+                            "status": "ok",
+                            "info": {
+                                "to": lead.get("email") or lead_email,
+                                "subject": subject,
+                                "html": html,
+                            },
+                        })
+                    elif nk == "send_whatsapp":
+                        txt = render_text(s.get("text") or run.get("memo", {}).get("last_ai_text") or "", lead, run, profile)
+                        did.append({
+                            "type": "send_whatsapp",
+                            "status": "ok",
+                            "info": {
+                                "to": lead.get("phone") or lead.get("whatsapp") or lead_email,
+                                "text": txt,
+                            },
+                        })
+                    elif nk == "add_tag":
+                        did.append({
+                            "type": "add_tag",
+                            "status": "ok",
+                            "info": {"tag": s.get("tag") or ""},
+                        })
+                continue
+
+        return jsonify({"ok": True, "mode": "execute", "did": did})
+
+    return jsonify({"ok": False, "error": "invalid mode"}), 400
+
+
+@automations_bp.route("/run", methods=["POST"])
+def automations_run_once_route():
+    engine_tick()
+    return jsonify({"ok": True, "message": "engine_tick completed"})
+    
 @automations_bp.route("/templates", methods=["GET"])
 def automations_templates():
     return jsonify({"ok": True, "templates": builtin_templates()})
