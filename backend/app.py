@@ -410,23 +410,106 @@ def add_notification(
         user_notes = []
 
     note = {
-        "id": f"note_{uuid4().hex[:10]}",
-        "subject": subject or "Notification",
-        "message": message or "",
+        "id": f"note_{uuid4().hex[:12]}",
+        "subject": str(subject or "Notification"),
+        "message": str(message or ""),
         "timestamp": datetime.datetime.utcnow().isoformat() + "Z",
         "read": False,
-        "channel": channel or "app",
-        "lead_email": lead_email or "",
+        "channel": str(channel or "app"),
+        "lead_email": str(lead_email or "").strip().lower(),
     }
 
     if isinstance(extra, dict):
-        note.update(extra)
+        for k, v in extra.items():
+            note[k] = v
 
     user_notes.insert(0, note)
     all_notes[user_email] = user_notes
     save_notifications(all_notes)
     return note
 
+
+def log_notification(user_email, subject, message, lead_email=None):
+    return add_notification(
+        user_email=user_email,
+        subject=subject,
+        message=message,
+        channel="app",
+        lead_email=lead_email or "",
+    )
+
+
+def _notification_sort_ts(n: dict) -> float:
+    raw = n.get("timestamp") or n.get("created_at") or n.get("time") or ""
+    try:
+        return datetime.datetime.fromisoformat(str(raw).replace("Z", "+00:00")).timestamp()
+    except Exception:
+        return 0.0
+
+
+def _normalize_notification_item(n: dict, idx: int = 0) -> dict:
+    item = dict(n or {})
+    item.setdefault("id", item.get("_id") or item.get("uuid") or f"note_{idx}")
+    item.setdefault("read", False)
+    item.setdefault("timestamp", item.get("created_at") or item.get("time") or item.get("timestamp") or "")
+    item.setdefault("subject", item.get("title") or item.get("type") or item.get("subject") or "Notification")
+    item.setdefault("message", item.get("body") or item.get("text") or item.get("message") or "")
+    item.setdefault("channel", item.get("channel") or "app")
+    item.setdefault("lead_email", item.get("lead_email") or item.get("email") or "")
+    item.setdefault("lead_name", item.get("lead_name") or item.get("leadName") or "")
+    return item
+
+
+def _build_upcoming_appointment_notifications(user_email: str) -> list:
+    out = []
+    appointments = load_appointments() or {}
+    user_appts = appointments.get((user_email or "").strip().lower(), []) or []
+    now = datetime.datetime.utcnow()
+    soon_cutoff = now + datetime.timedelta(days=7)
+
+    for appt in user_appts:
+        if not isinstance(appt, dict):
+            continue
+
+        raw_ts = appt.get("appointment_time")
+        if not raw_ts:
+            continue
+
+        try:
+            appt_dt = datetime.datetime.strptime(raw_ts, "%Y-%m-%dT%H:%M:%S")
+        except Exception:
+            continue
+
+        if now <= appt_dt <= soon_cutoff:
+            out.append({
+                "id": f"appt_upcoming_{appt.get('id')}",
+                "subject": "Upcoming appointment",
+                "message": f"{appt.get('lead_first_name') or appt.get('lead_email') or 'Lead'} has an appointment scheduled.",
+                "timestamp": appt_dt.isoformat() + "Z",
+                "read": False,
+                "channel": "appointment",
+                "lead_email": appt.get("lead_email") or "",
+                "lead_name": appt.get("lead_first_name") or "",
+                "appointment_id": appt.get("id"),
+                "derived": True,
+            })
+
+        status = str(appt.get("status") or "").strip().lower().replace("_", "-")
+        if status == "no-show":
+            out.append({
+                "id": f"appt_noshow_{appt.get('id')}",
+                "subject": "Appointment no-show",
+                "message": f"{appt.get('lead_first_name') or appt.get('lead_email') or 'Lead'} missed an appointment.",
+                "timestamp": appt.get("updated_at") or appt_dt.isoformat() + "Z",
+                "read": False,
+                "channel": "appointment",
+                "lead_email": appt.get("lead_email") or "",
+                "lead_name": appt.get("lead_first_name") or "",
+                "appointment_id": appt.get("id"),
+                "derived": True,
+            })
+
+    return out
 # ----------------------------
 # /api/profile (SINGLE SOURCE OF TRUTH) — FIXED (no duplicates)
 # ----------------------------
@@ -1126,7 +1209,7 @@ def get_notifications(user_email):
             app.logger.warning("[NOTIFICATIONS] load failed for %s: %s", user_email, e)
         except Exception:
             pass
-        return jsonify({"notifications": []}), 200
+        all_notes = {}
 
     notes = all_notes.get(user_email, []) or []
     if not isinstance(notes, list):
@@ -1136,19 +1219,23 @@ def get_notifications(user_email):
     for idx, n in enumerate(notes):
         if not isinstance(n, dict):
             continue
+        normalized.append(_normalize_notification_item(n, idx))
 
-        item = dict(n)
-        item.setdefault("id", item.get("_id") or item.get("uuid") or f"note_{idx}")
-        item.setdefault("read", False)
-        item.setdefault("timestamp", item.get("created_at") or item.get("time") or "")
-        item.setdefault("subject", item.get("title") or item.get("type") or "Notification")
-        item.setdefault("message", item.get("body") or item.get("text") or "")
-        item.setdefault("channel", item.get("channel") or "app")
-        item.setdefault("lead_email", item.get("lead_email") or "")
+    # Merge in derived appointment notifications
+    derived = _build_upcoming_appointment_notifications(user_email)
 
-        normalized.append(item)
+    # Deduplicate by id
+    seen = set()
+    merged = []
+    for item in normalized + derived:
+        nid = str(item.get("id") or "")
+        if nid in seen:
+            continue
+        seen.add(nid)
+        merged.append(item)
 
-    return jsonify({"notifications": normalized}), 200
+    merged.sort(key=_notification_sort_ts, reverse=True)
+    return jsonify({"notifications": merged}), 200
 
 
 @app.route("/api/notifications/<path:user_email>/<notif_id>/mark_read", methods=["POST"])
@@ -1217,6 +1304,8 @@ def get_appointments(user_email):
 @app.route("/api/appointments/<user_email>", methods=["POST"])
 def create_appointment(user_email):
     data = request.get_json(silent=True) or {}
+    user_email = (user_email or "").strip().lower()
+
     appt = {
         "id": str(uuid4()),
         "lead_email": data["lead_email"],
@@ -1227,16 +1316,22 @@ def create_appointment(user_email):
         "appointment_time": data["appointment_time"],
         "appointment_location": data["appointment_location"],
         "duration": data.get("duration", 30),
-        "notes": data.get("notes", "")
+        "notes": data.get("notes", ""),
+        "status": data.get("status", "scheduled"),
+        "created_at": datetime.datetime.utcnow().isoformat() + "Z",
+        "updated_at": datetime.datetime.utcnow().isoformat() + "Z",
     }
 
-    appointments = load_appointments()
+    appointments = load_appointments() or {}
     appointments.setdefault(user_email, []).append(appt)
     save_appointments(appointments)
 
     create_ics_file(appt)
 
-    display_time = datetime.datetime.strptime(appt["appointment_time"], "%Y-%m-%dT%H:%M:%S").strftime("%B %d, %Y, %I:%M %p")
+    display_time = datetime.datetime.strptime(
+        appt["appointment_time"], "%Y-%m-%dT%H:%M:%S"
+    ).strftime("%B %d, %Y, %I:%M %p")
+
     ics_file_url = f"{request.host_url.rstrip('/')}/ics/{appt['id']}.ics"
     google_calendar_link = make_google_calendar_link(appt)
 
@@ -1255,12 +1350,26 @@ def create_appointment(user_email):
         }
     )
 
+    add_notification(
+        user_email=user_email,
+        subject="Appointment created",
+        message=f"Appointment booked with {appt.get('lead_first_name') or appt.get('lead_email') or 'lead'} for {display_time}.",
+        channel="appointment",
+        lead_email=appt.get("lead_email") or "",
+        extra={
+            "lead_name": appt.get("lead_first_name") or "",
+            "appointment_id": appt.get("id"),
+        },
+    )
+
     return jsonify({"message": "Appointment created and confirmation sent!", "appointment": appt}), 201
 
 @app.route("/api/appointments/<user_email>/<appt_id>", methods=["PUT"])
 def update_appointment(user_email, appt_id):
     data = request.get_json(silent=True) or {}
-    appointments = load_appointments()
+    user_email = (user_email or "").strip().lower()
+
+    appointments = load_appointments() or {}
     user_appts = appointments.get(user_email, [])
     updated = False
     updated_obj = None
@@ -1269,6 +1378,7 @@ def update_appointment(user_email, appt_id):
         if appt["id"] == appt_id:
             for k, v in data.items():
                 user_appts[i][k] = v
+            user_appts[i]["updated_at"] = datetime.datetime.utcnow().isoformat() + "Z"
             updated = True
             updated_obj = user_appts[i]
             create_ics_file(updated_obj)
@@ -1276,24 +1386,71 @@ def update_appointment(user_email, appt_id):
 
     appointments[user_email] = user_appts
     save_appointments(appointments)
+
+    if updated and updated_obj:
+        add_notification(
+            user_email=user_email,
+            subject="Appointment updated",
+            message=f"Appointment updated for {updated_obj.get('lead_first_name') or updated_obj.get('lead_email') or 'lead'}.",
+            channel="appointment",
+            lead_email=updated_obj.get("lead_email") or "",
+            extra={
+                "lead_name": updated_obj.get("lead_first_name") or "",
+                "appointment_id": updated_obj.get("id"),
+            },
+        )
+
+        if str(updated_obj.get("status") or "").strip().lower().replace("_", "-") == "no-show":
+            add_notification(
+                user_email=user_email,
+                subject="Appointment no-show",
+                message=f"{updated_obj.get('lead_first_name') or updated_obj.get('lead_email') or 'Lead'} was marked as a no-show.",
+                channel="appointment",
+                lead_email=updated_obj.get("lead_email") or "",
+                extra={
+                    "lead_name": updated_obj.get("lead_first_name") or "",
+                    "appointment_id": updated_obj.get("id"),
+                },
+            )
+
     return jsonify({"updated": updated, "appointment": updated_obj}), 200
 
 @app.route("/api/appointments/<user_email>/<appt_id>", methods=["DELETE"])
 def delete_appointment(user_email, appt_id):
-    appointments = load_appointments()
-    user_appts = appointments.get(user_email, [])
-    before = len(user_appts)
-    user_appts = [a for a in user_appts if a["id"] != appt_id]
-    after = len(user_appts)
+    user_email = (user_email or "").strip().lower()
 
-    appointments[user_email] = user_appts
+    appointments = load_appointments() or {}
+    user_appts = appointments.get(user_email, []) or []
+
+    removed = None
+    kept = []
+    for a in user_appts:
+        if a.get("id") == appt_id and removed is None:
+            removed = a
+        else:
+            kept.append(a)
+
+    appointments[user_email] = kept
     save_appointments(appointments)
 
     fname = os.path.join(ICS_DIR, f"{appt_id}.ics")
     if os.path.exists(fname):
         os.remove(fname)
 
-    return jsonify({"deleted": before - after}), 200
+    if removed:
+        add_notification(
+            user_email=user_email,
+            subject="Appointment canceled",
+            message=f"Appointment removed for {removed.get('lead_first_name') or removed.get('lead_email') or 'lead'}.",
+            channel="appointment",
+            lead_email=removed.get("lead_email") or "",
+            extra={
+                "lead_name": removed.get("lead_first_name") or "",
+                "appointment_id": removed.get("id"),
+            },
+        )
+
+    return jsonify({"deleted": 1 if removed else 0}), 200
 
 # ----------------------------
 # Stripe Connect / Billing (ORG-AWARE + MEMBER SAFE)
@@ -3138,6 +3295,31 @@ def send_whatsapp_message():
             if out["fallbackUsed"] and fallback_reason:
                 out["fallbackReason"] = fallback_reason
 
+            if user_email:
+            lead_name = ""
+            try:
+                leads_by_user = load_leads() or {}
+                for ld in (leads_by_user.get(user_email, []) or []):
+                    if str(ld.get("id") or "") == str(lead_id or ""):
+                        lead_name = ld.get("name") or ld.get("first_name") or ""
+                        break
+            except Exception:
+                pass
+
+            add_notification(
+                user_email=user_email,
+                subject="WhatsApp sent",
+                message=f"Sent WhatsApp message to {lead_name or to_number}.",
+                channel="whatsapp",
+                lead_email="",
+                extra={
+                    "lead_name": lead_name,
+                    "mode": mode,
+                    "message_id": msg_id,
+                    "used_language": used_lang,
+                },
+            )
+
         return jsonify(out), resp.status_code
 
     except RuntimeError as e:
@@ -3298,6 +3480,31 @@ def whatsapp_webhook():
                         "data": thread
                     }
 
+                    # notification center hook
+                    lead_name = ""
+                    lead_email = ""
+                    try:
+                        leads_by_user = load_leads() or {}
+                        for ld in (leads_by_user.get(user_email, []) or []):
+                            if str(ld.get("id") or "") == str(lead_id):
+                                lead_name = ld.get("name") or ld.get("first_name") or ""
+                                lead_email = ld.get("email") or ""
+                                break
+                    except Exception:
+                        pass
+
+                    add_notification(
+                        user_email=user_email,
+                        subject="WhatsApp received",
+                        message=text[:180] if isinstance(text, str) else "New inbound WhatsApp message received.",
+                        channel="whatsapp",
+                        lead_email=lead_email,
+                        extra={
+                            "lead_name": lead_name,
+                            "type": "inbound",
+                        },
+                    )
+
     except Exception as e:
         try:
             app.logger.warning("[WHATSAPP WEBHOOK] parse error: %s", e)
@@ -3305,7 +3512,6 @@ def whatsapp_webhook():
             pass
 
     return "OK", 200
-
 
 # ============================================================
 # AI: prompt endpoints
@@ -3496,20 +3702,11 @@ from sendgrid.helpers.mail import Email
 
 @app.route("/api/send-ai-message", methods=["POST"])
 def send_ai_message():
-    """
-    Sends the AI-written message via SendGrid dynamic templates.
-
-    From:     "<Business Name>" <noreply@retainai.ca>
-    Reply-To: owner (user) email
-    Subject:  EXACTLY what the caller provides
-    Body:     EXACT AI text provided in `message` (mirrored to several keys)
-    """
     try:
         data = request.get_json(force=True) or {}
     except Exception:
         return jsonify({"ok": False, "error": "Invalid JSON body"}), 400
 
-    # recipient
     lead = data.get("lead") or {}
     to_email = (
         data.get("to")
@@ -3524,10 +3721,8 @@ def send_ai_message():
     if not to_email:
         return jsonify({"ok": False, "error": "Recipient 'to' is required"}), 400
 
-    # owner / user
     owner_email = str(data.get("user_email") or request.headers.get("X-User-Email") or "").strip().lower()
 
-    # infer owner from leads if missing
     if not owner_email:
         try:
             lbsu = load_leads() or {}
@@ -3545,7 +3740,6 @@ def send_ai_message():
             except Exception:
                 pass
 
-    # user profile
     try:
         users = load_users() or {}
     except Exception:
@@ -3555,7 +3749,6 @@ def send_ai_message():
     if not isinstance(user_profile, dict):
         user_profile = {}
 
-    # display name / business name
     business_name = (
         str(data.get("businessName") or data.get("business") or data.get("user_business") or "").strip()
         or str(user_profile.get("business") or "").strip()
@@ -3565,7 +3758,6 @@ def send_ai_message():
     user_name = str(data.get("userName") or data.get("user_name") or user_profile.get("name") or "").strip()
     lead_name = str(data.get("leadName") or lead.get("name") or "").strip()
 
-    # prompt type -> SendGrid template
     prompt_type = str(data.get("promptType") or data.get("type") or "reengage").strip().lower()
 
     TEMPLATE_MAP = {
@@ -3581,7 +3773,6 @@ def send_ai_message():
     if not template_id:
         return jsonify({"ok": False, "error": f"No SendGrid template configured for prompt type '{prompt_type}'"}), 500
 
-    # AI body text
     model_text = (
         data.get("message")
         or data.get("prompt")
@@ -3595,7 +3786,6 @@ def send_ai_message():
     if not model_text:
         return jsonify({"ok": False, "error": "No AI text provided (pass it in 'message')."}), 422
 
-    # subject = exactly what caller sends
     subject = str(
         data.get("subject")
         or data.get("emailSubject")
@@ -3603,7 +3793,6 @@ def send_ai_message():
         or "Quick note"
     ).strip()
 
-    # optional extras
     tags_val = data.get("tags") or lead.get("tags") or []
     if isinstance(tags_val, list):
         tags = ", ".join([str(t) for t in tags_val if str(t).strip()])
@@ -3628,7 +3817,6 @@ def send_ai_message():
         "tags": tags,
         "notes": notes,
         "booking_link": booking_link,
-        # expose AI body under multiple keys so templates remain flexible
         "ai_text": model_text,
         "message": model_text,
         "content": model_text,
@@ -3669,6 +3857,20 @@ def send_ai_message():
             "from_email": SENDER_EMAIL,
             "reply_to": owner_email or None,
         }), 502
+
+    if owner_email:
+        add_notification(
+            user_email=owner_email,
+            subject="AI email sent",
+            message=f"Sent AI-generated email to {lead_name or to_email}.",
+            channel="email",
+            lead_email=to_email,
+            extra={
+                "lead_name": lead_name,
+                "type": "ai",
+                "prompt_type": prompt_type,
+            },
+        )
 
     return jsonify({
         "ok": True,
@@ -3724,16 +3926,12 @@ def ensure_files():
         write_json(FILE_SUBSCRIPTIONS, {"subscriptions": {}})
 
 def create_notification(owner_email: str, title: str, body: str):
-    data = read_json(FILE_NOTIFICATIONS, {"notifications": []})
-    notif = {
-        "id": str(uuid4()),
-        "owner": (owner_email or "").lower(),
-        "title": title,
-        "body": body,
-        "created_at": now_utc().isoformat()
-    }
-    data.setdefault("notifications", []).insert(0, notif)
-    write_json(FILE_NOTIFICATIONS, data)
+    return add_notification(
+        user_email=(owner_email or "").lower(),
+        subject=title or "Automation notification",
+        message=body or "",
+        channel="automation",
+    )
 
 def load_user_profile(user_email: str) -> Dict[str, Any]:
     db = read_json(FILE_USERS, {"users": {}})
@@ -3980,6 +4178,17 @@ def send_whatsapp_with_window(flow, step, lead, run, caps, profile) -> bool:
         if ok:
             mark_sent(run, CHANNEL_WHATSAPP)
             append_chat_message(user_email, lead_id, body)
+            add_notification(
+                user_email=user_email,
+                subject="Automation WhatsApp sent",
+                message=f"Automation sent a WhatsApp message to {lead.get('name') or lead.get('email') or 'lead'}.",
+                channel="automation",
+                lead_email=lead.get("email") or "",
+                extra={
+                    "lead_name": lead.get("name") or lead.get("first_name") or "",
+                    "type": "automation",
+                },
+            )
         return True
 
     template_cfg = step.get("template") or {}
@@ -4008,6 +4217,19 @@ def send_whatsapp_with_window(flow, step, lead, run, caps, profile) -> bool:
     if ok:
         mark_sent(run, CHANNEL_WHATSAPP)
         append_chat_message(user_email, lead_id, shown)
+        add_notification(
+            user_email=user_email,
+            subject="Automation WhatsApp sent",
+            message=f"Automation sent a WhatsApp template to {lead.get('name') or lead.get('email') or 'lead'}.",
+            channel="automation",
+            lead_email=lead.get("email") or "",
+            extra={
+                "lead_name": lead.get("name") or lead.get("first_name") or "",
+                "type": "automation",
+                "template_name": tpl_name,
+                "used_language": used_lang,
+            },
+        )
     return True
 
 def get_run(state: Dict[str, Any], flow_id: str, lead_key: str) -> Dict[str, Any]:
@@ -4154,6 +4376,17 @@ def execute_step(flow: Dict[str, Any], step: Dict[str, Any], lead: Dict[str, Any
         ok = send_email_sendgrid_auto(email, subject, html, profile.get("business_name") or "RetainAI")
         if ok:
             mark_sent(run, CHANNEL_EMAIL)
+            add_notification(
+                user_email=(lead.get("owner") or flow.get("owner") or "").lower(),
+                subject="Automation email sent",
+                message=f"Automation sent an email to {lead.get('name') or email}.",
+                channel="automation",
+                lead_email=email,
+                extra={
+                    "lead_name": lead.get("name") or lead.get("first_name") or "",
+                    "type": "automation",
+                },
+            )
         return True
 
     if kind == "push_owner":
@@ -4736,7 +4969,7 @@ def automations_test_route():
 def automations_run_once_route():
     engine_tick()
     return jsonify({"ok": True, "message": "engine_tick completed"})
-    
+
 @automations_bp.route("/templates", methods=["GET"])
 def automations_templates():
     return jsonify({"ok": True, "templates": builtin_templates()})
