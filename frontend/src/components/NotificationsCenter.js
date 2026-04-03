@@ -1,37 +1,93 @@
-// src/components/NotificationsCenter.jsx
 import React, { useEffect, useMemo, useState } from "react";
+import { API_BASE } from "../config";
 import "./NotificationsCenter.css";
 
-// small event helper (same pattern we used elsewhere)
 const ping = (name) => window.dispatchEvent(new Event(name));
 
+function normalizeNotification(n, idx) {
+  const subject =
+    n.subject ||
+    n.title ||
+    n.type ||
+    "Notification";
+
+  const message =
+    n.message ||
+    n.body ||
+    n.text ||
+    "";
+
+  const timestamp =
+    n.timestamp ||
+    n.created_at ||
+    n.time ||
+    "";
+
+  const channel =
+    (n.channel || n.type || "").toLowerCase();
+
+  return {
+    ...n,
+    subject,
+    message,
+    timestamp,
+    channel,
+    read: n.read ?? false,
+    _id: String(n.id ?? n._id ?? n.uuid ?? idx),
+    _idx: idx,
+  };
+}
+
+function iconForNotification(notif) {
+  const s = String(notif.subject || "").toLowerCase();
+  const c = String(notif.channel || "").toLowerCase();
+
+  if (c.includes("whatsapp") || s.includes("whatsapp")) return "💬";
+  if (c.includes("email") || s.includes("email")) return "📧";
+  if (s.includes("appointment") || s.includes("calendar")) return "📅";
+  if (s.includes("reminder")) return "🔔";
+  if (s.includes("automation")) return "⚙️";
+  return "📩";
+}
+
+function labelForNotification(notif) {
+  const c = String(notif.channel || "").toLowerCase();
+  if (c.includes("whatsapp")) return "WhatsApp";
+  if (c.includes("email")) return "Email";
+  if (c.includes("automation")) return "Automation";
+  if (c.includes("appointment")) return "Appointment";
+  return "App";
+}
+
 export default function NotificationsCenter({ user }) {
-  const API = process.env.REACT_APP_API_URL;
+  const API = (() => {
+    const env = (v) => (v && v.trim()) || "";
+    const fromEnv =
+      env(process.env.REACT_APP_API_URL) ||
+      env(process.env.REACT_APP_API_BASE);
+    if (fromEnv) return fromEnv.replace(/\/$/, "");
+    return API_BASE;
+  })();
 
   const [notifications, setNotifications] = useState([]);
   const [loading, setLoading] = useState(true);
-  const [filter, setFilter] = useState("all"); // all | unread | read
+  const [filter, setFilter] = useState("all");
 
   const load = async () => {
     if (!user?.email) return;
     setLoading(true);
+
     try {
       const res = await fetch(
-        `${API || ""}/api/notifications/${encodeURIComponent(user.email)}`
+        `${API}/api/notifications/${encodeURIComponent(user.email)}`
       );
+
       const data = await res.json().catch(() => ({}));
       const rows = Array.isArray(data?.notifications)
         ? data.notifications
         : [];
-      // normalize + stable local id
-      setNotifications(
-        rows.map((n, idx) => ({
-          ...n,
-          read: n.read ?? false,
-          _id: String(n.id ?? n._id ?? n.uuid ?? idx),
-          _idx: idx,
-        }))
-      );
+
+      setNotifications(rows.map((n, idx) => normalizeNotification(n, idx)));
     } catch {
       setNotifications([]);
     } finally {
@@ -41,31 +97,30 @@ export default function NotificationsCenter({ user }) {
 
   useEffect(() => {
     load();
-    // optional: allow other widgets to ask us to refresh
+
     const onChanged = () => load();
     window.addEventListener("notifications:changed", onChanged);
     return () => window.removeEventListener("notifications:changed", onChanged);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [API, user?.email]);
 
   const markAsRead = async (notif) => {
-    // optimistic UI
     setNotifications((ns) =>
       ns.map((n) => (n._id === notif._id ? { ...n, read: true } : n))
     );
 
-    // best-effort persist (prefer id; fallback to index)
     const idParam = notif.id ?? notif._id ?? notif.uuid ?? notif._idx;
+
     try {
       await fetch(
-        `${API || ""}/api/notifications/${encodeURIComponent(
+        `${API}/api/notifications/${encodeURIComponent(
           user.email
         )}/${encodeURIComponent(idParam)}/mark_read`,
         { method: "POST" }
       );
     } catch {
-      // ignore network errors; leave optimistic state
+      // leave optimistic state
     }
+
     ping("notifications:changed");
   };
 
@@ -74,6 +129,7 @@ export default function NotificationsCenter({ user }) {
       filter === "all"
         ? notifications
         : notifications.filter((n) => (filter === "unread" ? !n.read : n.read));
+
     return list.sort(
       (a, b) =>
         new Date(b.timestamp || 0).getTime() -
@@ -105,8 +161,10 @@ export default function NotificationsCenter({ user }) {
             </span>
           )}
         </div>
+
         <p className="notif-subtitle">
-          See all alerts, reminders, and automated messages sent by RetainAI.
+          All RetainAI activity appears here, including emails, WhatsApp activity,
+          reminders, automations, and appointment updates.
         </p>
 
         <div className="notif-filters">
@@ -128,54 +186,51 @@ export default function NotificationsCenter({ user }) {
         <div className="notif-empty">No notifications found.</div>
       ) : (
         <ul className="notif-list">
-          {visible.map((notif) => {
-            const isReminder = String(notif.subject || "")
-              .toLowerCase()
-              .includes("reminder");
-            const icon = isReminder
-              ? "🔔"
-              : String(notif.subject || "").toLowerCase().includes("appointment")
-              ? "📅"
-              : "📧";
-            return (
-              <li
-                key={notif._id}
-                className={`notif-item ${notif.read ? "read" : "unread"}`}
-              >
-                <div className="notif-icon" aria-hidden>
-                  {icon}
-                </div>
+          {visible.map((notif) => (
+            <li
+              key={notif._id}
+              className={`notif-item ${notif.read ? "read" : "unread"}`}
+            >
+              <div className="notif-icon" aria-hidden>
+                {iconForNotification(notif)}
+              </div>
 
-                <div className="notif-body">
+              <div className="notif-body">
+                <div className="notif-subject-row">
                   <div className="notif-subject">{notif.subject || "—"}</div>
-                  {notif.message && (
-                    <div className="notif-message">{notif.message}</div>
-                  )}
-                  <div className="notif-meta">
-                    {notif.lead_email && (
-                      <span className="notif-lead">
-                        Lead: <b>{notif.lead_email}</b>
-                      </span>
-                    )}
-                    <span className="notif-time">
-                      {notif.timestamp
-                        ? new Date(notif.timestamp).toLocaleString()
-                        : ""}
-                    </span>
-                  </div>
+                  <span className="notif-channel-pill">
+                    {labelForNotification(notif)}
+                  </span>
                 </div>
 
-                {!notif.read && (
-                  <button
-                    className="notif-mark-read"
-                    onClick={() => markAsRead(notif)}
-                  >
-                    Mark as Read
-                  </button>
+                {notif.message && (
+                  <div className="notif-message">{notif.message}</div>
                 )}
-              </li>
-            );
-          })}
+
+                <div className="notif-meta">
+                  {notif.lead_email && (
+                    <span className="notif-lead">
+                      Lead: <b>{notif.lead_email}</b>
+                    </span>
+                  )}
+                  <span className="notif-time">
+                    {notif.timestamp
+                      ? new Date(notif.timestamp).toLocaleString()
+                      : ""}
+                  </span>
+                </div>
+              </div>
+
+              {!notif.read && (
+                <button
+                  className="notif-mark-read"
+                  onClick={() => markAsRead(notif)}
+                >
+                  Mark as Read
+                </button>
+              )}
+            </li>
+          ))}
         </ul>
       )}
     </div>
