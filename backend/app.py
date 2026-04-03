@@ -398,27 +398,11 @@ def add_notification(
     save_notifications(all_notes)
     return note
 
-def _require_user_email_arg():
-    ue = request.args.get("user_email")
-    return _norm_email(ue) if ue else None
-
-
-def _connected_acct_for(email: str):
-    users = load_users() or {}
-    if not isinstance(users, dict):
-        return (None, None, None, None)
-
-    role, org_email, org_owner, _subject = _resolve_org_and_role(email, users)
-    if not role:
-        return (None, None, None, None)
-
-    return (role, org_email, org_owner, org_owner.get("stripe_account_id"))
-
 # ----------------------------
 # /api/profile (SINGLE SOURCE OF TRUTH) — FIXED (no duplicates)
 # ----------------------------
 @app.route('/api/user/<path:email>', methods=['GET'])
-def get_user(email):
+def api_get_user(email):
     email = _norm_email(email)
     users = load_users() or {}
 
@@ -435,21 +419,24 @@ def get_user(email):
     if not _org_is_active(org_owner):
         return jsonify({"error": "account_inactive"}), 403
 
-    # Owner uses their own record.
-    # Member uses owner/org fields for business-level settings,
-    # but keeps their own display name if present.
-    base = org_owner if role == "member" else subject
     subject = subject or {}
-    base = base or {}
+    org_owner = org_owner or {}
+
+    # Owner sees own record.
+    # Member sees own display identity, but org-level business/billing fields from owner.
+    if role == "owner":
+        display_name = org_owner.get("name", "")
+        base = org_owner
+    else:
+        display_name = subject.get("name", "") or org_owner.get("name", "")
+        base = org_owner
 
     out = {
         "email": email,
 
-        # display/user identity
-        "name": subject.get("name", "") if role == "member" else base.get("name", ""),
+        "name": display_name,
         "logo": base.get("logo") or base.get("picture", ""),
 
-        # business/profile fields
         "business": base.get("business", ""),
         "businessName": base.get("business", ""),
         "businessType": base.get("businessType", ""),
@@ -458,21 +445,17 @@ def get_user(email):
         "people": base.get("people") or base.get("teamSize", ""),
         "teamSize": base.get("teamSize") or base.get("people", ""),
 
-        # stripe
         "stripe_account_id": base.get("stripe_account_id"),
         "stripe_connected": bool(base.get("stripe_connected", False)),
 
-        # other integrations
         "whatsapp": base.get("whatsapp", ""),
         "gcal_connected": bool(base.get("gcal_connected", False)),
         "gcal_calendars": base.get("gcal_calendars", []),
 
-        # auth/account state
         "status": base.get("status", ""),
         "role": role,
         "orgOwnerEmail": org_email,
 
-        # permissions
         "canInviteTeam": role == "owner",
         "canEditBusiness": role == "owner",
         "canManageBilling": role == "owner",
@@ -504,13 +487,22 @@ def api_profile():
         if not _org_is_active(org_owner):
             return jsonify({"error": "account_inactive"}), 403
 
-        base = org_owner if role == "member" else (subject or {})
         subject = subject or {}
+        org_owner = org_owner or {}
+
+        if role == "owner":
+            display_name = org_owner.get("name", "")
+            base = org_owner
+        else:
+            display_name = subject.get("name", "") or org_owner.get("name", "")
+            base = org_owner
 
         return jsonify({
             "email": email,
-            "name": subject.get("name", "") if role == "member" else base.get("name", ""),
+
+            "name": display_name,
             "logo": base.get("logo") or base.get("picture", ""),
+
             "business": base.get("business", ""),
             "businessName": base.get("business", ""),
             "businessType": base.get("businessType", ""),
@@ -518,16 +510,23 @@ def api_profile():
             "location": base.get("location", ""),
             "people": base.get("people") or base.get("teamSize", ""),
             "teamSize": base.get("teamSize") or base.get("people", ""),
+
             "stripe_connected": bool(base.get("stripe_connected", False)),
             "stripe_account_id": base.get("stripe_account_id"),
+
             "whatsapp": base.get("whatsapp", ""),
             "gcal_connected": bool(base.get("gcal_connected", False)),
             "gcal_calendars": base.get("gcal_calendars", []),
+
             "status": base.get("status", ""),
             "role": role,
             "orgOwnerEmail": org_email,
+            "canInviteTeam": role == "owner",
+            "canEditBusiness": role == "owner",
+            "canManageBilling": role == "owner",
         }), 200
 
+    # POST
     data = request.get_json(silent=True) or {}
     email = _norm_email(data.get("email") or request.headers.get("X-User-Email"))
     if not email:
@@ -541,9 +540,8 @@ def api_profile():
     if not role:
         return jsonify({"error": "User not found"}), 404
 
-    target_email = org_email if role == "member" else email
-    target = users.get(target_email, {}) or {}
-
+    # Only owners can update org business fields.
+    # Members can only update their own display name.
     def _to_int(v, fallback=""):
         try:
             if v in (None, ""):
@@ -552,40 +550,79 @@ def api_profile():
         except Exception:
             return fallback
 
-    if "name" in data and role == "owner":
-        target["name"] = (data.get("name") or "").strip()
-    if "logo" in data and role == "owner":
-        target["logo"] = (data.get("logo") or "").strip()
-
     if role == "owner":
-        target["business"] = (data.get("business") or data.get("businessName") or target.get("business") or "").strip()
-        target["businessType"] = (data.get("businessType") or data.get("lineOfBusiness") or target.get("businessType") or "").strip()
-        target["location"] = (data.get("location") or target.get("location") or "").strip()
+        target_email = org_email
+        target = users.get(target_email, {}) or {}
+
+        if "name" in data:
+            target["name"] = (data.get("name") or "").strip()
+        if "logo" in data:
+            target["logo"] = (data.get("logo") or "").strip()
+
+        target["business"] = (
+            data.get("business")
+            or data.get("businessName")
+            or target.get("business")
+            or ""
+        ).strip()
+
+        target["businessName"] = target.get("business", "")
+
+        target["businessType"] = (
+            data.get("businessType")
+            or data.get("lineOfBusiness")
+            or target.get("businessType")
+            or ""
+        ).strip()
+
+        target["location"] = (
+            data.get("location")
+            or target.get("location")
+            or ""
+        ).strip()
+
         people_val = data.get("people", data.get("teamSize"))
         if people_val is not None:
             iv = _to_int(people_val, "")
             target["people"] = iv
             target["teamSize"] = iv
 
-    users[target_email] = target
+        users[target_email] = target
+        save_users(users)
+
+        return jsonify({
+            "ok": True,
+            "email": email,
+            "name": target.get("name", ""),
+            "logo": target.get("logo") or target.get("picture", ""),
+            "business": target.get("business", ""),
+            "businessName": target.get("business", ""),
+            "businessType": target.get("businessType", ""),
+            "lineOfBusiness": target.get("businessType", ""),
+            "location": target.get("location", ""),
+            "people": target.get("people") or target.get("teamSize", ""),
+            "teamSize": target.get("teamSize") or target.get("people", ""),
+            "stripe_connected": bool(target.get("stripe_connected", False)),
+            "stripe_account_id": target.get("stripe_account_id"),
+            "role": role,
+            "orgOwnerEmail": org_email,
+        }), 200
+
+    # member update: only their own display name
+    member_key = f"user::{email}"
+    member = users.get(member_key, {}) or {}
+    if "name" in data:
+        member["name"] = (data.get("name") or "").strip()
+    users[member_key] = member
     save_users(users)
 
     return jsonify({
         "ok": True,
-        "email": target_email,
-        "name": target.get("name", ""),
-        "logo": target.get("logo") or target.get("picture", ""),
-        "business": target.get("business", ""),
-        "businessName": target.get("business", ""),
-        "businessType": target.get("businessType", ""),
-        "lineOfBusiness": target.get("businessType", ""),
-        "location": target.get("location", ""),
-        "people": target.get("people") or target.get("teamSize", ""),
-        "teamSize": target.get("teamSize") or target.get("people", ""),
-        "stripe_connected": bool(target.get("stripe_connected", False)),
-        "stripe_account_id": target.get("stripe_account_id"),
+        "email": email,
+        "name": member.get("name", "") or (subject or {}).get("name", ""),
+        "role": role,
+        "orgOwnerEmail": org_email,
     }), 200
-
 
 @app.route("/api/profile/debug", methods=["GET"])
 def api_profile_debug():
@@ -1315,66 +1352,6 @@ def serialize_invoice(inv):
 
 # app.py (CONSOLIDATED + PROD-SAFE) — PART 2/2 (CONTINUATION)
 
-@app.route("/api/profile", methods=["GET"])
-def get_profile():
-    email = _norm_email(request.args.get("email"))
-    if not email:
-        return jsonify({"error": "Missing email"}), 400
-
-    users = load_users() or {}
-    if not isinstance(users, dict):
-        return jsonify({"error": "storage_not_ready"}), 500
-
-    role, org_email, org_owner, subject = _resolve_org_and_role(email, users)
-    if not role:
-        return jsonify({"error": "User not found"}), 404
-
-    if not org_owner:
-        return jsonify({"error": "Org owner not found"}), 404
-
-    if not _org_is_active(org_owner):
-        return jsonify({"error": "account_inactive"}), 403
-
-    # owners use their own record
-    # members use org/owner record for business-level fields
-    base = org_owner if role == "member" else subject
-    base = base or {}
-    subject = subject or {}
-
-    return jsonify({
-        "email": email,
-
-        # display identity
-        "name": subject.get("name", "") if role == "member" else base.get("name", ""),
-        "logo": base.get("logo") or base.get("picture", ""),
-
-        # profile/business fields
-        "business": base.get("business", ""),
-        "businessName": base.get("business", ""),
-        "businessType": base.get("businessType", ""),
-        "lineOfBusiness": base.get("businessType", ""),
-        "location": base.get("location", ""),
-        "people": base.get("people") or base.get("teamSize", ""),
-        "teamSize": base.get("teamSize") or base.get("people", ""),
-
-        # stripe
-        "stripe_connected": bool(base.get("stripe_connected", False)),
-        "stripe_account_id": base.get("stripe_account_id"),
-
-        # other integrations
-        "whatsapp": base.get("whatsapp", ""),
-        "gcal_connected": bool(base.get("gcal_connected", False)),
-        "gcal_calendars": base.get("gcal_calendars", []),
-
-        # account state / permissions
-        "status": base.get("status", ""),
-        "role": role,
-        "orgOwnerEmail": org_email,
-        "canInviteTeam": role == "owner",
-        "canEditBusiness": role == "owner",
-        "canManageBilling": role == "owner",
-    }), 200
-
 @app.route("/api/stripe/connect-url", methods=["GET"])
 def get_stripe_connect_url():
     user_email = _require_user_email_arg()
@@ -1769,20 +1746,46 @@ def stripe_disconnect():
 # Auth & Google OAuth (trial gated)
 # ----------------------------
 def _user_payload(email: str, user: dict) -> dict:
-    logo = user.get("logo") or user.get("picture") or ""
+    email = _norm_email(email)
+    users = load_users() or {}
+
+    role, org_email, org_owner, subject = _resolve_org_and_role(email, users if isinstance(users, dict) else {})
+    org_owner = org_owner or {}
+    subject = subject or user or {}
+
+    if role == "member":
+        base = org_owner
+        display_name = subject.get("name", "") or base.get("name", "")
+    else:
+        base = subject
+        display_name = base.get("name", "")
+
+    logo = base.get("logo") or base.get("picture") or ""
+
     return {
-        "email": _norm_email(email),
-        "name": user.get("name", ""),
+        "email": email,
+        "name": display_name,
         "logo": logo,
-        "businessType": user.get("businessType", ""),
-        "business": user.get("business", ""),
-        "people": user.get("people", ""),
-        "location": user.get("location", ""),
-        "stripe_account_id": user.get("stripe_account_id"),
-        "stripe_connected": user.get("stripe_connected", False),
-        "status": user.get("status", ""),
-        "role": user.get("role"),
-        "org_id": user.get("org_id"),
+
+        "businessType": base.get("businessType", ""),
+        "business": base.get("business", ""),
+        "people": base.get("people") or base.get("teamSize", ""),
+        "location": base.get("location", ""),
+
+        "stripe_account_id": base.get("stripe_account_id"),
+        "stripe_connected": bool(base.get("stripe_connected", False)),
+
+        "gcal_connected": bool(base.get("gcal_connected", False)),
+        "gcal_calendars": base.get("gcal_calendars", []),
+
+        "status": base.get("status", ""),
+        "role": role or user.get("role"),
+        "org_id": org_email or user.get("org_id"),
+        "orgOwnerEmail": org_email,
+
+        "canInviteTeam": role == "owner",
+        "canEditBusiness": role == "owner",
+        "canManageBilling": role == "owner",
     }
 
 @app.route("/api/signup", methods=["POST", "OPTIONS"])

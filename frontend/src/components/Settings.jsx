@@ -19,9 +19,9 @@ import { apiUrl } from "../apiBase";
 /* ------------------------------------------------------------
    Settings (PROD-SAFE)
    - Profile loads from:
-       1) props.user (fast)
+       1) props.user
        2) backend GET /api/profile?email=...
-       3) localStorage fallback (only if backend missing/unavailable)
+       3) localStorage fallback
    - Save uses POST /api/profile
 ------------------------------------------------------------ */
 
@@ -151,7 +151,6 @@ export default function Settings({
 
   const [editMode, setEditMode] = useState(false);
   const [saving, setSaving] = useState(false);
-
   const [info, setInfo] = useState("");
   const [profileBackendOk, setProfileBackendOk] = useState(null);
 
@@ -177,7 +176,8 @@ export default function Settings({
         prev.location !== next.location ||
         String(prev.people ?? "") !== String(next.people ?? "") ||
         Boolean(prev.stripe_connected) !== Boolean(next.stripe_connected) ||
-        String(prev.stripe_account_id || "") !== String(next.stripe_account_id || "") ||
+        String(prev.stripe_account_id || "") !==
+          String(next.stripe_account_id || "") ||
         Boolean(prev.gcal_connected) !== Boolean(next.gcal_connected);
 
       return changed ? next : prev;
@@ -329,7 +329,15 @@ export default function Settings({
         { replace: true }
       );
     })();
-  }, [search, profile?.email, user?.email, refreshUser, syncProfileFromBackend, navigate, location.pathname]);
+  }, [
+    search,
+    profile?.email,
+    user?.email,
+    refreshUser,
+    syncProfileFromBackend,
+    navigate,
+    location.pathname,
+  ]);
 
   const handleSave = useCallback(async () => {
     setSaving(true);
@@ -386,9 +394,14 @@ export default function Settings({
 
   if (!profile?.email) {
     return (
-      <div className="settings-layout" style={{ left: leftOffset, width: settingsWidth }}>
+      <div
+        className="settings-layout"
+        style={{ left: leftOffset, width: settingsWidth }}
+      >
         <div style={{ padding: 16, maxWidth: 900 }}>
-          <div style={{ fontWeight: 900, marginBottom: 8, color: "#fff" }}>
+          <div
+            style={{ fontWeight: 900, marginBottom: 8, color: "#fff" }}
+          >
             Settings couldn’t identify your account
           </div>
           <div style={{ color: "#bbb", lineHeight: 1.5 }}>
@@ -400,7 +413,10 @@ export default function Settings({
   }
 
   return (
-    <div className="settings-layout" style={{ left: leftOffset, width: settingsWidth }}>
+    <div
+      className="settings-layout"
+      style={{ left: leftOffset, width: settingsWidth }}
+    >
       <nav className="settings-nav">
         {TABS.map((t) => (
           <button
@@ -420,7 +436,10 @@ export default function Settings({
 
       <main className="settings-content fade-in">
         {tab === "profile" && (
-          <div className="profile-tab" style={{ maxWidth: MAX_W, margin: "0 auto" }}>
+          <div
+            className="profile-tab"
+            style={{ maxWidth: MAX_W, margin: "0 auto" }}
+          >
             <h2>Profile</h2>
 
             {(info || profileBackendOk === false) && (
@@ -435,7 +454,8 @@ export default function Settings({
                   fontWeight: 700,
                 }}
               >
-                {info || "Backend profile endpoint unavailable — using local profile cache."}
+                {info ||
+                  "Backend profile endpoint unavailable — using local profile cache."}
               </div>
             )}
 
@@ -464,7 +484,9 @@ export default function Settings({
                         className="field-input"
                         type="text"
                         value={form[name]}
-                        onChange={(e) => setForm((f) => ({ ...f, [name]: e.target.value }))}
+                        onChange={(e) =>
+                          setForm((f) => ({ ...f, [name]: e.target.value }))
+                        }
                         disabled={name === "email"}
                       />
                     ) : (
@@ -483,10 +505,16 @@ export default function Settings({
                           setForm({
                             name: profile.name || "",
                             email: profile.email || "",
-                            business: profile.business || profile.businessName || "",
-                            type: profile.businessType || profile.lineOfBusiness || "",
+                            business:
+                              profile.business || profile.businessName || "",
+                            type:
+                              profile.businessType ||
+                              profile.lineOfBusiness ||
+                              "",
                             location: profile.location || "",
-                            teamSize: String(profile.people ?? profile.teamSize ?? ""),
+                            teamSize: String(
+                              profile.people ?? profile.teamSize ?? ""
+                            ),
                           });
                           setInfo("");
                         }}
@@ -495,18 +523,32 @@ export default function Settings({
                         Cancel
                       </button>
 
-                      <button className="btn btn-save" onClick={handleSave} disabled={saving}>
+                      <button
+                        className="btn btn-save"
+                        onClick={handleSave}
+                        disabled={saving}
+                      >
                         {saving ? "Saving…" : "Save"}
                       </button>
                     </>
                   ) : (
-                    <button className="btn btn-edit" onClick={() => setEditMode(true)}>
+                    <button
+                      className="btn btn-edit"
+                      onClick={() => setEditMode(true)}
+                    >
                       Edit Profile
                     </button>
                   )}
                 </div>
 
-                <div style={{ marginTop: 10, color: "#8d8d93", fontSize: 12, lineHeight: 1.5 }}>
+                <div
+                  style={{
+                    marginTop: 10,
+                    color: "#8d8d93",
+                    fontSize: 12,
+                    lineHeight: 1.5,
+                  }}
+                >
                   Profile sync:{" "}
                   <b style={{ color: "#fff" }}>
                     {profileBackendOk === true
@@ -522,7 +564,11 @@ export default function Settings({
         )}
 
         {tab === "team" && (
-          <TeamTab ownerEmail={profile.email} userEmail={profile.email} maxWidth={MAX_W} />
+          <TeamTab
+            ownerEmail={profile.email}
+            userEmail={profile.email}
+            maxWidth={MAX_W}
+          />
         )}
 
         {tab === "integrations" && (
@@ -613,7 +659,9 @@ function TeamTab({ ownerEmail, userEmail, maxWidth }) {
     setLoading(true);
     setError("");
 
-    const url = apiUrl(`team/members?ownerEmail=${encodeURIComponent(ownerEmail)}`);
+    const url = apiUrl(
+      `team/members?ownerEmail=${encodeURIComponent(ownerEmail)}`
+    );
 
     try {
       const res = await fetch(url, {
@@ -628,9 +676,16 @@ function TeamTab({ ownerEmail, userEmail, maxWidth }) {
       const ct = (res.headers.get("content-type") || "").toLowerCase();
       const raw = await res.text();
 
-      if (!res.ok) throw new Error(`HTTP ${res.status} @ ${url}\n${raw.slice(0, 300)}`);
+      if (!res.ok) {
+        throw new Error(`HTTP ${res.status} @ ${url}\n${raw.slice(0, 300)}`);
+      }
       if (!ct.includes("application/json")) {
-        throw new Error(`Expected JSON @ ${url} but got ${ct || "unknown"}\n${raw.slice(0, 200)}`);
+        throw new Error(
+          `Expected JSON @ ${url} but got ${ct || "unknown"}\n${raw.slice(
+            0,
+            200
+          )}`
+        );
       }
 
       const data = JSON.parse(raw);
@@ -832,7 +887,9 @@ function TeamTab({ ownerEmail, userEmail, maxWidth }) {
                 alignItems: "center",
               }}
             >
-              <div style={{ color: "#fff", fontWeight: 700 }}>{m.name || "—"}</div>
+              <div style={{ color: "#fff", fontWeight: 700 }}>
+                {m.name || "—"}
+              </div>
               <div style={{ color: "#ddd" }}>{m.email}</div>
               <div>
                 <select

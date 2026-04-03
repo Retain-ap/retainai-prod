@@ -1,99 +1,52 @@
-import React, { useEffect, useMemo, useState } from "react";
-import { useLocation, useNavigate } from "react-router-dom";
-import { API_BASE } from "../config";
+// File: frontend/src/components/StripeConnectCard.jsx
+import React, { useState } from "react";
+import { apiUrl } from "../apiBase";
 
 export default function StripeConnectCard({ user, refreshUser }) {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
-  const location = useLocation();
-  const navigate = useNavigate();
-
-  const API = useMemo(() => {
-    const env = (v) => (v && v.trim()) || "";
-    const fromEnv =
-      env(process.env.REACT_APP_API_URL) ||
-      env(process.env.REACT_APP_API_BASE);
-
-    if (fromEnv) return fromEnv.replace(/\/$/, "");
-    return (API_BASE || "").replace(/\/$/, "");
-  }, []);
 
   const isConnected = user?.stripe_connected === true;
 
-  useEffect(() => {
-    const params = new URLSearchParams(location.search);
-
-    const connected = params.get("stripe_connected") === "1";
-    const refreshed = params.get("stripe_refresh") === "1";
-    const hasError = params.get("stripe_error") === "1";
-    const errorDesc = params.get("stripe_error_desc");
-
-    if (connected || refreshed) {
-      (async () => {
-        try {
-          if (typeof refreshUser === "function") {
-            await refreshUser();
-          }
-        } catch {}
-      })();
-
-      params.delete("stripe_connected");
-      params.delete("stripe_refresh");
-
-      navigate(
-        {
-          pathname: location.pathname,
-          search: params.toString(),
-        },
-        { replace: true }
-      );
-    }
-
-    if (hasError) {
-      setError(decodeURIComponent(errorDesc || "Stripe connection failed."));
-      params.delete("stripe_error");
-      params.delete("stripe_error_desc");
-
-      navigate(
-        {
-          pathname: location.pathname,
-          search: params.toString(),
-        },
-        { replace: true }
-      );
-    }
-  }, [location.pathname, location.search, navigate, refreshUser]);
-
-  async function fetchStripeUrl(path, fallbackError) {
-    if (!user?.email) {
-      throw new Error("Missing user email");
-    }
-
-    const url = `${API}${path}?user_email=${encodeURIComponent(user.email)}`;
-
+  async function fetchJson(url, options = {}) {
     const res = await fetch(url, {
-      method: "GET",
       credentials: "include",
-      headers: { Accept: "application/json" },
+      ...options,
+      headers: {
+        Accept: "application/json",
+        ...(options.headers || {}),
+      },
     });
 
     const contentType = (res.headers.get("content-type") || "").toLowerCase();
     const raw = await res.text();
 
     let data = {};
-    if (contentType.includes("application/json")) {
+    if (contentType.includes("application/json") && raw) {
       try {
         data = JSON.parse(raw);
       } catch {
         throw new Error(`Invalid JSON response (${res.status})`);
       }
-    } else {
-      throw new Error(`Invalid server response (${res.status})`);
     }
 
     if (!res.ok) {
-      throw new Error(data?.error || fallbackError || `Request failed (${res.status})`);
+      throw new Error(data?.error || `Request failed (${res.status})`);
     }
+
+    return data;
+  }
+
+  async function fetchStripeUrl(path, fallbackError) {
+    if (!user?.email) {
+      throw new Error("Missing user email");
+    }
+
+    const url = apiUrl(
+      `${path}?user_email=${encodeURIComponent(user.email)}`
+    );
+
+    const data = await fetchJson(url, { method: "GET" });
 
     if (!data?.url) {
       throw new Error(data?.error || fallbackError || "Missing redirect URL");
@@ -105,9 +58,10 @@ export default function StripeConnectCard({ user, refreshUser }) {
   async function handleDashboard() {
     setLoading(true);
     setError("");
+
     try {
       const url = await fetchStripeUrl(
-        "/api/stripe/dashboard-link",
+        "stripe/dashboard-link",
         "Could not open Stripe dashboard"
       );
       window.location.assign(url);
@@ -121,9 +75,10 @@ export default function StripeConnectCard({ user, refreshUser }) {
   async function handleLinkExisting() {
     setLoading(true);
     setError("");
+
     try {
       const url = await fetchStripeUrl(
-        "/api/stripe/oauth/connect",
+        "stripe/oauth/connect",
         "Failed to link existing Stripe account"
       );
       window.location.assign(url);
@@ -137,9 +92,10 @@ export default function StripeConnectCard({ user, refreshUser }) {
   async function handleSignup() {
     setLoading(true);
     setError("");
+
     try {
       const url = await fetchStripeUrl(
-        "/api/stripe/connect-url",
+        "stripe/connect-url",
         "Failed to create Stripe account"
       );
       window.location.assign(url);
@@ -158,30 +114,12 @@ export default function StripeConnectCard({ user, refreshUser }) {
 
     setLoading(true);
     setError("");
+
     try {
-      const res = await fetch(
-        `${API}/api/stripe/disconnect?user_email=${encodeURIComponent(user.email)}`,
-        {
-          method: "POST",
-          credentials: "include",
-          headers: { Accept: "application/json" },
-        }
+      await fetchJson(
+        apiUrl(`stripe/disconnect?user_email=${encodeURIComponent(user.email)}`),
+        { method: "POST" }
       );
-
-      const contentType = (res.headers.get("content-type") || "").toLowerCase();
-      const raw = await res.text();
-
-      let data = {};
-      if (contentType.includes("application/json") && raw) {
-        try {
-          data = JSON.parse(raw);
-        } catch {}
-      }
-
-      if (!res.ok) {
-        setError(data?.error || `Failed to disconnect (${res.status})`);
-        return;
-      }
 
       if (typeof refreshUser === "function") {
         await refreshUser();
@@ -190,6 +128,18 @@ export default function StripeConnectCard({ user, refreshUser }) {
       setError(e.message || "Network error");
     } finally {
       setLoading(false);
+    }
+  }
+
+  async function handleRefresh() {
+    setError("");
+
+    if (typeof refreshUser === "function") {
+      try {
+        await refreshUser();
+      } catch (e) {
+        setError(e.message || "Could not refresh Stripe status");
+      }
     }
   }
 
@@ -212,7 +162,14 @@ export default function StripeConnectCard({ user, refreshUser }) {
         </span>
 
         <div style={{ width: "100%", textAlign: "center" }}>
-          <div style={{ fontWeight: 700, color: "#fff", fontSize: 20, marginBottom: 2 }}>
+          <div
+            style={{
+              fontWeight: 700,
+              color: "#fff",
+              fontSize: 20,
+              marginBottom: 2,
+            }}
+          >
             Stripe Payments
           </div>
 
@@ -223,25 +180,29 @@ export default function StripeConnectCard({ user, refreshUser }) {
           </div>
 
           {isConnected ? (
-            <div style={{ display: "flex", flexWrap: "wrap", justifyContent: "center", gap: 12 }}>
+            <div
+              style={{
+                display: "flex",
+                flexWrap: "wrap",
+                justifyContent: "center",
+                gap: 12,
+              }}
+            >
               <button className="settings-btn connected" disabled>
                 Connected
               </button>
 
-              <button className="settings-btn" onClick={handleDashboard} disabled={loading}>
+              <button
+                className="settings-btn"
+                onClick={handleDashboard}
+                disabled={loading}
+              >
                 {loading ? "Opening…" : "Open Stripe Dashboard"}
               </button>
 
               <button
                 className="settings-btn refresh"
-                onClick={async () => {
-                  setError("");
-                  if (typeof refreshUser === "function") {
-                    try {
-                      await refreshUser();
-                    } catch {}
-                  }
-                }}
+                onClick={handleRefresh}
                 disabled={loading}
               >
                 Refresh Status
@@ -257,19 +218,37 @@ export default function StripeConnectCard({ user, refreshUser }) {
               </button>
             </div>
           ) : (
-            <div style={{ display: "flex", flexWrap: "wrap", justifyContent: "center", gap: 12 }}>
-              <button className="settings-btn" onClick={handleLinkExisting} disabled={loading}>
+            <div
+              style={{
+                display: "flex",
+                flexWrap: "wrap",
+                justifyContent: "center",
+                gap: 12,
+              }}
+            >
+              <button
+                className="settings-btn"
+                onClick={handleLinkExisting}
+                disabled={loading}
+              >
                 {loading ? "Redirecting…" : "Link Existing Stripe Account"}
               </button>
 
-              <button className="settings-btn" onClick={handleSignup} disabled={loading}>
+              <button
+                className="settings-btn"
+                onClick={handleSignup}
+                disabled={loading}
+              >
                 {loading ? "Redirecting…" : "Create Stripe Account"}
               </button>
             </div>
           )}
 
           {error && (
-            <div className="integration-error" style={{ color: "#e66565", marginTop: 16 }}>
+            <div
+              className="integration-error"
+              style={{ color: "#e66565", marginTop: 16 }}
+            >
               {error}
             </div>
           )}
