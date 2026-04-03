@@ -1,5 +1,9 @@
 // src/components/AutomationsService.js
-const BASE = process.env.REACT_APP_API_URL || "";
+const BASE =
+  process.env.REACT_APP_API_BASE ||
+  process.env.REACT_APP_API_URL ||
+  "";
+
 const ROOT = `${BASE}/api/automations`;
 
 async function jfetch(
@@ -8,24 +12,37 @@ async function jfetch(
 ) {
   const res = await fetch(url, {
     method,
+    credentials: "include",
     headers: {
       Accept: "application/json",
       ...(body ? { "Content-Type": "application/json" } : {}),
-      ...(userEmail ? { "X-User-Email": userEmail } : {}),
+      ...(userEmail ? { "X-User-Email": String(userEmail).toLowerCase() } : {}),
       ...headers,
     },
     body: body ? JSON.stringify(body) : undefined,
   });
+
+  const contentType = res.headers.get("content-type") || "";
   let data = null;
+
   try {
-    data = await res.json();
-  } catch (_) {}
+    if (contentType.includes("application/json")) {
+      data = await res.json();
+    } else {
+      const text = await res.text();
+      data = text ? { message: text } : {};
+    }
+  } catch (_) {
+    data = {};
+  }
+
   if (!res.ok) {
     const msg =
       (data && (data.error || data.message)) ||
       `${res.status} ${res.statusText}`;
     throw new Error(msg);
   }
+
   return data || {};
 }
 
@@ -51,6 +68,7 @@ function cryptoRandomId() {
 
 function dispatchAutomationSent(items = []) {
   if (!Array.isArray(items) || !items.length) return;
+
   const normed = items.map((it) => {
     const type = it.type || it.kind || "";
     const info = it.info || {};
@@ -61,11 +79,13 @@ function dispatchAutomationSent(items = []) {
         : type.includes("email")
         ? "email"
         : "unknown");
+
     const text =
       (info.text && String(info.text)) ||
       (info.subject && info.html
         ? `${info.subject}\n\n${htmlToText(info.html)}`
         : info.subject || info.html || "");
+
     return {
       id: it.id || cryptoRandomId(),
       channel,
@@ -91,9 +111,11 @@ function dispatchAutomationSent(items = []) {
 async function getTemplates() {
   return jfetch(`${ROOT}/templates`);
 }
+
 async function getProfile(userEmail) {
   return jfetch(`${ROOT}/user/profile`, { userEmail });
 }
+
 async function saveProfile(userEmail, profile) {
   return jfetch(`${ROOT}/user/profile`, {
     method: "POST",
@@ -101,12 +123,19 @@ async function saveProfile(userEmail, profile) {
     body: profile,
   });
 }
+
 async function listFlows(userEmail) {
   return jfetch(`${ROOT}/`, { userEmail });
 }
+
 async function createFlow(userEmail, flow) {
-  return jfetch(`${ROOT}/`, { method: "POST", userEmail, body: { flow } });
+  return jfetch(`${ROOT}/`, {
+    method: "POST",
+    userEmail,
+    body: { flow },
+  });
 }
+
 async function updateFlow(userEmail, flowId, flow) {
   return jfetch(`${ROOT}/${encodeURIComponent(flowId)}`, {
     method: "PUT",
@@ -114,12 +143,14 @@ async function updateFlow(userEmail, flowId, flow) {
     body: { flow },
   });
 }
+
 async function deleteFlow(userEmail, flowId) {
   return jfetch(`${ROOT}/${encodeURIComponent(flowId)}`, {
     method: "DELETE",
     userEmail,
   });
 }
+
 async function enableFlow(userEmail, flowId, enabled) {
   return jfetch(`${ROOT}/enable/${encodeURIComponent(flowId)}`, {
     method: "POST",
@@ -139,7 +170,11 @@ async function dryRun(userEmail, flowOrId, opts = {}) {
       : { flow_id: String(flowOrId) }),
     ...(opts.profile ? { profile: opts.profile } : {}),
   };
-  return jfetch(`${ROOT}/test`, { method: "POST", userEmail, body });
+  return jfetch(`${ROOT}/test`, {
+    method: "POST",
+    userEmail,
+    body,
+  });
 }
 
 async function executeNow(userEmail, flowOrId, opts = {}) {
@@ -154,12 +189,19 @@ async function executeNow(userEmail, flowOrId, opts = {}) {
       ? { flow: flowOrId }
       : { flow_id: String(flowOrId) }),
   };
-  const data = await jfetch(`${ROOT}/test`, { method: "POST", userEmail, body });
+
+  const data = await jfetch(`${ROOT}/test`, {
+    method: "POST",
+    userEmail,
+    body,
+  });
+
   const executed = Array.isArray(data?.did)
     ? data.did
     : Array.isArray(data?.actions)
     ? data.actions
     : [];
+
   if (executed.length) {
     const withTo = executed.map((x) => ({
       ...x,
@@ -167,6 +209,7 @@ async function executeNow(userEmail, flowOrId, opts = {}) {
     }));
     dispatchAutomationSent(withTo);
   }
+
   return data;
 }
 
@@ -174,19 +217,15 @@ async function runEngineOnce() {
   return jfetch(`${ROOT}/run`, { method: "POST" });
 }
 
-/* ---------------- WHATSAPP (message templates etc.) ---------------- */
-// These endpoints are provided by your backend WhatsApp module.
-async function getMsgTemplates() {
-  return jfetch(`${BASE}/api/whatsapp/templates`);
+/* ---------------- WHATSAPP TEMPLATE SUPPORT ---------------- */
+async function getWATemplates(userEmail) {
+  return jfetch(`${ROOT}/wa/templates`, { userEmail });
 }
-async function getMsgTemplateInfo(name) {
-  return jfetch(
-    `${BASE}/api/whatsapp/template-info?name=${encodeURIComponent(name)}`
-  );
-}
+
 async function getMsgHealth() {
   return jfetch(`${BASE}/api/whatsapp/health`);
 }
+
 async function getMsgWindowState({
   userEmail,
   leadId,
@@ -205,9 +244,14 @@ async function getMsgWindowState({
   }`;
   return jfetch(url);
 }
+
 async function sendWhatsApp(payload) {
-  return jfetch(`${BASE}/api/whatsapp/send`, { method: "POST", body: payload });
+  return jfetch(`${BASE}/api/whatsapp/send`, {
+    method: "POST",
+    body: payload,
+  });
 }
+
 async function getWhatsAppMessages({ userEmail, leadId }) {
   const url = `${BASE}/api/whatsapp/messages?user_email=${encodeURIComponent(
     userEmail
@@ -216,7 +260,6 @@ async function getWhatsAppMessages({ userEmail, leadId }) {
 }
 
 const api = {
-  // automations
   getTemplates,
   getProfile,
   saveProfile,
@@ -228,9 +271,7 @@ const api = {
   dryRun,
   executeNow,
   runEngineOnce,
-  // whatsapp / templates
-  getMsgTemplates,
-  getMsgTemplateInfo,
+  getWATemplates,
   getMsgHealth,
   getMsgWindowState,
   sendWhatsApp,

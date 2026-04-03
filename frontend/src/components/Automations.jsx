@@ -3,14 +3,29 @@ import React, { useEffect, useRef, useState, useMemo } from "react";
 import api from "./AutomationsService";
 
 /* ---- THEME ---- */
-const BG = "#181a1b";
-const CARD = "#232323";
-const BORDER = "#2a2a2a";
-const TEXT = "#e9edef";
+const BG = "#171819";
+const PANEL = "#1f2022";
+const CARD = "#242628";
+const CARD_SOFT = "#202224";
+const BORDER = "#2e3134";
+const TEXT = "#eef1f3";
+const MUTED = "#aab0b6";
+const GOLD = "#f7cb53";
+const GOLD_DARK = "#d9ae3a";
+const DANGER_BG = "#3a1111";
+const DANGER_TXT = "#ffbcbc";
+
+const shellCard = {
+  background: CARD,
+  border: `1px solid ${BORDER}`,
+  borderRadius: 18,
+  boxShadow: "0 8px 28px rgba(0,0,0,0.22)",
+};
 
 /* ---- PRIMITIVES ---- */
-const Btn = ({ children, onClick, kind = "solid", disabled, className }) => (
+const Btn = ({ children, onClick, kind = "solid", disabled, className, type = "button" }) => (
   <button
+    type={type}
     onClick={onClick}
     disabled={disabled}
     className={
@@ -64,10 +79,11 @@ const Toggle = ({ checked, onChange }) => (
     </div>
     <span className="ml-2 text-sm">On</span>
   </label>
-); // ← keep semicolon
+);
 
 /* ---- TOKENS ---- */
 const TOKENS = ["{{business_name}}", "{{booking_link}}", "{{lead.first_name}}", "{{last_ai_text}}"];
+
 const TokenRow = ({ onInsert }) => (
   <div className="flex flex-wrap gap-2">
     {TOKENS.map((t) => (
@@ -83,14 +99,30 @@ const TokenRow = ({ onInsert }) => (
   </div>
 );
 
-/* ---- PRETTY LABELS ---- */
+/* ---- LABELS ---- */
 const PRETTY = {
   no_reply: (t) => `No reply for ${t.days || 3} days`,
   new_lead: (t) => `New lead (≤ ${t.within_hours || 24}h)`,
   appointment_no_show: () => "Appointment no-show",
 };
 
-/* ---- ARROW (SVG) ---- */
+function normalizeFlow(flow, userEmail) {
+  return {
+    id: flow?.id,
+    owner: (flow?.owner || userEmail || "").toLowerCase(),
+    name: flow?.name || "Untitled Flow",
+    enabled: !!flow?.enabled,
+    trigger: flow?.trigger || { type: "" },
+    steps: Array.isArray(flow?.steps) ? flow.steps : [],
+    caps: {
+      per_lead_per_day: Number(flow?.caps?.per_lead_per_day ?? 1),
+      respect_quiet_hours: flow?.caps?.respect_quiet_hours !== false,
+    },
+    auto_stop_on_reply: flow?.auto_stop_on_reply !== false,
+  };
+}
+
+/* ---- ARROW ---- */
 const ArrowRight = () => (
   <svg width="36" height="16" viewBox="0 0 36 16" fill="none" xmlns="http://www.w3.org/2000/svg">
     <path d="M0 8H30" stroke="#3a3a3a" strokeWidth="2" />
@@ -98,19 +130,19 @@ const ArrowRight = () => (
   </svg>
 );
 
-/* ---- FLOW NODES (HORIZONTAL) ---- */
+/* ---- FLOW NODES ---- */
 const HNode = ({ title, subtitle }) => (
   <div
     style={{
-      background: CARD,
+      background: CARD_SOFT,
       border: `1px solid ${BORDER}`,
       borderRadius: 14,
       padding: 12,
-      minWidth: 200,
-      boxShadow: "0 2px 18px rgba(0,0,0,0.25)",
+      minWidth: 210,
+      boxShadow: "0 2px 18px rgba(0,0,0,0.18)",
     }}
   >
-    <div className="text-xs" style={{ color: "#a9a9a9" }}>
+    <div className="text-xs" style={{ color: MUTED }}>
       {subtitle}
     </div>
     <div className="text-white font-semibold">{title}</div>
@@ -126,7 +158,10 @@ const StepPreview = ({ step }) => {
   if (t === "ai_draft") return <HNode subtitle="Content" title="AI Draft" />;
   if (t === "send_email") return <HNode subtitle="Action" title="Send Email" />;
   if (t === "send_whatsapp") {
-    const label = step.template?.name ? `Send WhatsApp · tpl: ${step.template.name}` : "Send WhatsApp";
+    const label =
+      step.template?.name
+        ? `Send WhatsApp · tpl: ${step.template.name}`
+        : "Send WhatsApp";
     return <HNode subtitle="Action" title={label} />;
   }
   if (t === "push_owner") return <HNode subtitle="Action" title="Push Owner" />;
@@ -162,12 +197,8 @@ const FlowDiagram = ({ flow }) => {
   );
 };
 
-/* ---- HELPERS (WA templates) ---- */
+/* ---- WA helpers ---- */
 function normalizeWATemplates(raw) {
-  // Accepts:
-  // 1) [{name, languages:[{code, status, body_params}]}]
-  // 2) [{name, language, body_params, status}]
-  // 3) ["template_name"]
   if (!Array.isArray(raw)) return [];
   const byName = {};
   raw.forEach((item) => {
@@ -178,6 +209,7 @@ function normalizeWATemplates(raw) {
     const name = item?.name || "";
     if (!name) return;
     byName[name] = byName[name] || { name, languages: [] };
+
     if (Array.isArray(item.languages)) {
       item.languages.forEach((l) => {
         if (!l?.code) return;
@@ -195,10 +227,11 @@ function normalizeWATemplates(raw) {
       });
     }
   });
-  // Sort languages: approved first
+
   Object.values(byName).forEach((t) => {
     t.languages.sort((a, b) => (a.status === "APPROVED" ? -1 : 1));
   });
+
   return Object.values(byName).sort((a, b) => a.name.localeCompare(b.name));
 }
 
@@ -209,11 +242,12 @@ function splitParams(str) {
     .map((s) => s.trim())
     .filter((s) => s.length || s === "");
 }
+
 function joinParams(arr) {
   return (arr || []).map((s) => (s == null ? "" : String(s))).join(", ");
 }
 
-/* ---- STEP CARD (EDITOR) ---- */
+/* ---- STEP CARD ---- */
 function StepCard({ step, onChange, onRemove, waTemplates }) {
   const set = (patch) => onChange({ ...step, ...patch });
   const bodyRef = useRef(null);
@@ -232,7 +266,6 @@ function StepCard({ step, onChange, onRemove, waTemplates }) {
     if (ref === waRef) set({ text: next });
   };
 
-  // Template helpers
   const waTpl = step.template || {};
   const setTpl = (patch) => set({ template: { ...(step.template || {}), ...patch } });
 
@@ -251,9 +284,9 @@ function StepCard({ step, onChange, onRemove, waTemplates }) {
     const code = waTpl.language || selectedTpl.languages[0]?.code;
     return selectedTpl.languages.find((l) => l.code === code) || selectedTpl.languages[0] || null;
   }, [selectedTpl, waTpl.language]);
+
   const paramCount = Number(selectedLangMeta?.body_params || 0);
 
-  // Keep params array aligned with required count
   const paramsArray = useMemo(() => {
     const arr = splitParams(waTpl.params);
     while (arr.length < paramCount) arr.push("");
@@ -268,19 +301,18 @@ function StepCard({ step, onChange, onRemove, waTemplates }) {
   };
 
   return (
-    <div style={{ background: CARD, border: `1px solid ${BORDER}`, borderRadius: 12, padding: 12 }}>
+    <div style={{ background: CARD_SOFT, border: `1px solid ${BORDER}`, borderRadius: 14, padding: 14 }}>
       <div className="flex items-center justify-between">
         <div className="font-semibold capitalize">{step.type.replaceAll("_", " ")}</div>
         {onRemove && (
-          <button className="text-sm opacity-80" onClick={onRemove}>
+          <button className="text-sm opacity-80 hover:opacity-100" onClick={onRemove}>
             Remove
           </button>
         )}
       </div>
 
-      {/* WAIT */}
       {step.type === "wait" && (
-        <div className="grid grid-cols-3 gap-2 mt-2">
+        <div className="grid grid-cols-3 gap-2 mt-3">
           <div>
             <div className="text-xs mb-1">Days</div>
             <Input type="number" value={step.days || 0} onChange={(e) => set({ days: +e.target.value })} />
@@ -296,9 +328,8 @@ function StepCard({ step, onChange, onRemove, waTemplates }) {
         </div>
       )}
 
-      {/* WHATSAPP */}
       {step.type === "send_whatsapp" && (
-        <div className="mt-2">
+        <div className="mt-3">
           <div className="text-xs mb-1">Message</div>
           <TextArea
             ref={waRef}
@@ -307,21 +338,19 @@ function StepCard({ step, onChange, onRemove, waTemplates }) {
             onChange={(e) => set({ text: e.target.value })}
             placeholder="Use {{last_ai_text}} or include {{booking_link}} / {{business_name}}"
           />
-          <div className="mt-1">
+          <div className="mt-2">
             <TokenRow onInsert={(t) => insertToken(waRef, t)} />
           </div>
 
-          {/* Optional Template (used automatically when outside 24h window) */}
           <div className="mt-3 rounded-xl p-3" style={{ border: `1px dashed ${BORDER}` }}>
             <div className="flex items-center justify-between">
-              <div className="text-sm font-semibold">Template (outside 24h)</div>
+              <div className="text-sm font-semibold">Template fallback (outside 24h)</div>
               <label className="text-xs flex items-center gap-2">
                 <input
                   type="checkbox"
                   checked={!!(waTpl.name || waTpl.language || waTpl.params)}
                   onChange={(e) => {
                     if (e.target.checked) {
-                      // preselect first available template & language if present
                       const first = normalizeWATemplates(waTemplates || [])[0];
                       setTpl({
                         name: waTpl.name || first?.name || "",
@@ -342,10 +371,9 @@ function StepCard({ step, onChange, onRemove, waTemplates }) {
             </div>
 
             {(waTpl.name || waTpl.language || waTpl.params) && (
-              <div className="grid gap-2 mt-2">
-                {/* Name */}
+              <div className="grid gap-2 mt-3">
                 <div className="grid md:grid-cols-3 gap-2">
-                  <div className="md:col-span-1">
+                  <div>
                     <div className="text-xs mb-1">Template</div>
                     {templateNames.length ? (
                       <select
@@ -355,13 +383,15 @@ function StepCard({ step, onChange, onRemove, waTemplates }) {
                           const name = e.target.value;
                           const tpl = normalized.find((t) => t.name === name);
                           const lang = tpl?.languages?.[0]?.code || "en_US";
-                          setTpl({ name, language: lang });
-                          // when name changes, reset params to correct length with helpful defaults
+                          const nextPatch = { name, language: lang };
+
                           if ((tpl?.languages?.[0]?.body_params || 0) > 0) {
                             const commons = ["{{lead.first_name}}", "{{business_name}}", "{{booking_link}}", "{{last_ai_text}}"];
                             const n = tpl.languages[0].body_params;
-                            setTpl({ params: joinParams(commons.slice(0, n)) });
+                            nextPatch.params = joinParams(commons.slice(0, n));
                           }
+
+                          setTpl(nextPatch);
                         }}
                       >
                         <option value="">Select…</option>
@@ -380,8 +410,7 @@ function StepCard({ step, onChange, onRemove, waTemplates }) {
                     )}
                   </div>
 
-                  {/* Language */}
-                  <div className="md:col-span-1">
+                  <div>
                     <div className="text-xs mb-1">Language</div>
                     {languages.length ? (
                       <select
@@ -404,8 +433,7 @@ function StepCard({ step, onChange, onRemove, waTemplates }) {
                     )}
                   </div>
 
-                  {/* Param count indicator */}
-                  <div className="md:col-span-1">
+                  <div>
                     <div className="text-xs mb-1">Required params</div>
                     <div className="text-sm bg-[#232323] border border-[#2a2a2a] rounded-xl px-3 py-2">
                       {paramCount}
@@ -413,7 +441,6 @@ function StepCard({ step, onChange, onRemove, waTemplates }) {
                   </div>
                 </div>
 
-                {/* Param inputs */}
                 {paramCount > 0 ? (
                   <div className="mt-1">
                     <div className="text-xs mb-1">Body parameters</div>
@@ -443,34 +470,17 @@ function StepCard({ step, onChange, onRemove, waTemplates }) {
                       <Btn kind="ghost" onClick={fillCommonParams}>
                         Fill common tokens
                       </Btn>
-                      <div className="text-xs opacity-70">
-                        Tip: tokens insert live — adjust as needed.
-                      </div>
-                    </div>
-                    <div className="mt-2">
-                      <TokenRow
-                        onInsert={(t) => {
-                          const next = [...paramsArray];
-                          const idx = next.findIndex((x) => !x);
-                          next[idx === -1 ? next.length - 1 : idx] = t;
-                          setTpl({ params: joinParams(next) });
-                        }}
-                      />
+                      <div className="text-xs opacity-70">Tip: start with common tokens, then tweak.</div>
                     </div>
                   </div>
                 ) : (
-                  <div className="md:col-span-3">
+                  <div>
                     <div className="text-xs mb-1">Params (comma-separated)</div>
                     <Input
                       value={waTpl.params || ""}
                       onChange={(e) => setTpl({ params: e.target.value })}
                       placeholder="{{lead.first_name}}, {{business_name}}, {{booking_link}}"
                     />
-                    <div className="mt-1">
-                      <TokenRow
-                        onInsert={(t) => setTpl({ params: (waTpl.params || "").trim() ? `${waTpl.params}, ${t}` : t })}
-                      />
-                    </div>
                   </div>
                 )}
               </div>
@@ -479,16 +489,15 @@ function StepCard({ step, onChange, onRemove, waTemplates }) {
         </div>
       )}
 
-      {/* EMAIL (plain text; backend formats) */}
       {step.type === "send_email" && (
-        <div className="mt-2">
+        <div className="mt-3">
           <div className="text-xs mb-1">Subject</div>
           <Input
             value={step.subject || ""}
             onChange={(e) => set({ subject: e.target.value })}
             placeholder="Quick check-in from {{business_name}}"
           />
-          <div className="text-xs mb-1 mt-2">Body</div>
+          <div className="text-xs mb-1 mt-3">Body</div>
           <TextArea
             ref={bodyRef}
             rows={5}
@@ -496,16 +505,15 @@ function StepCard({ step, onChange, onRemove, waTemplates }) {
             onChange={(e) => set({ body: e.target.value })}
             placeholder={`Hi {{lead.first_name}},\n\nJust checking in. Book here: {{booking_link}}\n\nThanks,\n{{business_name}}`}
           />
-          <div className="mt-1">
+          <div className="mt-2">
             <TokenRow onInsert={(t) => insertToken(bodyRef, t)} />
           </div>
-          <div className="text-xs text-[#9a9a9a] mt-1">We’ll format this as a clean HTML email automatically.</div>
+          <div className="text-xs text-[#9a9a9a] mt-2">This will be formatted as a clean email automatically.</div>
         </div>
       )}
 
-      {/* BRANCHES */}
       {(step.type === "if_no_reply" || step.type === "if_no_booking") && (
-        <div className="mt-2">
+        <div className="mt-3">
           <div className="text-xs mb-1">Within days</div>
           <Input
             type="number"
@@ -513,7 +521,7 @@ function StepCard({ step, onChange, onRemove, waTemplates }) {
             onChange={(e) => set({ within_days: +e.target.value })}
             style={{ maxWidth: 120 }}
           />
-          <div className="text-xs text-[#bdbdbd] mt-2">Then do:</div>
+          <div className="text-xs text-[#bdbdbd] mt-3">Then do:</div>
           <div className="flex flex-col gap-2 mt-2">
             {(step.then || []).map((s, i) => (
               <StepCard
@@ -542,8 +550,7 @@ function StepCard({ step, onChange, onRemove, waTemplates }) {
                       {
                         type: "send_email",
                         subject: "We still here?",
-                        body:
-                          "Quick check-in — want to grab a spot with {{business_name}}?\n\nBook here: {{booking_link}}",
+                        body: "Quick check-in — want to grab a spot with {{business_name}}?\n\nBook here: {{booking_link}}",
                       },
                     ],
                   })
@@ -561,7 +568,10 @@ function StepCard({ step, onChange, onRemove, waTemplates }) {
               >
                 + WhatsApp
               </Btn>
-              <Btn kind="ghost" onClick={() => set({ then: [...(step.then || []), { type: "wait", hours: 24 }] })}>
+              <Btn
+                kind="ghost"
+                onClick={() => set({ then: [...(step.then || []), { type: "wait", hours: 24 }] })}
+              >
                 + Wait
               </Btn>
             </div>
@@ -569,9 +579,8 @@ function StepCard({ step, onChange, onRemove, waTemplates }) {
         </div>
       )}
 
-      {/* OWNER / TAG */}
       {step.type === "push_owner" && (
-        <div className="grid md:grid-cols-2 gap-2 mt-2">
+        <div className="grid md:grid-cols-2 gap-2 mt-3">
           <div>
             <div className="text-xs mb-1">Title</div>
             <Input value={step.title || "Lead to call"} onChange={(e) => set({ title: e.target.value })} />
@@ -584,7 +593,7 @@ function StepCard({ step, onChange, onRemove, waTemplates }) {
       )}
 
       {step.type === "add_tag" && (
-        <div className="mt-2">
+        <div className="mt-3">
           <div className="text-xs mb-1">Tag</div>
           <Input value={step.tag || "Needs Attention"} onChange={(e) => set({ tag: e.target.value })} />
         </div>
@@ -593,11 +602,11 @@ function StepCard({ step, onChange, onRemove, waTemplates }) {
   );
 }
 
-/* ---- PREVIEW PANEL ---- */
+/* ---- PREVIEW ---- */
 function Preview({ userEmail, flow }) {
   const [leadEmail, setLeadEmail] = useState("");
-  const [list, setList] = useState(null); // dry-run "would"
-  const [did, setDid] = useState(null); // execute "did"
+  const [list, setList] = useState(null);
+  const [did, setDid] = useState(null);
   const [loading, setLoading] = useState(false);
   const [err, setErr] = useState("");
 
@@ -654,13 +663,13 @@ function Preview({ userEmail, flow }) {
           {loading ? "Running…" : "Run"}
         </Btn>
         <Btn onClick={runNow} disabled={!leadEmail || loading}>
-          {loading ? "Sending…" : "Run Now (send)"}
+          {loading ? "Sending…" : "Run Now"}
         </Btn>
       </div>
       {err && <div className="text-xs text-[#ffbcbc] mt-2">{err}</div>}
 
       <div className="mt-3 rounded-xl border" style={{ borderColor: BORDER, padding: 12 }}>
-        <div className="font-semibold mb-2">Would run now (dry-run)</div>
+        <div className="font-semibold mb-2">Would run now</div>
         {list === null ? (
           <div className="text-sm text-[#9a9a9a]">No run yet.</div>
         ) : list.length === 0 ? (
@@ -702,11 +711,12 @@ function Preview({ userEmail, flow }) {
 export default function Automations({ user }) {
   const userEmail = (user?.email || "demo@retainai.ca").toLowerCase();
 
-  const [tab, setTab] = useState("flows"); // "templates" | "flows" | "builder"
+  const [tab, setTab] = useState("flows");
   const [templates, setTemplates] = useState([]);
   const [flows, setFlows] = useState([]);
   const [editing, setEditing] = useState(null);
   const [loading, setLoading] = useState(true);
+  const [savingFlow, setSavingFlow] = useState(false);
   const [error, setError] = useState("");
 
   const [profile, setProfile] = useState({
@@ -716,98 +726,123 @@ export default function Automations({ user }) {
     quiet_hours_end: "",
   });
   const [savingProfile, setSavingProfile] = useState(false);
-
-  // WhatsApp templates for dropdowns (optional; UI degrades if not available)
   const [waTemplates, setWATemplates] = useState([]);
 
+  async function refreshFlows() {
+    const d = await api.listFlows(userEmail);
+    const items = Array.isArray(d?.flows) ? d.flows : [];
+    setFlows(items.map((f) => normalizeFlow(f, userEmail)));
+  }
+
+  function buildEmptyFlow() {
+    return normalizeFlow(
+      {
+        id: undefined,
+        owner: userEmail,
+        name: "Untitled Flow",
+        enabled: false,
+        trigger: { type: "" },
+        steps: [],
+        caps: { per_lead_per_day: 1, respect_quiet_hours: true },
+        auto_stop_on_reply: true,
+      },
+      userEmail
+    );
+  }
+
+  function ensureEditingFlow() {
+    if (editing) return;
+    setEditing(buildEmptyFlow());
+  }
+
   useEffect(() => {
+    let mounted = true;
+
     (async () => {
       try {
-        const t = await api.getTemplates();
-        setTemplates(t.templates || []);
-        const p = await api.getProfile(userEmail);
+        setLoading(true);
+        setError("");
+
+        const [t, p, wa] = await Promise.all([
+          api.getTemplates(),
+          api.getProfile(userEmail),
+          api.getWATemplates(userEmail).catch(() => ({ templates: [] })),
+        ]);
+
+        if (!mounted) return;
+
+        setTemplates(Array.isArray(t?.templates) ? t.templates : []);
         setProfile({
           business_name: p?.profile?.business_name || "",
           booking_link: p?.profile?.booking_link || "",
           quiet_hours_start: p?.profile?.quiet_hours_start ?? "",
           quiet_hours_end: p?.profile?.quiet_hours_end ?? "",
         });
-        // Fetch WA templates if service is present
-        if (typeof api.getWhatsAppTemplates === "function") {
-          const r = await api.getWhatsAppTemplates(userEmail);
-          const items = r?.templates || r || [];
-          setWATemplates(Array.isArray(items) ? items : []);
-        }
+
+        const waItems = wa?.templates || [];
+        setWATemplates(Array.isArray(waItems) ? waItems : []);
+
         await refreshFlows();
       } catch (e) {
-        setError(String(e.message || e));
+        if (mounted) setError(String(e.message || e));
       } finally {
-        setLoading(false);
+        if (mounted) setLoading(false);
       }
     })();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+
+    return () => {
+      mounted = false;
+    };
   }, [userEmail]);
-
-  async function refreshFlows() {
-    try {
-      const d = await api.listFlows(userEmail);
-      setFlows(d.flows || []);
-    } catch (e) {
-      setError(String(e.message || e));
-    }
-  }
-
-  function ensureEditingFlow() {
-    if (editing) return;
-    setEditing({
-      id: undefined,
-      owner: userEmail,
-      name: "Untitled Flow",
-      enabled: false,
-      trigger: { type: "" },
-      steps: [],
-      caps: { per_lead_per_day: 1, respect_quiet_hours: true },
-      auto_stop_on_reply: true,
-    });
-  }
 
   function applyTemplate(t) {
     const f = JSON.parse(JSON.stringify(t));
     delete f.id;
     f.enabled = false;
     f.owner = userEmail;
-    f.name = f.name || t.name;
 
     const strip = (html = "") =>
-      html.replace(/<\/p>\s*<p>/g, "\n\n").replace(/<br\s*\/?>/g, "\n").replace(/<\/?[^>]+>/g, "").trim();
-    f.steps = (f.steps || []).map((s) => (s.type === "send_email" && s.html && !s.body ? { ...s, body: strip(s.html) } : s));
+      html
+        .replace(/<\/p>\s*<p>/g, "\n\n")
+        .replace(/<br\s*\/?>/g, "\n")
+        .replace(/<\/?[^>]+>/g, "")
+        .trim();
 
-    setEditing(f);
+    f.steps = (f.steps || []).map((s) =>
+      s.type === "send_email" && s.html && !s.body ? { ...s, body: strip(s.html) } : s
+    );
+
+    setEditing(normalizeFlow(f, userEmail));
     setTab("builder");
   }
 
   async function saveFlow() {
     if (!editing) return;
-    setError("");
-    const isUpdate = !!editing.id && flows.some((x) => x.id === editing.id);
 
     try {
+      setSavingFlow(true);
+      setError("");
+
+      const payload = normalizeFlow(editing, userEmail);
+      const isUpdate = !!payload.id && flows.some((x) => x.id === payload.id);
+
       if (isUpdate) {
-        const d = await api.updateFlow(userEmail, editing.id, editing);
-        const updated = d.flow || editing;
+        const d = await api.updateFlow(userEmail, payload.id, payload);
+        const updated = normalizeFlow(d?.flow || payload, userEmail);
         setFlows((prev) => prev.map((f) => (f.id === updated.id ? updated : f)));
       } else {
-        const d = await api.createFlow(userEmail, editing);
-        const created = d.flow || editing;
-        if (!created.id && d.flow?.id) created.id = d.flow.id;
+        const d = await api.createFlow(userEmail, payload);
+        const created = normalizeFlow(d?.flow || payload, userEmail);
         setFlows((prev) => [...prev, created]);
-        setEditing(created);
       }
-      setTab("flows");
-      refreshFlows();
+
+      await refreshFlows();
       setEditing(null);
+      setTab("flows");
     } catch (e) {
       setError(String(e.message || e));
+    } finally {
+      setSavingFlow(false);
     }
   }
 
@@ -853,16 +888,23 @@ export default function Automations({ user }) {
   return (
     <div
       className="w-full min-h-[100vh]"
-      style={{ background: BG, color: TEXT, display: "grid", gridTemplateRows: "auto auto 1fr" }}
+      style={{
+        background: BG,
+        color: TEXT,
+        display: "grid",
+        gridTemplateRows: "auto auto 1fr",
+      }}
     >
-      {/* HEADER — Builder always visible */}
-      <div className="px-5 py-4 border-b" style={{ borderColor: BORDER, background: "#202020" }}>
-        <div className="flex items-center justify-between">
-          <div className="flex items-center gap-3">
+      <div className="px-5 py-4 border-b" style={{ borderColor: BORDER, background: PANEL }}>
+        <div className="flex items-center justify-between gap-4 flex-wrap">
+          <div>
             <h2 className="text-2xl font-bold">Automations</h2>
-            <div className="text-sm text-[#bdbdbd]">If this → then that. Simple.</div>
+            <div className="text-sm" style={{ color: MUTED }}>
+              Build simple, calm follow-up flows that your team can actually manage.
+            </div>
           </div>
-          <div className="flex gap-2">
+
+          <div className="flex gap-2 flex-wrap">
             <Btn kind={tab === "templates" ? "solid" : "ghost"} onClick={() => setTab("templates")}>
               Templates
             </Btn>
@@ -882,31 +924,46 @@ export default function Automations({ user }) {
         </div>
       </div>
 
-      {/* PROFILE BAR */}
-      <div className="px-5 py-3 border-b" style={{ borderColor: BORDER, background: "#1c1c1c" }}>
+      <div className="px-5 py-4 border-b" style={{ borderColor: BORDER, background: "#1c1d1f" }}>
         {error && (
-          <div className="mb-3 text-sm text-[#ffbcbc] bg-[#3a1111] border border-[#4a1515] rounded-xl px-3 py-2">
+          <div
+            className="mb-3 text-sm rounded-xl px-3 py-2"
+            style={{ background: DANGER_BG, color: DANGER_TXT, border: "1px solid #4a1515" }}
+          >
             {error}
           </div>
         )}
-        <div className="grid lg:grid-cols-5 gap-3 items-end">
-          <div>
-            <div className="text-xs mb-1">Business</div>
-            <Input
-              value={profile.business_name}
-              onChange={(e) => setProfile({ ...profile, business_name: e.target.value })}
-              placeholder="RetainAI Clinic"
-            />
+
+        <div style={{ ...shellCard, padding: 16 }}>
+          <div className="flex items-center justify-between gap-3 flex-wrap mb-3">
+            <div>
+              <div className="text-base font-semibold">Automation Settings</div>
+              <div className="text-xs" style={{ color: MUTED }}>
+                These values get reused across your messages and flows.
+              </div>
+            </div>
+            <Btn onClick={saveProf} disabled={savingProfile}>
+              {savingProfile ? "Saving…" : "Save Profile"}
+            </Btn>
           </div>
-          <div className="lg:col-span-2">
-            <div className="text-xs mb-1">Booking link</div>
-            <Input
-              value={profile.booking_link}
-              onChange={(e) => setProfile({ ...profile, booking_link: e.target.value })}
-              placeholder="https://calendly.com/you/30min"
-            />
-          </div>
-          <div className="grid grid-cols-2 gap-2">
+
+          <div className="grid lg:grid-cols-5 gap-3 items-end">
+            <div>
+              <div className="text-xs mb-1">Business</div>
+              <Input
+                value={profile.business_name}
+                onChange={(e) => setProfile({ ...profile, business_name: e.target.value })}
+                placeholder="RetainAI Clinic"
+              />
+            </div>
+            <div className="lg:col-span-2">
+              <div className="text-xs mb-1">Booking link</div>
+              <Input
+                value={profile.booking_link}
+                onChange={(e) => setProfile({ ...profile, booking_link: e.target.value })}
+                placeholder="https://calendly.com/you/30min"
+              />
+            </div>
             <div>
               <div className="text-xs mb-1">Quiet start (0–23)</div>
               <Input
@@ -928,36 +985,25 @@ export default function Automations({ user }) {
               />
             </div>
           </div>
-          <div className="flex gap-2">
-            <Btn onClick={saveProf} disabled={savingProfile}>
-              {savingProfile ? "Saving…" : "Save Profile"}
-            </Btn>
-          </div>
-        </div>
 
-        {/* FIXED TOKENS RENDERING */}
-        <div className="mt-2 text-xs text-[#8b8b8b] flex items-center gap-2 flex-wrap">
-          Tokens:
-          {TOKENS.map((tok) => (
-            <code key={tok} className="bg-[#242424] px-2 py-1 rounded text-xs">
-              {tok}
-            </code>
-          ))}
+          <div className="mt-3 text-xs flex items-center gap-2 flex-wrap" style={{ color: MUTED }}>
+            Tokens:
+            {TOKENS.map((tok) => (
+              <code key={tok} className="bg-[#242424] px-2 py-1 rounded text-xs">
+                {tok}
+              </code>
+            ))}
+          </div>
         </div>
       </div>
 
-      {/* BODY */}
       <div className="p-5 overflow-auto">
         {tab === "templates" && (
           <div className="grid md:grid-cols-3 gap-4">
             {templates.map((t) => (
-              <div
-                key={t.id}
-                className="rounded-2xl p-4 flex flex-col"
-                style={{ background: CARD, border: `1px solid ${BORDER}` }}
-              >
+              <div key={t.id} className="rounded-2xl p-4 flex flex-col" style={shellCard}>
                 <div className="text-lg font-semibold mb-1">{t.name}</div>
-                <div className="text-sm text-[#cfcfcf] mb-3">
+                <div className="text-sm mb-3" style={{ color: MUTED }}>
                   {PRETTY[t.trigger?.type]?.(t.trigger) || t.trigger?.type}
                 </div>
                 <FlowDiagram flow={t} />
@@ -966,42 +1012,44 @@ export default function Automations({ user }) {
                 </Btn>
               </div>
             ))}
-            {!templates.length && <div className="text-sm text-[#a9a9a9]">No templates available.</div>}
+            {!templates.length && <div className="text-sm" style={{ color: MUTED }}>No templates available.</div>}
           </div>
         )}
 
         {tab === "flows" && (
           <div className="grid md:grid-cols-2 gap-4">
-            {loading && <div className="text-sm text-[#a9a9a9]">Loading your flows…</div>}
+            {loading && <div className="text-sm" style={{ color: MUTED }}>Loading your flows…</div>}
+
             {!loading &&
               flows.map((f) => (
-                <div key={f.id} className="rounded-2xl p-4" style={{ background: CARD, border: `1px solid ${BORDER}` }}>
-                  <div className="flex items-center justify-between mb-2">
+                <div key={f.id} className="rounded-2xl p-4" style={shellCard}>
+                  <div className="flex items-center justify-between mb-3 gap-3">
                     <div>
                       <div className="text-lg font-semibold">{f.name}</div>
-                      <div className="text-sm text-[#bdbdbd]">
+                      <div className="text-sm" style={{ color: MUTED }}>
                         {PRETTY[f.trigger?.type]?.(f.trigger) || f.trigger?.type}
                       </div>
                     </div>
+
                     <Toggle
                       checked={!!f.enabled}
                       onChange={async (e) => {
                         const enabled = e.target.checked;
-                        // optimistic
                         setFlows((prev) => prev.map((x) => (x.id === f.id ? { ...x, enabled } : x)));
                         try {
                           await api.enableFlow(userEmail, f.id, enabled);
+                          await refreshFlows();
                         } catch (err) {
-                          // revert on error
                           setFlows((prev) => prev.map((x) => (x.id === f.id ? { ...x, enabled: !enabled } : x)));
-                        } finally {
-                          refreshFlows();
+                          setError(String(err.message || err));
                         }
                       }}
                     />
                   </div>
+
                   <FlowDiagram flow={f} />
-                  <div className="mt-3 flex gap-2">
+
+                  <div className="mt-4 flex gap-2">
                     <Btn
                       kind="ghost"
                       onClick={() => {
@@ -1011,29 +1059,35 @@ export default function Automations({ user }) {
                             .replace(/<br\s*\/?>/g, "\n")
                             .replace(/<\/?[^>]+>/g, "")
                             .trim();
+
                         const hydrated = {
                           ...f,
                           steps: (f.steps || []).map((s) =>
-                            s.type === "send_email" ? { ...s, body: strip(s.html || "") } : s
+                            s.type === "send_email" && s.html && !s.body
+                              ? { ...s, body: strip(s.html || "") }
+                              : s
                           ),
                         };
-                        setEditing(hydrated);
+
+                        setEditing(normalizeFlow(hydrated, userEmail));
                         setTab("builder");
                       }}
                     >
                       Edit
                     </Btn>
+
                     <Btn
                       kind="danger"
                       onClick={async () => {
                         if (!window.confirm("Delete this flow?")) return;
-                        // optimistic remove
-                        setFlows((prev) => prev.filter((x) => x.id !== f.id));
+                        const prev = [...flows];
+                        setFlows((curr) => curr.filter((x) => x.id !== f.id));
                         try {
                           await api.deleteFlow(userEmail, f.id);
+                          await refreshFlows();
                         } catch (err) {
+                          setFlows(prev);
                           setError(String(err.message || err));
-                          refreshFlows();
                         }
                       }}
                     >
@@ -1042,31 +1096,53 @@ export default function Automations({ user }) {
                   </div>
                 </div>
               ))}
+
             {!loading && !flows.length && (
-              <div className="text-sm text-[#a9a9a9]">No flows yet — start from a template or hit Builder.</div>
+              <div className="text-sm" style={{ color: MUTED }}>
+                No flows yet — start from a template or open Builder.
+              </div>
             )}
           </div>
         )}
 
         {tab === "builder" && (
           <div className="grid xl:grid-cols-3 gap-6">
-            {/* LEFT: Settings */}
-            <div className="rounded-2xl p-4" style={{ background: CARD, border: `1px solid ${BORDER}` }}>
-              <div className="text-lg font-semibold mb-2">Settings</div>
+            <div className="rounded-2xl p-4" style={shellCard}>
+              <div className="flex items-center justify-between gap-3 mb-3">
+                <div>
+                  <div className="text-lg font-semibold">Builder</div>
+                  <div className="text-xs" style={{ color: MUTED }}>
+                    Start with a trigger, then add only the steps you need.
+                  </div>
+                </div>
+                <Btn
+                  kind="ghost"
+                  onClick={() => setEditing(buildEmptyFlow())}
+                >
+                  New Flow
+                </Btn>
+              </div>
+
               {!editing ? (
-                <div className="text-sm text-[#a9a9a9]">Click “New Flow” to begin.</div>
+                <div className="text-sm" style={{ color: MUTED }}>
+                  Open a flow or click New Flow to begin.
+                </div>
               ) : (
                 <>
                   <div className="mb-3">
                     <div className="text-sm mb-1">Name</div>
                     <Input value={editing.name || ""} onChange={(e) => setEditing({ ...editing, name: e.target.value })} />
                   </div>
+
                   <div className="text-sm mb-1">Trigger</div>
                   <select
                     className="w-full bg-[#232323] text-white border border-[#2a2a2a] rounded-xl p-2 mb-2"
                     value={editing.trigger?.type || ""}
                     onChange={(e) =>
-                      setEditing({ ...editing, trigger: { ...(editing.trigger || {}), type: e.target.value } })
+                      setEditing({
+                        ...editing,
+                        trigger: { ...(editing.trigger || {}), type: e.target.value },
+                      })
                     }
                   >
                     <option value="">Select…</option>
@@ -1082,12 +1158,16 @@ export default function Automations({ user }) {
                         type="number"
                         value={editing.trigger?.days || 3}
                         onChange={(e) =>
-                          setEditing({ ...editing, trigger: { ...(editing.trigger || {}), days: +e.target.value } })
+                          setEditing({
+                            ...editing,
+                            trigger: { ...(editing.trigger || {}), days: +e.target.value },
+                          })
                         }
                         style={{ maxWidth: 100 }}
                       />
                     </div>
                   )}
+
                   {editing.trigger?.type === "new_lead" && (
                     <div className="flex items-center gap-2 mb-2">
                       <span className="text-sm">Within hours:</span>
@@ -1119,6 +1199,7 @@ export default function Automations({ user }) {
                     />
                     <span className="text-sm">Respect quiet hours</span>
                   </div>
+
                   <div className="flex items-center gap-2 mt-2">
                     <span className="text-sm">Max sends / day / lead:</span>
                     <Input
@@ -1135,19 +1216,26 @@ export default function Automations({ user }) {
                   </div>
 
                   <div className="mt-4 flex flex-wrap gap-2">
-                    <Btn onClick={saveFlow}>Save Flow</Btn>
-                    <Btn kind="ghost" onClick={() => setEditing(null)}>
-                      New Flow
+                    <Btn onClick={saveFlow} disabled={savingFlow}>
+                      {savingFlow ? "Saving…" : "Save Flow"}
+                    </Btn>
+                    <Btn kind="ghost" onClick={() => setTab("flows")}>
+                      Back to Flows
                     </Btn>
                   </div>
                 </>
               )}
             </div>
 
-            {/* MIDDLE: Steps Editor */}
-            <div className="rounded-2xl p-4" style={{ background: CARD, border: `1px solid ${BORDER}` }}>
-              <div className="flex items-center justify-between mb-3">
-                <div className="text-lg font-semibold">Steps</div>
+            <div className="rounded-2xl p-4" style={shellCard}>
+              <div className="flex items-center justify-between mb-3 gap-3 flex-wrap">
+                <div>
+                  <div className="text-lg font-semibold">Steps</div>
+                  <div className="text-xs" style={{ color: MUTED }}>
+                    Add actions one at a time so the flow stays easy to follow.
+                  </div>
+                </div>
+
                 <div className="flex flex-wrap gap-2">
                   {[
                     "ai_draft",
@@ -1163,20 +1251,7 @@ export default function Automations({ user }) {
                       key={k}
                       kind="ghost"
                       onClick={() => {
-                        if (!editing) {
-                          ensureEditingFlow();
-                        }
-                        const flow =
-                          editing || {
-                            id: undefined,
-                            owner: userEmail,
-                            name: "Untitled Flow",
-                            enabled: false,
-                            trigger: { type: "" },
-                            steps: [],
-                            caps: { per_lead_per_day: 1, respect_quiet_hours: true },
-                            auto_stop_on_reply: true,
-                          };
+                        const flow = editing || buildEmptyFlow();
                         const def = buildDefaultStep(k);
                         setEditing({ ...flow, steps: [...(flow.steps || []), def] });
                       }}
@@ -1207,18 +1282,27 @@ export default function Automations({ user }) {
                     />
                   ))}
                   {!(editing.steps || []).length && (
-                    <div className="text-sm text-[#a9a9a9]">No steps yet — add from the toolbar above.</div>
+                    <div className="text-sm" style={{ color: MUTED }}>
+                      No steps yet — add one from the toolbar above.
+                    </div>
                   )}
                 </div>
               ) : (
-                <div className="text-sm text-[#a9a9a9]">Open or create a flow to edit steps.</div>
+                <div className="text-sm" style={{ color: MUTED }}>
+                  Open or create a flow to edit steps.
+                </div>
               )}
             </div>
 
-            {/* RIGHT: Live Diagram + Preview */}
-            <div className="rounded-2xl p-4" style={{ background: CARD, border: `1px solid ${BORDER}` }}>
-              <div className="text-lg font-semibold mb-3">Flow</div>
-              {editing ? <FlowDiagram flow={editing} /> : <div className="text-sm text-[#a9a9a9]">No flow selected.</div>}
+            <div className="rounded-2xl p-4" style={shellCard}>
+              <div className="text-lg font-semibold mb-3">Live Flow View</div>
+              {editing ? (
+                <FlowDiagram flow={editing} />
+              ) : (
+                <div className="text-sm" style={{ color: MUTED }}>
+                  No flow selected.
+                </div>
+              )}
 
               <div className="h-4" />
               {editing && (

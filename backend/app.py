@@ -3982,13 +3982,22 @@ def send_whatsapp_with_window(flow, step, lead, run, caps, profile) -> bool:
             append_chat_message(user_email, lead_id, body)
         return True
 
-    tpl_name, used_lang, pcount = choose_wa_template(step.get("template_name"), os.getenv("WHATSAPP_TEMPLATE_LANG", "en"))
+    template_cfg = step.get("template") or {}
+    preferred_name = template_cfg.get("name") or step.get("template_name")
+    preferred_lang = template_cfg.get("language") or os.getenv("WHATSAPP_TEMPLATE_LANG", "en")
+    tpl_name, used_lang, pcount = choose_wa_template(preferred_name, preferred_lang)
     if not tpl_name or not used_lang:
         create_notification(user_email, "WhatsApp template unavailable",
                             "No approved template/locale available to send outside the 24h window.")
         return True
 
-    params = build_wa_params(pcount, lead, profile, run, body)
+    explicit_params = []
+    raw_params = template_cfg.get("params")
+    if isinstance(raw_params, str):
+        explicit_params = [p.strip() for p in raw_params.split(",")]
+    params = explicit_params if explicit_params else build_wa_params(pcount, lead, profile, run, body)
+    params = (params + [""] * pcount)[:pcount]
+
     shown = f"[template:{tpl_name}/{used_lang}] {body}"
     try:
         resp = wa_send_template(to, tpl_name, used_lang, params)
@@ -4133,9 +4142,10 @@ def execute_step(flow: Dict[str, Any], step: Dict[str, Any], lead: Dict[str, Any
 
         subject = render_text(step.get("subject") or "Quick check-in", lead, run, profile)
         html = render_text(
-            step.get("html") or "<p>Hi {{lead.first_name}}, just checking in. <a href='{{booking_link}}'>Book here</a>.</p>",
+            step.get("html") or step.get("body") or "<p>Hi {{lead.first_name}}, just checking in. <a href='{{booking_link}}'>Book here</a>.</p>",
             lead, run, profile
         )
+        html = html.replace("\n", "<br>")
         if contains_blockers(subject) or contains_blockers(html):
             create_notification(lead.get("owner") or flow.get("owner") or "", "Setup needed",
                                 "Email blocked: missing profile values (booking link / business name).")
@@ -4225,6 +4235,35 @@ def engine_tick():
 
     save_state(state)
 
+def _normalize_flow_for_user(flow: Dict[str, Any], user: str) -> Dict[str, Any]:
+    f = dict(flow or {})
+    f["id"] = str(f.get("id") or uuid4())
+    f["owner"] = (user or "").lower()
+    f["name"] = str(f.get("name") or "Untitled Flow")[:160]
+    f["enabled"] = bool(f.get("enabled", False))
+
+    trigger = f.get("trigger") or {}
+    if not isinstance(trigger, dict):
+        trigger = {}
+    trigger["type"] = str(trigger.get("type") or "")
+    f["trigger"] = trigger
+
+    steps = f.get("steps") or []
+    if not isinstance(steps, list):
+        steps = []
+    f["steps"] = steps
+
+    caps = f.get("caps") or {}
+    if not isinstance(caps, dict):
+        caps = {}
+    f["caps"] = {
+        "per_lead_per_day": int(caps.get("per_lead_per_day", 1) or 1),
+        "respect_quiet_hours": caps.get("respect_quiet_hours", True) is not False,
+    }
+
+    f["auto_stop_on_reply"] = f.get("auto_stop_on_reply", True) is not False
+    return f
+
 automations_bp = Blueprint("automations", __name__)
 
 @automations_bp.before_request
@@ -4240,6 +4279,7 @@ def get_user_profile_route():
     user = user_from_request()
     prof = load_user_profile(user)
     return jsonify({
+        "ok": True,
         "profile": {
             "business_name": prof.get("business_name", ""),
             "booking_link": prof.get("booking_link", ""),
@@ -4249,7 +4289,7 @@ def get_user_profile_route():
     })
 
 def _vp_int(v, name):
-    if v is None:
+    if v is None or v == "":
         return None
     try:
         iv = int(v)
@@ -4283,6 +4323,7 @@ def set_user_profile_route():
             prof["quiet_hours_end"] = _vp_int(body.get("quiet_hours_end"), "quiet_hours_end")
     except ValueError as e:
         return jsonify({"ok": False, "error": str(e)}), 400
+
     save_user_profile(user, prof)
     return jsonify({"ok": True, "profile": prof})
 
@@ -4341,7 +4382,7 @@ def builtin_templates() -> List[Dict[str, Any]]:
 
 @automations_bp.route("/templates", methods=["GET"])
 def automations_templates():
-    return jsonify({"templates": builtin_templates()})
+    return jsonify({"ok": True, "templates": builtin_templates()})
 
 @automations_bp.route("/wa/templates", methods=["GET"])
 def list_wa_templates():
@@ -4349,6 +4390,7 @@ def list_wa_templates():
     r = wa_fetch_templates_for_waba(waba_id)
     if not getattr(r, "ok", False):
         return jsonify({"ok": False, "templates": [], "error": "unavailable"}), 503
+
     data = r.json() or {}
     items = data.get("data", []) or []
     approved = [t for t in items if (t.get("status") or "").upper() == "APPROVED"]
@@ -4358,19 +4400,15 @@ def list_wa_templates():
 @automations_bp.route("/", methods=["GET"])
 def list_flows_route():
     user = user_from_request()
-    flows = load_user_flows(user)
-    for f in flows:
-        f.setdefault("id", str(uuid4()))
-    return jsonify({"flows": flows})
+    flows = [_normalize_flow_for_user(f, user) for f in load_user_flows(user)]
+    save_user_flows(user, flows)
+    return jsonify({"ok": True, "flows": flows})
 
 @automations_bp.route("/", methods=["POST"])
 def create_flow_route():
     user = user_from_request()
     body = request.get_json(force=True) or {}
-    flow = body.get("flow", {}) or {}
-    flow.setdefault("id", str(uuid4()))
-    flow.setdefault("enabled", False)
-    flow["owner"] = user
+    flow = _normalize_flow_for_user(body.get("flow", {}) or {}, user)
     flows = load_user_flows(user)
     flows.append(flow)
     save_user_flows(user, flows)
@@ -4380,14 +4418,19 @@ def create_flow_route():
 def update_flow_route(flow_id):
     user = user_from_request()
     body = request.get_json(force=True) or {}
+    incoming = body.get("flow", {}) or {}
     flows = load_user_flows(user)
+
     for i, f in enumerate(flows):
         if f.get("id") == flow_id:
-            merged = {**f, **(body.get("flow", {}) or {})}
+            merged = {**f, **incoming}
             merged["id"] = flow_id
+            merged["owner"] = user
+            merged = _normalize_flow_for_user(merged, user)
             flows[i] = merged
             save_user_flows(user, flows)
             return jsonify({"ok": True, "flow": merged})
+
     return jsonify({"ok": False, "error": "not_found"}), 404
 
 @automations_bp.route("/enable/<flow_id>", methods=["POST"])
@@ -4396,11 +4439,14 @@ def enable_flow_route(flow_id):
     body = request.get_json(force=True) or {}
     enabled = bool(body.get("enabled", True))
     flows = load_user_flows(user)
-    for f in flows:
+
+    for i, f in enumerate(flows):
         if f.get("id") == flow_id:
             f["enabled"] = enabled
+            flows[i] = _normalize_flow_for_user(f, user)
             save_user_flows(user, flows)
-            return jsonify({"ok": True, "flow": f})
+            return jsonify({"ok": True, "flow": flows[i]})
+
     return jsonify({"ok": False, "error": "not_found"}), 404
 
 @automations_bp.route("/<flow_id>", methods=["DELETE"])
@@ -4409,15 +4455,16 @@ def delete_flow_route(flow_id):
     flows = load_user_flows(user)
     flows = [f for f in flows if f.get("id") != flow_id]
     save_user_flows(user, flows)
+
     state = load_state()
     if flow_id in state:
-        state.pop(flow_id, None)
-        save_state(state)
+      state.pop(flow_id, None)
+      save_state(state)
+
     return jsonify({"ok": True})
 
 if "automations" not in getattr(app, "blueprints", {}):
     app.register_blueprint(automations_bp, url_prefix="/api/automations")
-
 
 # ----------------------------
 # VAPID Push — persisted subscriptions
