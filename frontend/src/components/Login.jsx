@@ -24,7 +24,15 @@ const API_BASE =
   window.location.origin.replace(/\/$/, "");
 
 // Small input
-function Input({ type = "text", value, onChange, placeholder, onKeyDown, rightEl, autoComplete }) {
+function Input({
+  type = "text",
+  value,
+  onChange,
+  placeholder,
+  onKeyDown,
+  rightEl,
+  autoComplete,
+}) {
   return (
     <div style={{ position: "relative" }}>
       <input
@@ -47,12 +55,75 @@ function Input({ type = "text", value, onChange, placeholder, onKeyDown, rightEl
         }}
       />
       {rightEl ? (
-        <div style={{ position: "absolute", right: 10, top: "50%", transform: "translateY(-50%)" }}>
+        <div
+          style={{
+            position: "absolute",
+            right: 10,
+            top: "50%",
+            transform: "translateY(-50%)",
+          }}
+        >
           {rightEl}
         </div>
       ) : null}
     </div>
   );
+}
+
+function normEmail(e) {
+  return (e || "").trim().toLowerCase();
+}
+
+function normalizeUserForStorage(u = {}, fallbackEmail = "") {
+  return {
+    email: u.email || normEmail(fallbackEmail),
+    name: u.name || "",
+    logo: u.logo || defaultAvatar,
+
+    businessType: u.businessType || u.lineOfBusiness || "",
+    business: u.business || u.businessName || "",
+    businessName: u.businessName || u.business || "",
+    location: u.location || "",
+
+    people:
+      u.people !== undefined && u.people !== null && u.people !== ""
+        ? u.people
+        : u.teamSize ?? "",
+    teamSize:
+      u.teamSize !== undefined && u.teamSize !== null && u.teamSize !== ""
+        ? u.teamSize
+        : u.people ?? "",
+
+    status: u.status || "",
+
+    stripe_connected: Boolean(u.stripe_connected),
+    stripe_account_id: u.stripe_account_id || "",
+
+    gcal_connected: Boolean(u.gcal_connected),
+    gcal_calendars: Array.isArray(u.gcal_calendars) ? u.gcal_calendars : [],
+
+    role: u.role || "",
+    org_id: u.org_id || "",
+    orgOwnerEmail: u.orgOwnerEmail || "",
+
+    canInviteTeam: Boolean(u.canInviteTeam),
+    canEditBusiness: Boolean(u.canEditBusiness),
+    canManageBilling: Boolean(u.canManageBilling),
+  };
+}
+
+function persistUser(u, remember) {
+  const normalized = normalizeUserForStorage(u, u?.email || "");
+  localStorage.setItem("user", JSON.stringify(normalized));
+  localStorage.setItem("userEmail", normalized.email || "");
+
+  if (remember) {
+    localStorage.setItem("rememberEmail", normalized.email || "");
+    localStorage.setItem("rememberFlag", "1");
+  } else {
+    localStorage.removeItem("rememberEmail");
+    localStorage.setItem("rememberFlag", "0");
+  }
 }
 
 export default function Login() {
@@ -68,6 +139,7 @@ export default function Login() {
   useEffect(() => {
     const saved = localStorage.getItem("rememberEmail");
     if (saved) setEmail(saved);
+
     const savedFlag = localStorage.getItem("rememberFlag");
     if (savedFlag) setRemember(savedFlag === "1");
   }, []);
@@ -76,20 +148,21 @@ export default function Login() {
   const handleForgot = () => {
     const subject = encodeURIComponent("Password reset request — RetainAI");
     const body = encodeURIComponent(
-      `Hi RetainAI,\n\nPlease reset my password.\n\nAccount email: ${email || "<enter your email>"}\n\nThanks!`
+      `Hi RetainAI,\n\nPlease reset my password.\n\nAccount email: ${
+        email || "<enter your email>"
+      }\n\nThanks!`
     );
     window.location.href = `mailto:${SUPPORT_EMAIL}?subject=${subject}&body=${body}`;
   };
 
-  // Normalize email (lowercase + trim)
-  const normEmail = (e) => (e || "").trim().toLowerCase();
-
-  // ---- Google OAuth handler (NOW: same rule as password login; no auto-provision) ----
+  // ---- Google OAuth handler ----
   const handleGoogleSuccess = async (credentialResponse) => {
     setSubmitting(true);
     setError("");
+
     try {
       const token = credentialResponse.credential;
+
       const res = await fetch(`${API_BASE}/api/oauth/google`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -99,36 +172,19 @@ export default function Login() {
       const data = await res.json();
 
       if (!res.ok) {
-        // Friendlier messages by status
-        if (res.status === 404) setError("No account found for this Google email. Please sign up first.");
-        else if (res.status === 403) setError("Your account is not active yet. Please complete payment to activate.");
-        else setError(data.error || "Google login failed.");
+        if (res.status === 404) {
+          setError("No account found for this Google email. Please sign up first.");
+        } else if (res.status === 403) {
+          setError("Your account is not active yet. Please complete payment to activate.");
+        } else {
+          setError(data.error || "Google login failed.");
+        }
         setSubmitting(false);
         return;
       }
 
       const u = data.user || {};
-      localStorage.setItem(
-        "user",
-        JSON.stringify({
-          email: u.email,
-          name: u.name || "",
-          logo: u.logo || defaultAvatar,
-          businessType: u.businessType || "",
-          business: u.business || "",
-          status: u.status || "",
-        })
-      );
-      localStorage.setItem("userEmail", u.email || "");
-
-      if (remember) {
-        localStorage.setItem("rememberEmail", u.email || "");
-        localStorage.setItem("rememberFlag", "1");
-      } else {
-        localStorage.removeItem("rememberEmail");
-        localStorage.setItem("rememberFlag", "0");
-      }
-
+      persistUser(u, remember);
       navigate("/app");
     } catch {
       setError("Google login error.");
@@ -140,45 +196,35 @@ export default function Login() {
   async function handleLogin(e) {
     e.preventDefault();
     if (submitting) return;
+
     setError("");
+
     if (!email || !password) {
       setError("All fields required.");
       return;
     }
+
     setSubmitting(true);
+
     try {
+      const cleanedEmail = normEmail(email);
+
       const res = await fetch(`${API_BASE}/api/login`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ email: normEmail(email), password }),
+        body: JSON.stringify({ email: cleanedEmail, password }),
       });
+
       const data = await res.json();
+
       if (!res.ok) {
         setError(data.error || "Login failed.");
         setSubmitting(false);
         return;
       }
-      const u = data.user || {};
-      localStorage.setItem(
-        "user",
-        JSON.stringify({
-          email: u.email || normEmail(email),
-          businessType: u.businessType || "",
-          business: u.business || "",
-          name: u.name || "",
-          logo: u.logo || defaultAvatar,
-          status: u.status || "",
-        })
-      );
-      localStorage.setItem("userEmail", u.email || normEmail(email));
 
-      if (remember) {
-        localStorage.setItem("rememberEmail", u.email || normEmail(email));
-        localStorage.setItem("rememberFlag", "1");
-      } else {
-        localStorage.removeItem("rememberEmail");
-        localStorage.setItem("rememberFlag", "0");
-      }
+      const u = normalizeUserForStorage(data.user || {}, cleanedEmail);
+      persistUser(u, remember);
       navigate("/app");
     } catch {
       setError("Login error.");
@@ -186,13 +232,23 @@ export default function Login() {
     }
   }
 
-  const onEnter = (e, fn) => e.key === "Enter" && fn(e);
+  const onEnter = (e, fn) => {
+    if (e.key === "Enter") fn(e);
+  };
 
   // ---------- UI ----------
   return (
     <div style={{ minHeight: "100vh", background: BG.page, color: "#fff" }}>
       {/* gold glows */}
-      <div aria-hidden style={{ position: "fixed", inset: 0, pointerEvents: "none", zIndex: 0 }}>
+      <div
+        aria-hidden
+        style={{
+          position: "fixed",
+          inset: 0,
+          pointerEvents: "none",
+          zIndex: 0,
+        }}
+      >
         <div
           style={{
             position: "absolute",
@@ -223,7 +279,15 @@ export default function Login() {
       </div>
 
       {/* top bar */}
-      <div style={{ position: "sticky", top: 0, zIndex: 5, background: "#0C0D10", borderBottom: `1px solid ${BG.line}` }}>
+      <div
+        style={{
+          position: "sticky",
+          top: 0,
+          zIndex: 5,
+          background: "#0C0D10",
+          borderBottom: `1px solid ${BG.line}`,
+        }}
+      >
         <div
           style={{
             maxWidth: 1120,
@@ -235,19 +299,29 @@ export default function Login() {
           }}
         >
           <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-            <img src={logo} alt="RetainAI" style={{ width: 28, height: 28, borderRadius: 6 }} />
-            <span style={{ color: BG.gold, fontWeight: 900, letterSpacing: 0.2 }}>RetainAI</span>
+            <img
+              src={logo}
+              alt="RetainAI"
+              style={{ width: 28, height: 28, borderRadius: 6 }}
+            />
+            <span style={{ color: BG.gold, fontWeight: 900, letterSpacing: 0.2 }}>
+              RetainAI
+            </span>
           </div>
+
           <div style={{ fontSize: 13, color: BG.text60 }}>
             New here?{" "}
-            <Link to="/signup" style={{ color: BG.goldDeep, textDecoration: "underline" }}>
+            <Link
+              to="/signup"
+              style={{ color: BG.goldDeep, textDecoration: "underline" }}
+            >
               Create account
             </Link>
           </div>
         </div>
       </div>
 
-      {/* content (symmetrical spacing) */}
+      {/* content */}
       <div
         style={{
           position: "relative",
@@ -274,10 +348,31 @@ export default function Login() {
           }}
         >
           <div style={{ display: "flex", alignItems: "center", gap: 18 }}>
-            <img src={logo} alt="RetainAI" style={{ width: 84, height: 84, borderRadius: 18, background: "#111", objectFit: "cover" }} />
+            <img
+              src={logo}
+              alt="RetainAI"
+              style={{
+                width: 84,
+                height: 84,
+                borderRadius: 18,
+                background: "#111",
+                objectFit: "cover",
+              }}
+            />
             <div>
-              <div style={{ fontSize: 40, fontWeight: 900, letterSpacing: 0.4, color: BG.gold }}>RetainAI</div>
-              <div style={{ color: BG.text80, marginTop: 6, fontSize: 16 }}>Client relationships. Done right.</div>
+              <div
+                style={{
+                  fontSize: 40,
+                  fontWeight: 900,
+                  letterSpacing: 0.4,
+                  color: BG.gold,
+                }}
+              >
+                RetainAI
+              </div>
+              <div style={{ color: BG.text80, marginTop: 6, fontSize: 16 }}>
+                Client relationships. Done right.
+              </div>
             </div>
           </div>
         </div>
@@ -295,7 +390,17 @@ export default function Login() {
             justifyContent: "center",
           }}
         >
-          <h2 style={{ color: BG.gold, fontWeight: 800, fontSize: 28, marginBottom: 12 }}>Welcome back</h2>
+          <h2
+            style={{
+              color: BG.gold,
+              fontWeight: 800,
+              fontSize: 28,
+              marginBottom: 12,
+            }}
+          >
+            Welcome back
+          </h2>
+
           <form onSubmit={handleLogin}>
             <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
               <Input
@@ -306,6 +411,7 @@ export default function Login() {
                 placeholder="Email"
                 autoComplete="username"
               />
+
               <Input
                 type={showPw ? "text" : "password"}
                 value={password}
@@ -317,7 +423,13 @@ export default function Login() {
                   <button
                     type="button"
                     onClick={() => setShowPw((v) => !v)}
-                    style={{ fontSize: 12, color: BG.text60, background: "transparent", border: 0, cursor: "pointer" }}
+                    style={{
+                      fontSize: 12,
+                      color: BG.text60,
+                      background: "transparent",
+                      border: 0,
+                      cursor: "pointer",
+                    }}
                     aria-label={showPw ? "Hide password" : "Show password"}
                   >
                     {showPw ? "Hide" : "Show"}
@@ -325,18 +437,59 @@ export default function Login() {
                 }
               />
 
-              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginTop: 2 }}>
-                <label style={{ display: "inline-flex", alignItems: "center", gap: 8, color: BG.text80, fontSize: 14 }}>
-                  <input type="checkbox" checked={remember} onChange={(e) => setRemember(e.target.checked)} style={{ accentColor: BG.gold }} />
+              <div
+                style={{
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "space-between",
+                  marginTop: 2,
+                }}
+              >
+                <label
+                  style={{
+                    display: "inline-flex",
+                    alignItems: "center",
+                    gap: 8,
+                    color: BG.text80,
+                    fontSize: 14,
+                  }}
+                >
+                  <input
+                    type="checkbox"
+                    checked={remember}
+                    onChange={(e) => setRemember(e.target.checked)}
+                    style={{ accentColor: BG.gold }}
+                  />
                   Remember me
                 </label>
-                <button type="button" onClick={handleForgot} style={{ color: BG.goldDeep, fontSize: 14, textDecoration: "underline", background: "transparent", border: 0, cursor: "pointer" }}>
+
+                <button
+                  type="button"
+                  onClick={handleForgot}
+                  style={{
+                    color: BG.goldDeep,
+                    fontSize: 14,
+                    textDecoration: "underline",
+                    background: "transparent",
+                    border: 0,
+                    cursor: "pointer",
+                  }}
+                >
                   Forgot password?
                 </button>
               </div>
 
               {error && (
-                <div style={{ background: "#1a1306", border: "1px solid #6b4e00", color: BG.gold, borderRadius: 10, padding: "8px 10px", fontSize: 14 }}>
+                <div
+                  style={{
+                    background: "#1a1306",
+                    border: "1px solid #6b4e00",
+                    color: BG.gold,
+                    borderRadius: 10,
+                    padding: "8px 10px",
+                    fontSize: 14,
+                  }}
+                >
                   {error}
                 </div>
               )}
@@ -359,7 +512,17 @@ export default function Login() {
                 {submitting ? "Signing in…" : "Login"}
               </button>
 
-              <div style={{ display: "flex", alignItems: "center", gap: 10, color: BG.text60, fontWeight: 700, fontSize: 14, margin: "6px 0" }}>
+              <div
+                style={{
+                  display: "flex",
+                  alignItems: "center",
+                  gap: 10,
+                  color: BG.text60,
+                  fontWeight: 700,
+                  fontSize: 14,
+                  margin: "6px 0",
+                }}
+              >
                 <div style={{ flex: 1, borderBottom: `1px solid ${BG.line}` }} />
                 <span>or</span>
                 <div style={{ flex: 1, borderBottom: `1px solid ${BG.line}` }} />
@@ -374,7 +537,14 @@ export default function Login() {
                 text="signin_with"
               />
 
-              <div style={{ marginTop: 8, textAlign: "center", color: BG.text60, fontSize: 12 }}>
+              <div
+                style={{
+                  marginTop: 8,
+                  textAlign: "center",
+                  color: BG.text60,
+                  fontSize: 12,
+                }}
+              >
                 We’ll never post or share without permission.
               </div>
             </div>

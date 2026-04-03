@@ -23,6 +23,9 @@ import { apiUrl } from "../apiBase";
        2) backend GET /api/profile?email=...
        3) localStorage fallback
    - Save uses POST /api/profile
+   - Auto-refreshes profile/integrations:
+       * on load/login
+       * every 1 hour while mounted and user is logged in
 ------------------------------------------------------------ */
 
 const TABS = [
@@ -31,6 +34,8 @@ const TABS = [
   { key: "integrations", label: "Integrations", icon: <FaPlug /> },
   { key: "help", label: "Help & Support", icon: <FaQuestionCircle /> },
 ];
+
+const PROFILE_REFRESH_MS = 60 * 60 * 1000; // 1 hour
 
 function safeParse(json) {
   try {
@@ -71,6 +76,9 @@ function normalizeUser(u) {
     gcal_calendars: Array.isArray(u.gcal_calendars) ? u.gcal_calendars : [],
     role: u.role || "",
     orgOwnerEmail: u.orgOwnerEmail || "",
+    canInviteTeam: Boolean(u.canInviteTeam),
+    canEditBusiness: Boolean(u.canEditBusiness),
+    canManageBilling: Boolean(u.canManageBilling),
   };
 }
 
@@ -178,7 +186,9 @@ export default function Settings({
         Boolean(prev.stripe_connected) !== Boolean(next.stripe_connected) ||
         String(prev.stripe_account_id || "") !==
           String(next.stripe_account_id || "") ||
-        Boolean(prev.gcal_connected) !== Boolean(next.gcal_connected);
+        Boolean(prev.gcal_connected) !== Boolean(next.gcal_connected) ||
+        String(prev.role || "") !== String(next.role || "") ||
+        String(prev.orgOwnerEmail || "") !== String(next.orgOwnerEmail || "");
 
       return changed ? next : prev;
     });
@@ -279,6 +289,41 @@ export default function Settings({
       cancelled = true;
     };
   }, [profile?.email, tryFetchProfileFromBackend]);
+
+  useEffect(() => {
+    if (!profile?.email) return;
+
+    let cancelled = false;
+
+    const runRefresh = async () => {
+      try {
+        if (typeof refreshUser === "function") {
+          await refreshUser();
+        }
+      } catch {}
+
+      try {
+        const fresh = await syncProfileFromBackend(profile.email);
+        if (cancelled) return;
+
+        if (fresh?.email) {
+          setInfo("");
+        }
+      } catch {
+        if (!cancelled) {
+          setProfileBackendOk(false);
+        }
+      }
+    };
+
+    runRefresh();
+    const timer = setInterval(runRefresh, PROFILE_REFRESH_MS);
+
+    return () => {
+      cancelled = true;
+      clearInterval(timer);
+    };
+  }, [profile?.email, refreshUser, syncProfileFromBackend]);
 
   useEffect(() => {
     const params = new URLSearchParams(search);
@@ -399,9 +444,7 @@ export default function Settings({
         style={{ left: leftOffset, width: settingsWidth }}
       >
         <div style={{ padding: 16, maxWidth: 900 }}>
-          <div
-            style={{ fontWeight: 900, marginBottom: 8, color: "#fff" }}
-          >
+          <div style={{ fontWeight: 900, marginBottom: 8, color: "#fff" }}>
             Settings couldn’t identify your account
           </div>
           <div style={{ color: "#bbb", lineHeight: 1.5 }}>
@@ -565,7 +608,7 @@ export default function Settings({
 
         {tab === "team" && (
           <TeamTab
-            ownerEmail={profile.email}
+            ownerEmail={profile.orgOwnerEmail || profile.email}
             userEmail={profile.email}
             maxWidth={MAX_W}
           />
