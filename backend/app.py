@@ -100,6 +100,22 @@ app.config.update(
     SESSION_COOKIE_SECURE=not IS_LOCAL,
 )
 
+def _cors_preflight_response():
+    resp = current_app.make_response(("", 204))
+    origin = (request.headers.get("Origin") or "").rstrip("/")
+
+    if origin in ALLOWED:
+        resp.headers["Access-Control-Allow-Origin"] = origin
+        resp.headers["Vary"] = "Origin"
+        resp.headers["Access-Control-Allow-Credentials"] = "true"
+        resp.headers["Access-Control-Allow-Methods"] = "GET, POST, PUT, PATCH, DELETE, OPTIONS"
+        resp.headers["Access-Control-Allow-Headers"] = (
+            "Content-Type, Authorization, X-Requested-With, "
+            "X-User-Email, X-Owner-Email, X-Auth-Email"
+        )
+
+    return resp
+
 @app.after_request
 def add_cors_headers(resp):
     origin = (request.headers.get("Origin") or "").rstrip("/")
@@ -118,20 +134,11 @@ def add_cors_headers(resp):
 
 @app.route("/api/<path:_any>", methods=["OPTIONS"])
 def api_options(_any):
-    resp = current_app.make_response(("", 204))
-    origin = (request.headers.get("Origin") or "").rstrip("/")
+    return _cors_preflight_response()
 
-    if origin in ALLOWED:
-        resp.headers["Access-Control-Allow-Origin"] = origin
-        resp.headers["Vary"] = "Origin"
-        resp.headers["Access-Control-Allow-Credentials"] = "true"
-        resp.headers["Access-Control-Allow-Methods"] = "GET, POST, PUT, PATCH, DELETE, OPTIONS"
-        resp.headers["Access-Control-Allow-Headers"] = (
-            "Content-Type, Authorization, X-Requested-With, "
-            "X-User-Email, X-Owner-Email, X-Auth-Email"
-        )
-
-    return resp
+@app.route("/api/oauth/google", methods=["OPTIONS"])
+def google_oauth_options():
+    return _cors_preflight_response()
 
 # ----------------------------
 # HEALTH / TEST
@@ -1954,6 +1961,8 @@ def login():
 
 @app.route("/api/oauth/google", methods=["POST"])
 def google_oauth():
+    if request.method == "OPTIONS":
+        return _cors_preflight_response()
     data = request.get_json(silent=True) or {}
     token = data.get("credential")
     if not token:
