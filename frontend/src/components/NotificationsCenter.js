@@ -32,6 +32,8 @@ function normalizeNotification(n, idx) {
     message,
     timestamp,
     channel,
+    lead_email: n.lead_email || n.leadEmail || n.email || "",
+    lead_name: n.lead_name || n.leadName || "",
     read: n.read ?? false,
     _id: String(n.id ?? n._id ?? n.uuid ?? idx),
     _idx: idx,
@@ -118,7 +120,7 @@ export default function NotificationsCenter({ user }) {
         { method: "POST" }
       );
     } catch {
-      // leave optimistic state
+      // keep optimistic state
     }
 
     ping("notifications:changed");
@@ -128,9 +130,11 @@ export default function NotificationsCenter({ user }) {
     const list =
       filter === "all"
         ? notifications
-        : notifications.filter((n) => (filter === "unread" ? !n.read : n.read));
+        : notifications.filter((n) =>
+            filter === "unread" ? !n.read : n.read
+          );
 
-    return list.sort(
+    return [...list].sort(
       (a, b) =>
         new Date(b.timestamp || 0).getTime() -
         new Date(a.timestamp || 0).getTime()
@@ -208,9 +212,9 @@ export default function NotificationsCenter({ user }) {
                 )}
 
                 <div className="notif-meta">
-                  {notif.lead_email && (
+                  {(notif.lead_name || notif.lead_email) && (
                     <span className="notif-lead">
-                      Lead: <b>{notif.lead_email}</b>
+                      Lead: <b>{notif.lead_name || notif.lead_email}</b>
                     </span>
                   )}
                   <span className="notif-time">

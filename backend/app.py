@@ -12,6 +12,8 @@ from uuid import uuid4
 from typing import Any, Dict, Optional, List, Tuple
 from urllib.parse import urlparse
 
+import html
+from email.utils import parseaddr
 import stripe
 import requests as pyrequests
 
@@ -170,7 +172,7 @@ VAPID_PUBLIC_KEY = (os.getenv("VAPID_PUBLIC_KEY") or "").strip()
 VAPID_PRIVATE_KEY = (os.getenv("VAPID_PRIVATE_KEY") or "").strip()
 
 SENDER_EMAIL = os.getenv("SENDER_EMAIL", "noreply@retainai.ca")
-
+INBOUND_REPLY_DOMAIN = (os.getenv("INBOUND_REPLY_DOMAIN") or "reply.retainai.ca").strip().lower()
 STRIPE_SECRET_KEY = (os.getenv("STRIPE_SECRET_KEY") or "").strip()
 STRIPE_PRICE_ID = (os.getenv("STRIPE_PRICE_ID") or "").strip()
 STRIPE_WEBHOOK_SECRET = (os.getenv("STRIPE_WEBHOOK_SECRET") or "").strip()
@@ -459,6 +461,53 @@ def _normalize_notification_item(n: dict, idx: int = 0) -> dict:
     item.setdefault("lead_name", item.get("lead_name") or item.get("leadName") or "")
     return item
 
+def _b64u_encode(s: str) -> str:
+    raw = (s or "").encode("utf-8")
+    return base64.urlsafe_b64encode(raw).decode("ascii").rstrip("=")
+
+def _b64u_decode(s: str) -> str:
+    if not s:
+        return ""
+    pad = "=" * (-len(s) % 4)
+    return base64.urlsafe_b64decode((s + pad).encode("ascii")).decode("utf-8")
+
+def make_inbound_reply_address(owner_email: str, lead_email: str) -> str:
+    owner_tok = _b64u_encode((owner_email or "").strip().lower())
+    lead_tok = _b64u_encode((lead_email or "").strip().lower())
+    return f"r.{owner_tok}.{lead_tok}@{INBOUND_REPLY_DOMAIN}"
+
+def parse_inbound_reply_address(addr: str):
+    email_addr = parseaddr(addr or "")[1].strip().lower()
+    local = email_addr.split("@", 1)[0]
+    parts = local.split(".")
+    if len(parts) != 3 or parts[0] != "r":
+        return "", ""
+    try:
+        owner_email = _b64u_decode(parts[1]).strip().lower()
+        lead_email = _b64u_decode(parts[2]).strip().lower()
+        return owner_email, lead_email
+    except Exception:
+        return "", ""
+
+def _strip_html_to_text(s: str) -> str:
+    if not s:
+        return ""
+    txt = str(s)
+    txt = re.sub(r"(?i)<br\s*/?>", "\n", txt)
+    txt = re.sub(r"(?i)</p\s*>", "\n\n", txt)
+    txt = re.sub(r"<[^>]+>", "", txt)
+    txt = html.unescape(txt)
+    txt = re.sub(r"\n{3,}", "\n\n", txt)
+    return txt.strip()
+
+def _find_lead_by_email_for_owner(owner_email: str, lead_email: str):
+    leads_by_user = load_leads() or {}
+    arr = (leads_by_user.get((owner_email or "").strip().lower(), []) or [])
+    target = (lead_email or "").strip().lower()
+    for ld in arr:
+        if str(ld.get("email") or "").strip().lower() == target:
+            return ld
+    return None
 
 def _build_upcoming_appointment_notifications(user_email: str) -> list:
     out = []
@@ -1292,6 +1341,129 @@ def mark_notification_read(user_email, notif_id):
         return jsonify({"error": "Failed to save notification state"}), 500
 
     return jsonify({"ok": True}), 200
+
+@app.route("/api/email/inbound", methods=["POST"])
+def inbound_email_webhook():
+    try:
+        form = request.form or {}
+
+        to_addr = (form.get("to") or "").strip()
+        from_addr = (form.get("from") or "").strip()
+        subject = (form.get("subject") or "").strip()
+        text_body = (form.get("text") or "").strip()
+        html_body = (form.get("html") or "").strip()
+        spam_score = form.get("spam_score")
+        spam_report = form.get("spam_report")
+        headers_blob = (form.get("headers") or "").strip()
+
+        owner_email, routed_lead_email = parse_inbound_reply_address(to_addr)
+
+        if not owner_email:
+            # fallback: try to inspect all "to" addresses if SendGrid provided a combined string
+            found_owner = ""
+            found_lead = ""
+            candidates = re.split(r"[,\s]+", to_addr)
+            for cand in candidates:
+                oe, le = parse_inbound_reply_address(cand)
+                if oe:
+                    found_owner, found_lead = oe, le
+                    break
+            owner_email, routed_lead_email = found_owner, found_lead
+
+        if not owner_email:
+            return jsonify({"ok": False, "error": "reply address could not be parsed"}), 400
+
+        sender_email = parseaddr(from_addr)[1].strip().lower()
+        if not sender_email:
+            return jsonify({"ok": False, "error": "sender email missing"}), 400
+
+        # Prefer actual sender match, fallback to routed lead email
+        lead = _find_lead_by_email_for_owner(owner_email, sender_email)
+        if not lead and routed_lead_email:
+            lead = _find_lead_by_email_for_owner(owner_email, routed_lead_email)
+
+        if not lead:
+            add_notification(
+                user_email=owner_email,
+                subject="Email received (unmatched)",
+                message=f"Received an email reply from {sender_email}, but no matching lead was found.",
+                channel="email",
+                lead_email=sender_email,
+                extra={
+                    "type": "inbound",
+                    "raw_subject": subject,
+                },
+            )
+            return jsonify({"ok": True, "matched": False}), 200
+
+        lead_id = str(lead.get("id") or "")
+        lead_name = lead.get("name") or lead.get("first_name") or ""
+        clean_text = text_body or _strip_html_to_text(html_body) or "(no body)"
+
+        # Save into chats/messages thread store so UI can surface it later
+        chats = load_chats() or {}
+        user_chats = (chats.get(owner_email, {}) or {})
+        thread = (user_chats.get(lead_id, []) or [])
+        thread.append({
+            "from": "lead",
+            "channel": "email",
+            "subject": subject,
+            "text": clean_text,
+            "time": datetime.datetime.utcnow().isoformat() + "Z",
+            "email_from": sender_email,
+        })
+        user_chats[lead_id] = thread
+        chats[owner_email] = user_chats
+        save_chats(chats)
+
+        _MSG_CACHE[(str(owner_email or ""), str(lead_id or ""))] = {
+            "at": datetime.datetime.utcnow(),
+            "data": thread
+        }
+
+        # Update lead activity
+        try:
+            leads_by_user = load_leads() or {}
+            arr = (leads_by_user.get(owner_email, []) or [])
+            for i, ld in enumerate(arr):
+                if str(ld.get("id") or "") == lead_id:
+                    arr[i]["last_inbound_at"] = datetime.datetime.utcnow().isoformat()
+                    arr[i]["last_activity_at"] = datetime.datetime.utcnow().isoformat()
+                    break
+            leads_by_user[owner_email] = arr
+            save_leads(leads_by_user)
+        except Exception:
+            pass
+
+        add_notification(
+            user_email=owner_email,
+            subject="Email received",
+            message=f"{lead_name or sender_email} replied by email: {clean_text[:180]}",
+            channel="email",
+            lead_email=sender_email,
+            extra={
+                "lead_name": lead_name,
+                "type": "inbound",
+                "email_subject": subject,
+                "spam_score": spam_score,
+                "spam_report": spam_report,
+            },
+        )
+
+        return jsonify({
+            "ok": True,
+            "matched": True,
+            "owner_email": owner_email,
+            "lead_email": sender_email,
+            "lead_id": lead_id,
+        }), 200
+
+    except Exception as e:
+        try:
+            app.logger.exception("[EMAIL INBOUND] failed: %s", e)
+        except Exception:
+            pass
+        return jsonify({"ok": False, "error": str(e)}), 500
 
 # ----------------------------
 # Appointments
@@ -3825,13 +3997,15 @@ def send_ai_message():
     }
 
     try:
+        reply_to_addr = make_inbound_reply_address(owner_email, to_email)
+
         ok = send_email_with_template(
             to_email=to_email,
             template_id=template_id,
             dynamic_data=dynamic_data,
             subject=subject,
             from_email=Email(SENDER_EMAIL, business_name),
-            reply_to_email=owner_email or None,
+            reply_to_email=reply_to_addr,
         )
     except Exception as e:
         try:
@@ -4262,7 +4436,13 @@ def should_auto_stop(flow: Dict[str, Any], lead: Dict[str, Any], run: Dict[str, 
             return True
     return False
 
-def send_email_sendgrid_auto(to_email: str, subject: str, html: str, business_name: str) -> bool:
+def send_email_sendgrid_auto(
+    to_email: str,
+    subject: str,
+    html: str,
+    business_name: str,
+    owner_email: str = "",
+) -> bool:
     if not globals().get("SENDGRID_API_KEY"):
         print("[Automations] SENDGRID_API_KEY missing; skipping email send (simulated).")
         return True
@@ -4274,6 +4454,10 @@ def send_email_sendgrid_auto(to_email: str, subject: str, html: str, business_na
             subject=subject,
             html_content=html,
         )
+
+        if owner_email:
+            msg.reply_to = Email(make_inbound_reply_address(owner_email, to_email))
+
         resp = sg.send(msg)
         print("[Automations] SendGrid status:", resp.status_code)
         return 200 <= resp.status_code < 300
@@ -4372,7 +4556,13 @@ def execute_step(flow: Dict[str, Any], step: Dict[str, Any], lead: Dict[str, Any
                                 "Email blocked: missing profile values (booking link / business name).")
             return True
 
-        ok = send_email_sendgrid_auto(email, subject, html, profile.get("business_name") or "RetainAI")
+        ok = send_email_sendgrid_auto(
+            email,
+            subject,
+            html,
+            profile.get("business_name") or "RetainAI",
+            owner_email=(lead.get("owner") or flow.get("owner") or "").lower(),
+        )
         if ok:
             mark_sent(run, CHANNEL_EMAIL)
             add_notification(
