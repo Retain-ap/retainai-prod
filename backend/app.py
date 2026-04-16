@@ -16,6 +16,8 @@ import html
 from email.utils import parseaddr
 import stripe
 import requests as pyrequests
+from email import policy
+from email.parser import BytesParser
 
 from flask import Flask, request, jsonify, send_from_directory, redirect, current_app, Blueprint
 from flask_cors import CORS
@@ -461,7 +463,92 @@ def _normalize_notification_item(n: dict, idx: int = 0) -> dict:
     item.setdefault("lead_name", item.get("lead_name") or item.get("leadName") or "")
     return item
 
-INBOUND_REPLY_DOMAIN = (os.getenv("INBOUND_REPLY_DOMAIN") or "reply.retainai.ca").strip().lower()
+def _trim_email_reply_text(text: str) -> str:
+    s = (text or "").strip()
+    if not s:
+        return ""
+
+    patterns = [
+        r"\nOn .+wrote:\n",
+        r"\nFrom:\s.+",
+        r"\nSent:\s.+",
+        r"\n---+\s*Original Message\s*---+",
+    ]
+
+    for pat in patterns:
+        m = re.search(pat, s, flags=re.IGNORECASE | re.DOTALL)
+        if m:
+            s = s[:m.start()].strip()
+            break
+
+    return s.strip()
+
+def _extract_inbound_email_bodies(raw_email: str):
+    """
+    Returns (plain_text, html_text) extracted from raw MIME email.
+    """
+    try:
+        if not raw_email:
+            return "", ""
+
+        msg = BytesParser(policy=policy.default).parsebytes(
+            raw_email.encode("utf-8", errors="ignore")
+        )
+
+        plain_parts = []
+        html_parts = []
+
+        if msg.is_multipart():
+            for part in msg.walk():
+                ctype = (part.get_content_type() or "").lower()
+                disp = str(part.get("Content-Disposition") or "").lower()
+
+                # skip attachments
+                if "attachment" in disp:
+                    continue
+
+                try:
+                    content = part.get_content()
+                except Exception:
+                    try:
+                        payload = part.get_payload(decode=True) or b""
+                        charset = part.get_content_charset() or "utf-8"
+                        content = payload.decode(charset, errors="ignore")
+                    except Exception:
+                        content = ""
+
+                if ctype == "text/plain" and content:
+                    plain_parts.append(str(content))
+                elif ctype == "text/html" and content:
+                    html_parts.append(str(content))
+        else:
+            ctype = (msg.get_content_type() or "").lower()
+            try:
+                content = msg.get_content()
+            except Exception:
+                try:
+                    payload = msg.get_payload(decode=True) or b""
+                    charset = msg.get_content_charset() or "utf-8"
+                    content = payload.decode(charset, errors="ignore")
+                except Exception:
+                    content = ""
+
+            if ctype == "text/plain" and content:
+                plain_parts.append(str(content))
+            elif ctype == "text/html" and content:
+                html_parts.append(str(content))
+
+        plain_text = "\n\n".join([p.strip() for p in plain_parts if str(p).strip()]).strip()
+        html_text = "\n\n".join([p.strip() for p in html_parts if str(p).strip()]).strip()
+
+        return plain_text, html_text
+
+    except Exception as e:
+        try:
+            app.logger.warning("[EMAIL MIME PARSE ERROR] %s", e)
+        except Exception:
+            pass
+        return "", ""
 
 def _reply_encode(s: str) -> str:
     return ((s or "").strip().lower().encode("utf-8")).hex()
@@ -1389,11 +1476,18 @@ def inbound_email_webhook():
         to_addr = (form.get("to") or "").strip()
         from_addr = (form.get("from") or "").strip()
         subject = (form.get("subject") or "").strip()
+
         text_body = (form.get("text") or "").strip()
         html_body = (form.get("html") or "").strip()
+        raw_email = form.get("email") or ""
+
+        if not text_body and not html_body and raw_email:
+            parsed_text, parsed_html = _extract_inbound_email_bodies(raw_email)
+            text_body = text_body or parsed_text
+            html_body = html_body or parsed_html
+
         spam_score = form.get("spam_score")
         spam_report = form.get("spam_report")
-        headers_blob = (form.get("headers") or "").strip()
 
         try:
             app.logger.warning(
@@ -1419,10 +1513,6 @@ def inbound_email_webhook():
             pass
 
         if not owner_email:
-            try:
-                app.logger.warning("[EMAIL INBOUND] reply parse failed for to=%r", to_addr)
-            except Exception:
-                pass
             return jsonify({
                 "ok": False,
                 "error": "reply address could not be parsed",
@@ -1431,10 +1521,6 @@ def inbound_email_webhook():
 
         sender_email = parseaddr(from_addr)[1].strip().lower()
         if not sender_email:
-            try:
-                app.logger.warning("[EMAIL INBOUND] sender parse failed for from=%r", from_addr)
-            except Exception:
-                pass
             return jsonify({
                 "ok": False,
                 "error": "sender email missing",
@@ -1454,14 +1540,21 @@ def inbound_email_webhook():
                 lead_email=sender_email,
                 extra={
                     "type": "inbound",
-                    "raw_subject": subject,
+                    "email_subject": subject,
                 },
             )
             return jsonify({"ok": True, "matched": False}), 200
 
         lead_id = str(lead.get("id") or "")
         lead_name = lead.get("name") or lead.get("first_name") or ""
-        clean_text = text_body or _strip_html_to_text(html_body) or "(no body)"
+
+        clean_text = _trim_email_reply_text(
+            (
+                text_body
+                or _strip_html_to_text(html_body)
+                or "(no body)"
+            ).strip()
+        )
 
         chats = load_chats() or {}
         user_chats = (chats.get(owner_email, {}) or {})
