@@ -461,37 +461,37 @@ def _normalize_notification_item(n: dict, idx: int = 0) -> dict:
     item.setdefault("lead_name", item.get("lead_name") or item.get("leadName") or "")
     return item
 
-def _b64u_encode(s: str) -> str:
-    s = (s or "").strip().lower()
-    return base64.urlsafe_b64encode(s.encode("utf-8")).decode("ascii").rstrip("=")
+INBOUND_REPLY_DOMAIN = (os.getenv("INBOUND_REPLY_DOMAIN") or "reply.retainai.ca").strip().lower()
 
-def _b64u_decode(s: str) -> str:
-    s = (s or "").strip()
+def _reply_encode(s: str) -> str:
+    return ((s or "").strip().lower().encode("utf-8")).hex()
+
+def _reply_decode(s: str) -> str:
+    s = (s or "").strip().lower()
     if not s:
         return ""
-    padded = s + ("=" * (-len(s) % 4))
-    return base64.urlsafe_b64decode(padded.encode("ascii")).decode("utf-8")
+    return bytes.fromhex(s).decode("utf-8")
 
 def make_inbound_reply_address(owner_email: str, lead_email: str) -> str:
-    owner_tok = _b64u_encode(owner_email)
-    lead_tok = _b64u_encode(lead_email)
+    owner_tok = _reply_encode(owner_email)
+    lead_tok = _reply_encode(lead_email)
     return f"r.{owner_tok}.{lead_tok}@{INBOUND_REPLY_DOMAIN}"
 
 def parse_inbound_reply_address(addr: str):
     try:
         raw = (addr or "").strip()
-        expected_domain = (INBOUND_REPLY_DOMAIN or "reply.retainai.ca").strip().lower().rstrip(".")
+        expected_domain = INBOUND_REPLY_DOMAIN.rstrip(".").lower()
 
-        if "@" not in raw:
-            return "", ""
-
-        # Extract first email-like token, but DO NOT lowercase the whole thing
+        # extract first email-like token
         email_addr = raw
         if any(ch in raw for ch in [" ", "<", ">", ","]):
             m = re.search(r'([^\s<>,]+@[^\s<>,]+)', raw)
             if not m:
                 return "", ""
             email_addr = m.group(1).strip()
+
+        if "@" not in email_addr:
+            return "", ""
 
         local, domain = email_addr.rsplit("@", 1)
         domain = domain.strip().lower().rstrip(".")
@@ -503,20 +503,18 @@ def parse_inbound_reply_address(addr: str):
             return "", ""
 
         rest = local[2:]
-
         if "." not in rest:
             return "", ""
 
         owner_tok, lead_tok = rest.split(".", 1)
-
         owner_tok = owner_tok.strip()
         lead_tok = lead_tok.strip()
 
         if not owner_tok or not lead_tok:
             return "", ""
 
-        owner_email = _b64u_decode(owner_tok).strip().lower()
-        lead_email = _b64u_decode(lead_tok).strip().lower()
+        owner_email = _reply_decode(owner_tok).strip().lower()
+        lead_email = _reply_decode(lead_tok).strip().lower()
 
         if "@" not in owner_email or "@" not in lead_email:
             return "", ""
