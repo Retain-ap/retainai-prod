@@ -468,11 +468,16 @@ def _trim_email_reply_text(text: str) -> str:
     if not s:
         return ""
 
+    # Normalize line endings
+    s = s.replace("\r\n", "\n").replace("\r", "\n")
+
+    # Common reply separators
     patterns = [
-        r"\nOn .+wrote:\n",
+        r"\nOn .+?wrote:\n",
         r"\nFrom:\s.+",
         r"\nSent:\s.+",
         r"\n---+\s*Original Message\s*---+",
+        r"\n_{5,}\n",
     ]
 
     for pat in patterns:
@@ -481,7 +486,20 @@ def _trim_email_reply_text(text: str) -> str:
             s = s[:m.start()].strip()
             break
 
-    return s.strip()
+    # Remove quoted lines that start with >
+    lines = s.split("\n")
+    cleaned = []
+    for line in lines:
+        if line.strip().startswith(">"):
+            break
+        cleaned.append(line)
+
+    s = "\n".join(cleaned).strip()
+
+    # Collapse extra blank lines
+    s = re.sub(r"\n{3,}", "\n\n", s).strip()
+
+    return s
 
 def _extract_inbound_email_bodies(raw_email: str):
     """
@@ -1532,10 +1550,14 @@ def inbound_email_webhook():
             lead = _find_lead_by_email_for_owner(owner_email, routed_lead_email)
 
         if not lead:
+            preview_text = clean_text[:180].strip()
+            if len(clean_text) > 180:
+                preview_text += "..."
+
             add_notification(
                 user_email=owner_email,
-                subject="Email received (unmatched)",
-                message=f"Received an email reply from {sender_email}, but no matching lead was found.",
+                subject="Email received",
+                message=preview_text or "(no body)",
                 channel="email",
                 lead_email=sender_email,
                 extra={
