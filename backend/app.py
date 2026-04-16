@@ -479,19 +479,19 @@ def make_inbound_reply_address(owner_email: str, lead_email: str) -> str:
 
 def parse_inbound_reply_address(addr: str):
     try:
-        raw = (addr or "").strip().lower()
+        raw = (addr or "").strip()
         expected_domain = (INBOUND_REPLY_DOMAIN or "reply.retainai.ca").strip().lower().rstrip(".")
 
         if "@" not in raw:
             return "", ""
 
-        # pull first email-ish token out of the raw string
+        # Extract first email-like token, but DO NOT lowercase the whole thing
         email_addr = raw
-        if " " in raw or "<" in raw or ">" in raw or "," in raw:
+        if any(ch in raw for ch in [" ", "<", ">", ","]):
             m = re.search(r'([^\s<>,]+@[^\s<>,]+)', raw)
             if not m:
                 return "", ""
-            email_addr = m.group(1).strip().lower()
+            email_addr = m.group(1).strip()
 
         local, domain = email_addr.rsplit("@", 1)
         domain = domain.strip().lower().rstrip(".")
@@ -502,10 +502,8 @@ def parse_inbound_reply_address(addr: str):
         if not local.startswith("r."):
             return "", ""
 
-        # remove leading "r."
         rest = local[2:]
 
-        # split once only: owner token, then everything else is lead token
         if "." not in rest:
             return "", ""
 
