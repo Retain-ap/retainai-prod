@@ -1356,28 +1356,50 @@ def inbound_email_webhook():
         spam_report = form.get("spam_report")
         headers_blob = (form.get("headers") or "").strip()
 
+        try:
+            app.logger.warning(
+                "[EMAIL INBOUND] to=%r from=%r subject=%r keys=%s",
+                to_addr,
+                from_addr,
+                subject,
+                list(form.keys())
+            )
+        except Exception:
+            pass
+
         owner_email, routed_lead_email = parse_inbound_reply_address(to_addr)
 
         if not owner_email:
-            # fallback: try to inspect all "to" addresses if SendGrid provided a combined string
-            found_owner = ""
-            found_lead = ""
             candidates = re.split(r"[,\s]+", to_addr)
             for cand in candidates:
                 oe, le = parse_inbound_reply_address(cand)
                 if oe:
-                    found_owner, found_lead = oe, le
+                    owner_email, routed_lead_email = oe, le
                     break
-            owner_email, routed_lead_email = found_owner, found_lead
 
         if not owner_email:
-            return jsonify({"ok": False, "error": "reply address could not be parsed"}), 400
+            try:
+                app.logger.warning("[EMAIL INBOUND] reply parse failed for to=%r", to_addr)
+            except Exception:
+                pass
+            return jsonify({
+                "ok": False,
+                "error": "reply address could not be parsed",
+                "to": to_addr,
+            }), 400
 
         sender_email = parseaddr(from_addr)[1].strip().lower()
         if not sender_email:
-            return jsonify({"ok": False, "error": "sender email missing"}), 400
+            try:
+                app.logger.warning("[EMAIL INBOUND] sender parse failed for from=%r", from_addr)
+            except Exception:
+                pass
+            return jsonify({
+                "ok": False,
+                "error": "sender email missing",
+                "from": from_addr,
+            }), 400
 
-        # Prefer actual sender match, fallback to routed lead email
         lead = _find_lead_by_email_for_owner(owner_email, sender_email)
         if not lead and routed_lead_email:
             lead = _find_lead_by_email_for_owner(owner_email, routed_lead_email)
@@ -1400,7 +1422,6 @@ def inbound_email_webhook():
         lead_name = lead.get("name") or lead.get("first_name") or ""
         clean_text = text_body or _strip_html_to_text(html_body) or "(no body)"
 
-        # Save into chats/messages thread store so UI can surface it later
         chats = load_chats() or {}
         user_chats = (chats.get(owner_email, {}) or {})
         thread = (user_chats.get(lead_id, []) or [])
@@ -1421,7 +1442,6 @@ def inbound_email_webhook():
             "data": thread
         }
 
-        # Update lead activity
         try:
             leads_by_user = load_leads() or {}
             arr = (leads_by_user.get(owner_email, []) or [])
