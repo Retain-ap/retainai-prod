@@ -480,30 +480,42 @@ def make_inbound_reply_address(owner_email: str, lead_email: str) -> str:
 def parse_inbound_reply_address(addr: str):
     try:
         raw = (addr or "").strip().lower()
+        expected_domain = (INBOUND_REPLY_DOMAIN or "reply.retainai.ca").strip().lower().rstrip(".")
 
-        # pull the first reply.retainai.ca address out of the string
-        m = re.search(
-            r'(r\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+@' + re.escape(INBOUND_REPLY_DOMAIN) + r')',
-            raw
-        )
-        if not m:
+        if "@" not in raw:
             return "", ""
 
-        email_addr = m.group(1)
-        local, domain = email_addr.rsplit("@", 1)
+        # pull first email-ish token out of the raw string
+        email_addr = raw
+        if " " in raw or "<" in raw or ">" in raw or "," in raw:
+            m = re.search(r'([^\s<>,]+@[^\s<>,]+)', raw)
+            if not m:
+                return "", ""
+            email_addr = m.group(1).strip().lower()
 
-        if domain.strip().lower() != INBOUND_REPLY_DOMAIN:
+        local, domain = email_addr.rsplit("@", 1)
+        domain = domain.strip().lower().rstrip(".")
+
+        if domain != expected_domain:
             return "", ""
 
         if not local.startswith("r."):
             return "", ""
 
+        # remove leading "r."
         rest = local[2:]
-        parts = rest.split(".", 1)
-        if len(parts) != 2:
+
+        # split once only: owner token, then everything else is lead token
+        if "." not in rest:
             return "", ""
 
-        owner_tok, lead_tok = parts[0].strip(), parts[1].strip()
+        owner_tok, lead_tok = rest.split(".", 1)
+
+        owner_tok = owner_tok.strip()
+        lead_tok = lead_tok.strip()
+
+        if not owner_tok or not lead_tok:
+            return "", ""
 
         owner_email = _b64u_decode(owner_tok).strip().lower()
         lead_email = _b64u_decode(lead_tok).strip().lower()
@@ -513,7 +525,11 @@ def parse_inbound_reply_address(addr: str):
 
         return owner_email, lead_email
 
-    except Exception:
+    except Exception as e:
+        try:
+            app.logger.warning("[EMAIL INBOUND PARSE ERROR] %s", e)
+        except Exception:
+            pass
         return "", ""
 
 def _strip_html_to_text(s: str) -> str:
