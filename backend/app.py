@@ -479,31 +479,31 @@ def make_inbound_reply_address(owner_email: str, lead_email: str) -> str:
 
 def parse_inbound_reply_address(addr: str):
     try:
-        raw = (addr or "").strip()
-        email_addr = parseaddr(raw)[1].strip().lower()
+        raw = (addr or "").strip().lower()
 
-        # fallback if parseaddr returns empty
-        if not email_addr and "@" in raw:
-            m = re.search(r'([A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,})', raw)
-            if m:
-                email_addr = m.group(1).strip().lower()
-
-        if not email_addr or "@" not in email_addr:
+        # pull the first reply.retainai.ca address out of the string
+        m = re.search(
+            r'(r\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+@' + re.escape(INBOUND_REPLY_DOMAIN) + r')',
+            raw
+        )
+        if not m:
             return "", ""
 
+        email_addr = m.group(1)
         local, domain = email_addr.rsplit("@", 1)
-        domain = domain.strip().lower().rstrip(".")
-        expected = INBOUND_REPLY_DOMAIN.rstrip(".")
 
-        if domain != expected:
+        if domain.strip().lower() != INBOUND_REPLY_DOMAIN:
             return "", ""
 
-        parts = local.split(".")
-        if len(parts) != 3 or parts[0] != "r":
+        if not local.startswith("r."):
             return "", ""
 
-        owner_tok = parts[1].strip()
-        lead_tok = parts[2].strip()
+        rest = local[2:]
+        parts = rest.split(".", 1)
+        if len(parts) != 2:
+            return "", ""
+
+        owner_tok, lead_tok = parts[0].strip(), parts[1].strip()
 
         owner_email = _b64u_decode(owner_tok).strip().lower()
         lead_email = _b64u_decode(lead_tok).strip().lower()
@@ -512,6 +512,7 @@ def parse_inbound_reply_address(addr: str):
             return "", ""
 
         return owner_email, lead_email
+
     except Exception:
         return "", ""
 
