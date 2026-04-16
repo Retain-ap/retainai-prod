@@ -462,14 +462,15 @@ def _normalize_notification_item(n: dict, idx: int = 0) -> dict:
     return item
 
 def _b64u_encode(s: str) -> str:
-    raw = (s or "").encode("utf-8")
+    raw = (s or "").strip().encode("utf-8")
     return base64.urlsafe_b64encode(raw).decode("ascii").rstrip("=")
 
 def _b64u_decode(s: str) -> str:
+    s = (s or "").strip()
     if not s:
         return ""
-    pad = "=" * (-len(s) % 4)
-    return base64.urlsafe_b64decode((s + pad).encode("ascii")).decode("utf-8")
+    s += "=" * (-len(s) % 4)
+    return base64.urlsafe_b64decode(s.encode("ascii")).decode("utf-8")
 
 def make_inbound_reply_address(owner_email: str, lead_email: str) -> str:
     owner_tok = _b64u_encode((owner_email or "").strip().lower())
@@ -477,14 +478,30 @@ def make_inbound_reply_address(owner_email: str, lead_email: str) -> str:
     return f"r.{owner_tok}.{lead_tok}@{INBOUND_REPLY_DOMAIN}"
 
 def parse_inbound_reply_address(addr: str):
-    email_addr = parseaddr(addr or "")[1].strip().lower()
-    local = email_addr.split("@", 1)[0]
-    parts = local.split(".")
-    if len(parts) != 3 or parts[0] != "r":
-        return "", ""
     try:
-        owner_email = _b64u_decode(parts[1]).strip().lower()
-        lead_email = _b64u_decode(parts[2]).strip().lower()
+        email_addr = parseaddr(addr or "")[1].strip().lower()
+        if not email_addr or "@" not in email_addr:
+            return "", ""
+
+        local, domain = email_addr.rsplit("@", 1)
+        domain = domain.strip().lower()
+
+        if domain != INBOUND_REPLY_DOMAIN:
+            return "", ""
+
+        m = re.match(r"^r\.([A-Za-z0-9_-]+)\.([A-Za-z0-9_-]+)$", local)
+        if not m:
+            return "", ""
+
+        owner_tok = m.group(1)
+        lead_tok = m.group(2)
+
+        owner_email = _b64u_decode(owner_tok).strip().lower()
+        lead_email = _b64u_decode(lead_tok).strip().lower()
+
+        if "@" not in owner_email or "@" not in lead_email:
+            return "", ""
+
         return owner_email, lead_email
     except Exception:
         return "", ""
@@ -1370,7 +1387,15 @@ def inbound_email_webhook():
         owner_email, routed_lead_email = parse_inbound_reply_address(to_addr)
 
         if not owner_email:
-            candidates = re.split(r"[,\s]+", to_addr)
+            candidates = []
+            if to_addr:
+                candidates.append(to_addr)
+
+            for cand in re.split(r"[,\s<>]+", to_addr or ""):
+                cand = (cand or "").strip()
+                if cand and "@" in cand:
+                    candidates.append(cand)
+
             for cand in candidates:
                 oe, le = parse_inbound_reply_address(cand)
                 if oe:
