@@ -1550,14 +1550,10 @@ def inbound_email_webhook():
             lead = _find_lead_by_email_for_owner(owner_email, routed_lead_email)
 
         if not lead:
-            preview_text = clean_text[:180].strip()
-            if len(clean_text) > 180:
-                preview_text += "..."
-
             add_notification(
                 user_email=owner_email,
-                subject="Email received",
-                message=preview_text or "(no body)",
+                subject="Email received (unmatched)",
+                message=f"Received an email reply from {sender_email}, but no matching lead was found.",
                 channel="email",
                 lead_email=sender_email,
                 extra={
@@ -1578,25 +1574,9 @@ def inbound_email_webhook():
             ).strip()
         )
 
-        chats = load_chats() or {}
-        user_chats = (chats.get(owner_email, {}) or {})
-        thread = (user_chats.get(lead_id, []) or [])
-        thread.append({
-            "from": "lead",
-            "channel": "email",
-            "subject": subject,
-            "text": clean_text,
-            "time": datetime.datetime.utcnow().isoformat() + "Z",
-            "email_from": sender_email,
-        })
-        user_chats[lead_id] = thread
-        chats[owner_email] = user_chats
-        save_chats(chats)
-
-        _MSG_CACHE[(str(owner_email or ""), str(lead_id or ""))] = {
-            "at": datetime.datetime.utcnow(),
-            "data": thread
-        }
+        # IMPORTANT:
+        # Do NOT save email replies into WhatsApp chat storage.
+        # Notifications handle email activity separately.
 
         try:
             leads_by_user = load_leads() or {}
@@ -1611,10 +1591,14 @@ def inbound_email_webhook():
         except Exception:
             pass
 
+        preview_text = clean_text[:180].strip()
+        if len(clean_text) > 180:
+            preview_text += "..."
+
         add_notification(
             user_email=owner_email,
             subject="Email received",
-            message=f"{lead_name or sender_email} replied by email: {clean_text[:180]}",
+            message=preview_text or "(no body)",
             channel="email",
             lead_email=sender_email,
             extra={
