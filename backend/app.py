@@ -1110,6 +1110,7 @@ SG_TEMPLATE_REENGAGE_LEAD      = "d-9c6ac36680c8473a84dda817fb58e7b7"
 SG_TEMPLATE_APOLOGY_LEAD       = "d-64abfc217ce443d59c2cb411fc85cc74"
 SG_TEMPLATE_UPSELL_LEAD        = "d-a7a2c04c57e344aebd6a94559ae71ea9"
 SG_TEMPLATE_BDAY_REMINDER_USER = "d-599937685fc544ecb756d9fdb8275a9b"
+SG_TEMPLATE_POST_APPT_UPDATE   = "d-bac1ee34ec724a41addf59d54ffdad07"
 
 BUSINESS_TYPE_INTERVALS = {
     "nail salon": 5,
@@ -1176,6 +1177,92 @@ def send_warning_summary_email(user_email, warning_leads, interval):
         subject="⚠️ Leads Needing Attention",
         from_email=SENDER_EMAIL
     )
+
+def send_post_appointment_update_email(user_email, user_name, lead_name, business_name, appointment_time):
+    display_time = appointment_time
+    try:
+        dt = datetime.datetime.strptime(appointment_time, "%Y-%m-%dT%H:%M:%S")
+        display_time = dt.strftime("%B %d, %Y at %I:%M %p")
+    except Exception:
+        pass
+
+    crm_link = f"{FRONTEND_URL}/app/dashboard"
+
+    return send_email_with_template(
+        to_email=user_email,
+        template_id=SG_TEMPLATE_POST_APPT_UPDATE,
+        dynamic_data={
+            "user_name": user_name or "",
+            "lead_name": lead_name or "your lead",
+            "business_name": business_name or "your business",
+            "appointment_time": display_time,
+            "crm_link": crm_link,
+        },
+        subject=f"Update your notes for {lead_name or 'your lead'}",
+        from_email=SENDER_EMAIL,
+    )
+
+def send_post_appointment_update_prompts():
+    print("[Scheduler] Checking for completed appointments needing note updates...")
+
+    appointments = load_appointments() or {}
+    users = load_users() or {}
+    now = datetime.datetime.utcnow()
+
+    changed = False
+
+    for user_email, user_appts in (appointments.items() if isinstance(appointments, dict) else []):
+        user = users.get(user_email, {}) if isinstance(users, dict) else {}
+        user_name = user.get("name", "") or user_email.split("@")[0]
+        business_name = user.get("business", "") or user.get("businessName", "") or "RetainAI"
+
+        for appt in (user_appts or []):
+            if appt.get("post_appt_update_sent"):
+                continue
+
+            appointment_time = appt.get("appointment_time")
+            if not appointment_time:
+                continue
+
+            try:
+                appt_dt = datetime.datetime.strptime(appointment_time, "%Y-%m-%dT%H:%M:%S")
+            except Exception:
+                continue
+
+            # Wait 60 minutes after the appointment start time
+            if now < (appt_dt + datetime.timedelta(minutes=60)):
+                continue
+
+            lead_name = appt.get("lead_first_name") or appt.get("lead_name") or appt.get("lead_email") or "Lead"
+
+            try:
+                ok = send_post_appointment_update_email(
+                    user_email=user_email,
+                    user_name=user_name,
+                    lead_name=lead_name,
+                    business_name=business_name,
+                    appointment_time=appointment_time,
+                )
+
+                if ok:
+                    appt["post_appt_update_sent"] = True
+                    appt["post_appt_update_sent_at"] = now.isoformat() + "Z"
+                    changed = True
+
+                    log_notification(
+                        user_email,
+                        f"Post-appointment update reminder sent for {lead_name}",
+                        f"We emailed you to update notes for your appointment with {lead_name}.",
+                        appt.get("lead_email")
+                    )
+
+            except Exception as e:
+                print(f"[Scheduler] post-appointment update email error for {user_email}: {e}")
+
+        appointments[user_email] = user_appts
+
+    if changed:
+        save_appointments(appointments)
 
 def check_for_lead_reminders():
     print("[Scheduler] Checking for leads needing follow-up...")
@@ -5476,11 +5563,44 @@ def _start_scheduler_once():
     try:
         if scheduler.running:
             return
-        scheduler.add_job(id="lead_reminders", func=check_for_lead_reminders, trigger="interval", hours=6, replace_existing=True)
-        scheduler.add_job(id="birthdays", func=send_birthday_greetings, trigger="cron", hour=9, minute=5, replace_existing=True)
-        scheduler.add_job(id="trial_ending", func=send_trial_ending_soon, trigger="cron", hour=9, minute=10, replace_existing=True)
+
+        scheduler.add_job(
+            id="lead_reminders",
+            func=check_for_lead_reminders,
+            trigger="interval",
+            hours=6,
+            replace_existing=True
+        )
+
+        scheduler.add_job(
+            id="birthdays",
+            func=send_birthday_greetings,
+            trigger="cron",
+            hour=9,
+            minute=5,
+            replace_existing=True
+        )
+
+        scheduler.add_job(
+            id="trial_ending",
+            func=send_trial_ending_soon,
+            trigger="cron",
+            hour=9,
+            minute=10,
+            replace_existing=True
+        )
+
+        scheduler.add_job(
+            id="post_appointment_update_prompts",
+            func=send_post_appointment_update_prompts,
+            trigger="interval",
+            minutes=15,
+            replace_existing=True
+        )
+
         scheduler.start()
         print("[Scheduler] started")
+
     except Exception as e:
         print("[Scheduler] failed to start:", e)
 
@@ -5493,7 +5613,6 @@ def _bootstrap_scheduler():
     if not app.config.get("BOOTSTRAP_DONE"):
         app.config["BOOTSTRAP_DONE"] = True
         _start_scheduler_once()
-
 
 # ----------------------------
 # Run local
