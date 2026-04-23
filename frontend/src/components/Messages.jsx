@@ -1,3 +1,4 @@
+// src/components/Messages.jsx
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { SiWhatsapp } from "react-icons/si";
 import { API_BASE } from "../config";
@@ -21,6 +22,7 @@ const C = {
 const PANEL_H = "72vh";
 
 /** ===== HELPERS ===== */
+// Strip AI/system headers, template echo, and any "it's/it’s/this is <name> from|at <biz> —|–|-|:" intro anywhere
 function cleanAIText(t) {
   let s = String(t || "");
 
@@ -50,6 +52,7 @@ function cleanAIText(t) {
   return s.trim();
 }
 
+// minimal HTML → text
 const htmlToText = (s) => {
   if (!s) return "";
   let t = String(s);
@@ -75,6 +78,7 @@ const fmtNA = (num) => {
     : num || "";
 };
 
+// lang helpers
 const toApiLang = (ui) => String(ui || "").replace("-", "_");
 const normApi = (code) => {
   if (!code) return "en";
@@ -88,6 +92,7 @@ const toUiLang = (api) => {
   return a.startsWith("en") ? "en" : api;
 };
 
+/* simple cross-tab ping */
 const ping = (name) => window.dispatchEvent(new Event(name));
 
 /** ===== light NLP for appointment text ===== */
@@ -201,7 +206,7 @@ const sigForSuggestion = (leadId, sug) => `${String(leadId || "lead")}|${sug?.da
 const AUTO_LOG_KEY = (userEmail, leadId) =>
   `auto_log_${(userEmail || "anon").toLowerCase()}_${String(leadId || "lead")}`;
 
-/** ===== Param inference ===== */
+/** ===== Param inference for ANY template ===== */
 const FIRSTNAME = (s = "") => String(s).trim().split(/\s+/)[0] || "";
 const LOWER = (s = "") => String(s).toLowerCase();
 const between = (txt, startIdx, endIdx, span = 32) => {
@@ -222,45 +227,47 @@ function inferParamKindsFromBody(bodyText, count) {
     const m = re.exec(bodyText);
     if (!m) continue;
     const { index } = m;
-    const { left, right } = between(bodyText, index, index + m[0].length, 36);
+    const ctx = between(bodyText, index, index + m[0].length, 36);
+    const L = ctx.left;
+    const R = ctx.right;
 
-    if (/(^|\s)(hi|hello|hey|dear)\s*$/.test(left) || /(client|customer|name)\s*$/.test(left)) {
+    if (/(^|\s)(hi|hello|hey|dear)\s*$/.test(L) || /(client|customer|name)\s*$/.test(L)) {
       kinds[i - 1] = "lead_name";
       continue;
     }
-    if (/(i'?m|i am|this is)\s*$/.test(left)) {
+    if (/(i'?m|i am|this is)\s*$/.test(L)) {
       kinds[i - 1] = "user_name";
       continue;
     }
-    if (/(from|at)\s*$/.test(left) || /^(\s*(from|at)\b)/.test(right)) {
+    if (/(from|at)\s*$/.test(L) || /^(\s*(from|at)\b)/.test(R)) {
       kinds[i - 1] = "business";
       continue;
     }
-    if (/\b(date|day)\b/.test(left + " " + right)) {
+    if (/\b(date|day)\b/.test(L + " " + R)) {
       kinds[i - 1] = "date";
       continue;
     }
-    if (/\b(time|slot)\b/.test(left + " " + right)) {
+    if (/\b(time|slot)\b/.test(L + " " + R)) {
       kinds[i - 1] = "time";
       continue;
     }
-    if (/\b(location|address|studio|office)\b/.test(left + " " + right)) {
+    if (/\b(location|address|studio|office)\b/.test(L + " " + R)) {
       kinds[i - 1] = "location";
       continue;
     }
-    if (/\b(service|treatment|package)\b/.test(left + " " + right)) {
+    if (/\b(service|treatment|package)\b/.test(L + " " + R)) {
       kinds[i - 1] = "service";
       continue;
     }
-    if (/\b(price|quote|budget)\b/.test(left + " " + right)) {
+    if (/\b(price|quote|budget)\b/.test(L + " " + R)) {
       kinds[i - 1] = "price";
       continue;
     }
-    if (/\bemail\b/.test(left + " " + right)) {
+    if (/\bemail\b/.test(L + " " + R)) {
       kinds[i - 1] = "email";
       continue;
     }
-    if (/\bphone|number\b/.test(left + " " + right)) {
+    if (/\bphone|number\b/.test(L + " " + R)) {
       kinds[i - 1] = "phone";
       continue;
     }
@@ -311,19 +318,20 @@ function valueForKind(kind, { user, lead, input, suggestion }) {
 }
 
 function labelForKind(kind, i) {
+  const base = `Parameter ${i + 1}`;
   switch (kind) {
-    case "lead_name": return "Lead name";
-    case "user_name": return "Your name";
-    case "business": return "Business name";
-    case "details": return "Details";
-    case "date": return "Date";
-    case "time": return "Time";
-    case "location": return "Location";
-    case "service": return "Service";
-    case "price": return "Price";
-    case "email": return "Email";
-    case "phone": return "Phone";
-    default: return `Field ${i + 1}`;
+    case "lead_name": return `Lead name ({{${i + 1}}})`;
+    case "user_name": return `Your name ({{${i + 1}}})`;
+    case "business": return `Business ({{${i + 1}}})`;
+    case "details": return `Details / message ({{${i + 1}}})`;
+    case "date": return `Date ({{${i + 1}}})`;
+    case "time": return `Time ({{${i + 1}}})`;
+    case "location": return `Location ({{${i + 1}}})`;
+    case "service": return `Service ({{${i + 1}}})`;
+    case "price": return `Price ({{${i + 1}}})`;
+    case "email": return `Email ({{${i + 1}}})`;
+    case "phone": return `Phone ({{${i + 1}}})`;
+    default: return `${base} ({{${i + 1}}})`;
   }
 }
 
@@ -462,6 +470,7 @@ export default function Messages({ user, leads = [], defaultTemplate = "", langu
     })();
   }, [API]);
 
+  // fetch template list
   useEffect(() => {
     if (!API) return;
     (async () => {
@@ -553,6 +562,7 @@ export default function Messages({ user, leads = [], defaultTemplate = "", langu
   const [expectedParams, setExpectedParams] = useState(null);
   const [paramValues, setParamValues] = useState([]);
   const [templateBodyText, setTemplateBodyText] = useState("");
+  const [templateExample, setTemplateExample] = useState(null);
   const [paramKinds, setParamKinds] = useState([]);
   const [templateInfoLoading, setTemplateInfoLoading] = useState(false);
   const [templateInfoError, setTemplateInfoError] = useState("");
@@ -565,6 +575,7 @@ export default function Messages({ user, leads = [], defaultTemplate = "", langu
     if (!name || name.toLowerCase() === "hello_world") {
       setExpectedParams(null);
       setTemplateBodyText("");
+      setTemplateExample(null);
       setParamValues([]);
       setParamKinds([]);
       setTemplateInfoError("");
@@ -590,6 +601,9 @@ export default function Messages({ user, leads = [], defaultTemplate = "", langu
           const bodyText = body?.text || "";
           setTemplateBodyText(bodyText);
 
+          const ex = body?.example?.body_text;
+          setTemplateExample(Array.isArray(ex) && ex.length ? ex[0] : null);
+
           if (typeof count === "number" && count > 0) {
             const inferred = inferParamKindsFromBody(bodyText || "", count);
             setParamKinds(inferred);
@@ -601,37 +615,23 @@ export default function Messages({ user, leads = [], defaultTemplate = "", langu
         } else {
           setExpectedParams(null);
           setTemplateBodyText("");
+          setTemplateExample(null);
           setParamKinds([]);
           setParamValues([]);
-          setTemplateInfoError("Could not load this template.");
+          setTemplateInfoError("Could not read this template’s placeholders.");
         }
       } catch {
         setExpectedParams(null);
         setTemplateBodyText("");
+        setTemplateExample(null);
         setParamKinds([]);
         setParamValues([]);
-        setTemplateInfoError("Could not load this template.");
+        setTemplateInfoError("Could not load this template’s details.");
       } finally {
         setTemplateInfoLoading(false);
       }
     })();
   }, [API, templateName, templateLangUI]);
-
-  /** Clear template fields after a fresh lead reply comes in */
-  const lastInbound = useMemo(() => {
-    for (let i = thread.length - 1; i >= 0; i--) {
-      if (thread[i]?.from === "lead" && typeof thread[i]?.text === "string") {
-        return thread[i].text;
-      }
-    }
-    return "";
-  }, [thread]);
-
-  useEffect(() => {
-    if (lastInbound) {
-      setParamValues([]);
-    }
-  }, [lastInbound]);
 
   const autofillParams = () => {
     if (typeof expectedParams !== "number" || expectedParams <= 0) return;
@@ -645,6 +645,15 @@ export default function Messages({ user, leads = [], defaultTemplate = "", langu
   /** --- composer --- */
   const [input, setInput] = useState("");
   const [banner, setBanner] = useState(null);
+
+  const lastInbound = useMemo(() => {
+    for (let i = thread.length - 1; i >= 0; i--) {
+      if (thread[i]?.from === "lead" && typeof thread[i]?.text === "string") {
+        return thread[i].text;
+      }
+    }
+    return "";
+  }, [thread]);
 
   const canSendBase = Boolean(API && user?.email && lead?.id && toE164);
 
@@ -746,7 +755,7 @@ export default function Messages({ user, leads = [], defaultTemplate = "", langu
 
       if (gate.inside24h) {
         if (!text) {
-          setBanner("Type a message to send.");
+          setBanner("Type a message to send inside the 24-hour session.");
           setLoading(false);
           return;
         }
@@ -754,13 +763,13 @@ export default function Messages({ user, leads = [], defaultTemplate = "", langu
         payload.skip_personalization = true;
       } else {
         if (!templateName) {
-          setBanner("Choose a template before sending.");
+          setBanner("Pick a template to send outside the 24-hour window.");
           setLoading(false);
           return;
         }
 
         if (!gate.templateApproved) {
-          setBanner(`This template is not approved right now (${gate.templateStatus}).`);
+          setBanner(`This template is not approved for sending right now (${gate.templateStatus}).`);
           setLoading(false);
           return;
         }
@@ -772,7 +781,7 @@ export default function Messages({ user, leads = [], defaultTemplate = "", langu
           const list = (paramValues || []).map((v) => String(v || "").trim()).slice(0, expectedParams);
           const missing = list.filter((v) => !v).length;
           if (missing) {
-            setBanner("Please fill in the missing fields before sending.");
+            setBanner(`This template needs ${expectedParams} parameters — ${missing} missing.`);
             setLoading(false);
             return;
           }
@@ -792,7 +801,7 @@ export default function Messages({ user, leads = [], defaultTemplate = "", langu
         return;
       }
 
-      setBanner(data.mode === "template" ? "Template sent." : null);
+      setBanner(data.mode === "template" ? `Sent via template (${data.usedLanguage || "?"}).` : null);
       setInput("");
 
       if (typeof expectedParams === "number" && expectedParams > 0) {
@@ -925,6 +934,7 @@ export default function Messages({ user, leads = [], defaultTemplate = "", langu
     });
   }, [thread, user?.email, lead?.id, lead?.email, lead?.whatsapp]);
 
+  /** --- UI when no leads --- */
   if (!Array.isArray(leads) || !leads.length) {
     return (
       <div style={{ width: "100%", minHeight: "100vh", background: C.bg }}>
@@ -934,6 +944,7 @@ export default function Messages({ user, leads = [], defaultTemplate = "", langu
     );
   }
 
+  const paramLabel = (i) => labelForKind(paramKinds?.[i], i);
   const hasTemplateParams = typeof expectedParams === "number" && expectedParams > 0;
   const templatePreview = renderTemplatePreview(templateBodyText, paramValues);
 
@@ -967,14 +978,14 @@ export default function Messages({ user, leads = [], defaultTemplate = "", langu
             }}
           >
             <SiWhatsapp style={{ color: C.wa }} />
-            Messages
+            Chats
           </div>
 
           <div style={{ padding: 10, borderBottom: `1px solid ${C.border}` }}>
             <input
               value={q}
               onChange={(e) => setQ(e.target.value)}
-              placeholder="Search leads..."
+              placeholder="Search…"
               style={{
                 width: "100%",
                 background: C.bg,
@@ -1110,14 +1121,20 @@ export default function Messages({ user, leads = [], defaultTemplate = "", langu
                   fontWeight: 800,
                   cursor: "pointer",
                 }}
-                title="Show automation sends"
+                title="Show messages sent by automations"
               >
-                Automation ({autoLog.length})
+                Automation sends ({autoLog.length})
               </button>
 
               <Pill
                 color={gate.inside24h ? C.wa : C.accent}
-                text={gate.inside24h ? "Live chat open" : "Template required"}
+                text={
+                  gate.inside24h
+                    ? "Inside 24h session"
+                    : gate.templateApproved
+                    ? "Outside 24h (template OK)"
+                    : `Outside 24h (${gate.templateStatus})`
+                }
               />
             </div>
           </div>
@@ -1136,7 +1153,7 @@ export default function Messages({ user, leads = [], defaultTemplate = "", langu
               }}
             >
               <div style={{ width: "100%", display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
-                <span style={{ color: C.sub, fontSize: 12, fontWeight: 700 }}>Choose template</span>
+                <span style={{ color: C.sub, fontSize: 12, fontWeight: 700 }}>Approved template required</span>
 
                 <select
                   value={`${templateName}|${templateLangUI}`}
@@ -1162,14 +1179,22 @@ export default function Messages({ user, leads = [], defaultTemplate = "", langu
                   )}
                   {templates.map((t) => (
                     <option key={`${t.name}-${t.languageUI}`} value={`${t.name}|${t.languageUI}`}>
-                      {t.name} ({t.languageUI})
+                      {t.name} ({t.languageUI}) {t.status === "APPROVED" ? "✓" : "•"}
                     </option>
                   ))}
                 </select>
 
                 <div style={{ marginLeft: "auto", display: "flex", gap: 8 }}>
-                  <button onClick={autofillParams} style={btn("ghost")} disabled={!hasTemplateParams}>
+                  <button onClick={autofillParams} style={btn("ghost")} title="Autofill common fields" disabled={!hasTemplateParams}>
                     Autofill
+                  </button>
+                  <button
+                    onClick={() => setParamValues(Array.from({ length: expectedParams || 0 }, () => ""))}
+                    style={btn("outline")}
+                    title="Clear params"
+                    disabled={!hasTemplateParams}
+                  >
+                    Clear
                   </button>
                 </div>
               </div>
@@ -1185,10 +1210,10 @@ export default function Messages({ user, leads = [], defaultTemplate = "", langu
                 }}
               >
                 <div style={{ color: C.text, fontSize: 13, fontWeight: 800, marginBottom: 4 }}>
-                  This lead is outside the 24-hour window
+                  How sending works outside 24 hours
                 </div>
                 <div style={{ color: C.sub, fontSize: 12, lineHeight: 1.4 }}>
-                  Use an approved WhatsApp template to restart the conversation.
+                  Pick an approved template, fill in any required placeholders below, then send. The message box at the bottom is optional and only helps with autofill or notes in your preview.
                 </div>
               </div>
 
@@ -1200,24 +1225,48 @@ export default function Messages({ user, leads = [], defaultTemplate = "", langu
                 <div style={{ width: "100%", color: C.danger, fontSize: 12 }}>{templatesError}</div>
               )}
 
+              {!templatesLoading && !templates.length && (
+                <div style={{ width: "100%", color: C.sub, fontSize: 12 }}>
+                  No templates available yet. Create and approve a WhatsApp template in Meta first.
+                </div>
+              )}
+
               {!gate.templateApproved && templateName && (
                 <div style={{ width: "100%", color: C.danger, fontSize: 12, fontWeight: 700 }}>
-                  This template is not approved right now.
+                  This selected template is not approved right now for sending outside the 24-hour window.
                 </div>
               )}
 
               {templateInfoLoading && (
-                <div style={{ width: "100%", color: C.sub, fontSize: 12 }}>Loading template…</div>
+                <div style={{ width: "100%", color: C.sub, fontSize: 12 }}>Loading template fields…</div>
               )}
 
               {!!templateInfoError && (
                 <div style={{ width: "100%", color: C.danger, fontSize: 12 }}>{templateInfoError}</div>
               )}
 
+              {!!templateBodyText && (
+                <div
+                  style={{
+                    width: "100%",
+                    background: C.bg,
+                    border: `1px solid ${C.border}`,
+                    borderRadius: 10,
+                    padding: "10px 12px",
+                    marginTop: 4,
+                  }}
+                >
+                  <div style={{ color: C.sub, fontSize: 11, marginBottom: 6, fontWeight: 700 }}>Template body</div>
+                  <div style={{ color: C.text, fontSize: 13, lineHeight: 1.4, whiteSpace: "pre-wrap" }}>
+                    {templateBodyText}
+                  </div>
+                </div>
+              )}
+
               {hasTemplateParams && (
                 <>
                   <div style={{ width: "100%", color: C.text, fontSize: 13, fontWeight: 800, marginTop: 4 }}>
-                    Fill in the fields
+                    Fill in the template placeholders
                   </div>
 
                   <div
@@ -1231,9 +1280,7 @@ export default function Messages({ user, leads = [], defaultTemplate = "", langu
                   >
                     {Array.from({ length: expectedParams }).map((_, i) => (
                       <div key={i} style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-                        <label style={{ fontSize: 12, color: C.sub, fontWeight: 700 }}>
-                          {labelForKind(paramKinds?.[i], i)}
-                        </label>
+                        <label style={{ fontSize: 12, color: C.sub, fontWeight: 700 }}>{paramLabel(i)}</label>
                         <input
                           value={paramValues?.[i] ?? ""}
                           onChange={(e) => {
@@ -1244,7 +1291,7 @@ export default function Messages({ user, leads = [], defaultTemplate = "", langu
                               return next;
                             });
                           }}
-                          placeholder="Enter value"
+                          placeholder={templateExample?.[i] ?? `value for {{${i + 1}}}`}
                           style={{
                             background: C.bg,
                             color: C.text,
@@ -1269,13 +1316,19 @@ export default function Messages({ user, leads = [], defaultTemplate = "", langu
                         marginTop: 4,
                       }}
                     >
-                      <div style={{ color: C.sub, fontSize: 11, marginBottom: 6, fontWeight: 700 }}>Preview</div>
+                      <div style={{ color: C.sub, fontSize: 11, marginBottom: 6, fontWeight: 700 }}>Live preview</div>
                       <div style={{ color: C.text, fontSize: 13, lineHeight: 1.4, whiteSpace: "pre-wrap" }}>
                         {templatePreview}
                       </div>
                     </div>
                   )}
                 </>
+              )}
+
+              {!templateInfoLoading && !hasTemplateParams && !!templateName && !!templateBodyText && (
+                <div style={{ width: "100%", color: C.sub, fontSize: 12 }}>
+                  This template does not appear to require any body placeholders.
+                </div>
               )}
             </div>
           )}
@@ -1336,7 +1389,7 @@ export default function Messages({ user, leads = [], defaultTemplate = "", langu
                 background: "#1e2326",
               }}
             >
-              <span style={{ color: C.accent, fontWeight: 900 }}>Suggested appointment</span>
+              <span style={{ color: C.accent, fontWeight: 900 }}>Suggest appointment:</span>
               <span style={{ color: C.text, fontWeight: 800 }}>
                 {new Date(`${suggestion.date}T${suggestion.time}:00`).toLocaleString([], {
                   weekday: "short",
@@ -1348,7 +1401,7 @@ export default function Messages({ user, leads = [], defaultTemplate = "", langu
               </span>
               <div style={{ marginLeft: "auto", display: "flex", gap: 8 }}>
                 <button style={btn("primary")} onClick={onConfirmSuggestion}>
-                  Add
+                  Add to Calendar
                 </button>
                 <button
                   style={btn("ghost")}
@@ -1378,7 +1431,7 @@ export default function Messages({ user, leads = [], defaultTemplate = "", langu
           >
             {thread.length === 0 && (
               <div style={{ textAlign: "center", color: C.sub, marginTop: 8 }}>
-                No messages yet.
+                No messages yet. Say hello 👋
               </div>
             )}
             {thread.map((m, i) => (
@@ -1412,8 +1465,10 @@ export default function Messages({ user, leads = [], defaultTemplate = "", langu
                     !toE164
                       ? "No WhatsApp number on this lead"
                       : gate.inside24h
-                      ? "Type your message..."
-                      : "Optional notes while preparing the template"
+                      ? "Type a message… (Ctrl/⌘ + Enter to send)"
+                      : hasTemplateParams
+                      ? "Optional notes or extra details for yourself while filling the template above"
+                      : "Outside 24h — choose an approved template above"
                   }
                   style={{
                     flex: 1,
@@ -1444,7 +1499,7 @@ export default function Messages({ user, leads = [], defaultTemplate = "", langu
                   onClick={onSend}
                   disabled={!canSendBase || loading || (!gate.inside24h && !templateName)}
                   style={btn("primary", !canSendBase || loading || (!gate.inside24h && !templateName))}
-                  title="Send"
+                  title="Send (Ctrl/⌘ + Enter)"
                 >
                   {loading ? "Sending…" : "Send"}
                 </button>
