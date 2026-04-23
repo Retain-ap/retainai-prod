@@ -317,21 +317,20 @@ function valueForKind(kind, { user, lead, input, suggestion }) {
   }
 }
 
-function labelForKind(kind, i) {
-  const base = `Parameter ${i + 1}`;
+function labelForKind(kind) {
   switch (kind) {
-    case "lead_name": return `Lead name ({{${i + 1}}})`;
-    case "user_name": return `Your name ({{${i + 1}}})`;
-    case "business": return `Business ({{${i + 1}}})`;
-    case "details": return `Details / message ({{${i + 1}}})`;
-    case "date": return `Date ({{${i + 1}}})`;
-    case "time": return `Time ({{${i + 1}}})`;
-    case "location": return `Location ({{${i + 1}}})`;
-    case "service": return `Service ({{${i + 1}}})`;
-    case "price": return `Price ({{${i + 1}}})`;
-    case "email": return `Email ({{${i + 1}}})`;
-    case "phone": return `Phone ({{${i + 1}}})`;
-    default: return `${base} ({{${i + 1}}})`;
+    case "lead_name": return "Lead name";
+    case "user_name": return "Your name";
+    case "business": return "Business name";
+    case "details": return "Message details";
+    case "date": return "Date";
+    case "time": return "Time";
+    case "location": return "Location";
+    case "service": return "Service";
+    case "price": return "Price";
+    case "email": return "Email";
+    case "phone": return "Phone";
+    default: return "Value";
   }
 }
 
@@ -339,9 +338,27 @@ function renderTemplatePreview(bodyText, values = []) {
   let out = String(bodyText || "");
   values.forEach((v, idx) => {
     const re = new RegExp(`\\{\\{\\s*${idx + 1}\\s*\\}\\}`, "g");
-    out = out.replace(re, v || `{{${idx + 1}}}`);
+    out = out.replace(re, v || "");
   });
-  return out;
+  out = out.replace(/\{\{\s*\d+\s*\}\}/g, "");
+  return out.replace(/[ \t]{2,}/g, " ").replace(/\n{3,}/g, "\n\n").trim();
+}
+
+function extractTemplateKey(text = "") {
+  const m = String(text).match(/^\[template:([^/]+\/[^\]]+)\]/i);
+  return m ? m[1].trim().toLowerCase() : "";
+}
+
+function buildConversationContext(thread = []) {
+  const recent = (thread || []).slice(-10);
+  return recent
+    .map((m) => {
+      const role = m?.from === "lead" ? "Lead" : "You";
+      const text = cleanAIText(m?.text || "");
+      return text ? `${role}: ${text}` : "";
+    })
+    .filter(Boolean)
+    .join("\n");
 }
 
 /** ===== COMPONENT ===== */
@@ -439,9 +456,29 @@ export default function Messages({ user, leads = [], defaultTemplate = "", langu
     };
   }, [API, user?.email, lead?.id]);
 
+  /** --- visible thread cleanup --- */
+  const visibleThread = useMemo(() => {
+    const items = [...thread];
+    return items.filter((msg, idx) => {
+      const rawTplKey = extractTemplateKey(msg?.text || "");
+      if (!rawTplKey) return true;
+
+      const rawTime = new Date(msg?.time || 0).getTime();
+      const hasLocalRenderedVersion = items.some((other, otherIdx) => {
+        if (otherIdx === idx) return false;
+        if (!other?._localTemplate) return false;
+        if (String(other?._tplKey || "").toLowerCase() !== rawTplKey) return false;
+        const localTime = new Date(other?.time || 0).getTime();
+        return Math.abs(localTime - rawTime) <= 3 * 60 * 1000;
+      });
+
+      return !hasLocalRenderedVersion;
+    });
+  }, [thread]);
+
   useEffect(() => {
     chatRef.current?.scrollTo({ top: 1e9, behavior: "smooth" });
-  }, [thread.length, activeLeadId]);
+  }, [visibleThread.length, activeLeadId]);
 
   /** --- 24h gate & templates --- */
   const [gate, setGate] = useState({
@@ -647,13 +684,13 @@ export default function Messages({ user, leads = [], defaultTemplate = "", langu
   const [banner, setBanner] = useState(null);
 
   const lastInbound = useMemo(() => {
-    for (let i = thread.length - 1; i >= 0; i--) {
-      if (thread[i]?.from === "lead" && typeof thread[i]?.text === "string") {
-        return thread[i].text;
+    for (let i = visibleThread.length - 1; i >= 0; i--) {
+      if (visibleThread[i]?.from === "lead" && typeof visibleThread[i]?.text === "string") {
+        return visibleThread[i].text;
       }
     }
     return "";
-  }, [thread]);
+  }, [visibleThread]);
 
   const canSendBase = Boolean(API && user?.email && lead?.id && toE164);
 
@@ -753,6 +790,9 @@ export default function Messages({ user, leads = [], defaultTemplate = "", langu
         lead_id: lead.id,
       };
 
+      let optimisticTemplatePreview = "";
+      let optimisticTplKey = "";
+
       if (gate.inside24h) {
         if (!text) {
           setBanner("Type a message to send inside the 24-hour session.");
@@ -781,12 +821,15 @@ export default function Messages({ user, leads = [], defaultTemplate = "", langu
           const list = (paramValues || []).map((v) => String(v || "").trim()).slice(0, expectedParams);
           const missing = list.filter((v) => !v).length;
           if (missing) {
-            setBanner(`This template needs ${expectedParams} parameters — ${missing} missing.`);
+            setBanner(`This template needs ${expectedParams} values — ${missing} missing.`);
             setLoading(false);
             return;
           }
           payload.template_params = list;
         }
+
+        optimisticTemplatePreview = templatePreview || cleanAIText(text);
+        optimisticTplKey = `${templateName}/${normApi(toApiLang(templateLangUI))}`.toLowerCase();
       }
 
       const res = await fetch(`${API}/api/whatsapp/send`, {
@@ -801,24 +844,41 @@ export default function Messages({ user, leads = [], defaultTemplate = "", langu
         return;
       }
 
-      setBanner(data.mode === "template" ? `Sent via template (${data.usedLanguage || "?"}).` : null);
+      if (data.mode === "template" && optimisticTemplatePreview) {
+        setThread((prev) => [
+          ...prev,
+          {
+            from: "user",
+            text: optimisticTemplatePreview,
+            time: new Date().toISOString(),
+            _localTemplate: true,
+            _tplKey: optimisticTplKey,
+          },
+        ]);
+        setBanner(`Sent via template (${data.usedLanguage || "?"}).`);
+      } else {
+        setBanner(null);
+      }
+
       setInput("");
 
       if (typeof expectedParams === "number" && expectedParams > 0) {
         setParamValues(Array.from({ length: expectedParams }, () => ""));
       }
 
-      setTimeout(async () => {
-        try {
-          const r = await fetch(
-            `${API}/api/whatsapp/messages?user_email=${encodeURIComponent(user.email)}&lead_id=${encodeURIComponent(
-              lead.id
-            )}`
-          );
-          const j = await r.json();
-          setThread(Array.isArray(j?.messages) ? j.messages : []);
-        } catch {}
-      }, 250);
+      if (data.mode !== "template") {
+        setTimeout(async () => {
+          try {
+            const r = await fetch(
+              `${API}/api/whatsapp/messages?user_email=${encodeURIComponent(user.email)}&lead_id=${encodeURIComponent(
+                lead.id
+              )}`
+            );
+            const j = await r.json();
+            setThread(Array.isArray(j?.messages) ? j.messages : []);
+          } catch {}
+        }, 250);
+      }
     } catch (e) {
       setBanner(e.message || "Send failed.");
     } finally {
@@ -833,19 +893,23 @@ export default function Messages({ user, leads = [], defaultTemplate = "", langu
   const onDraftAI = async () => {
     if (!API || !lead) return;
     setBanner(null);
+
     try {
+      const conversationContext = buildConversationContext(visibleThread);
       const body = {
-        lead: { name: lead.name || "", tags: lead.tags || [], notes: lead.notes || "" },
-        last_message: lastInbound || "",
+        lead: { name: lead.name || "", tags: [], notes: "" },
+        last_message: conversationContext || lastInbound || "",
         user_business: user?.business || user?.businessType || "business",
         user_name: user?.name || "",
       };
+
       const r = await fetch(`${API}/api/generate-message`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(body),
       });
       const j = await r.json();
+
       if (j?.reply) {
         const draft = cleanAIText(j.reply);
         setInput((prev) => (prev?.trim() ? prev.trim() + "\n\n" + draft : draft));
@@ -944,7 +1008,7 @@ export default function Messages({ user, leads = [], defaultTemplate = "", langu
     );
   }
 
-  const paramLabel = (i) => labelForKind(paramKinds?.[i], i);
+  const paramLabel = (i) => labelForKind(paramKinds?.[i]);
   const hasTemplateParams = typeof expectedParams === "number" && expectedParams > 0;
   const templatePreview = renderTemplatePreview(templateBodyText, paramValues);
 
@@ -985,7 +1049,7 @@ export default function Messages({ user, leads = [], defaultTemplate = "", langu
             <input
               value={q}
               onChange={(e) => setQ(e.target.value)}
-              placeholder="Search…"
+              placeholder="Search..."
               style={{
                 width: "100%",
                 background: C.bg,
@@ -1132,7 +1196,7 @@ export default function Messages({ user, leads = [], defaultTemplate = "", langu
                   gate.inside24h
                     ? "Inside 24h session"
                     : gate.templateApproved
-                    ? "Outside 24h (template OK)"
+                    ? "Outside 24h (template ready)"
                     : `Outside 24h (${gate.templateStatus})`
                 }
               />
@@ -1191,7 +1255,7 @@ export default function Messages({ user, leads = [], defaultTemplate = "", langu
                   <button
                     onClick={() => setParamValues(Array.from({ length: expectedParams || 0 }, () => ""))}
                     style={btn("outline")}
-                    title="Clear params"
+                    title="Clear values"
                     disabled={!hasTemplateParams}
                   >
                     Clear
@@ -1213,12 +1277,12 @@ export default function Messages({ user, leads = [], defaultTemplate = "", langu
                   How sending works outside 24 hours
                 </div>
                 <div style={{ color: C.sub, fontSize: 12, lineHeight: 1.4 }}>
-                  Pick an approved template, fill in any required placeholders below, then send. The message box at the bottom is optional and only helps with autofill or notes in your preview.
+                  Choose an approved template, fill in any needed values, then send. The live preview below shows what your lead should receive.
                 </div>
               </div>
 
               {templatesLoading && (
-                <div style={{ width: "100%", color: C.sub, fontSize: 12 }}>Loading templates…</div>
+                <div style={{ width: "100%", color: C.sub, fontSize: 12 }}>Loading templates...</div>
               )}
 
               {!!templatesError && (
@@ -1233,12 +1297,12 @@ export default function Messages({ user, leads = [], defaultTemplate = "", langu
 
               {!gate.templateApproved && templateName && (
                 <div style={{ width: "100%", color: C.danger, fontSize: 12, fontWeight: 700 }}>
-                  This selected template is not approved right now for sending outside the 24-hour window.
+                  This template is not approved right now for sending outside the 24-hour window.
                 </div>
               )}
 
               {templateInfoLoading && (
-                <div style={{ width: "100%", color: C.sub, fontSize: 12 }}>Loading template fields…</div>
+                <div style={{ width: "100%", color: C.sub, fontSize: 12 }}>Loading template fields...</div>
               )}
 
               {!!templateInfoError && (
@@ -1256,7 +1320,7 @@ export default function Messages({ user, leads = [], defaultTemplate = "", langu
                     marginTop: 4,
                   }}
                 >
-                  <div style={{ color: C.sub, fontSize: 11, marginBottom: 6, fontWeight: 700 }}>Template body</div>
+                  <div style={{ color: C.sub, fontSize: 11, marginBottom: 6, fontWeight: 700 }}>Template</div>
                   <div style={{ color: C.text, fontSize: 13, lineHeight: 1.4, whiteSpace: "pre-wrap" }}>
                     {templateBodyText}
                   </div>
@@ -1266,7 +1330,7 @@ export default function Messages({ user, leads = [], defaultTemplate = "", langu
               {hasTemplateParams && (
                 <>
                   <div style={{ width: "100%", color: C.text, fontSize: 13, fontWeight: 800, marginTop: 4 }}>
-                    Fill in the template placeholders
+                    Fill in the template values
                   </div>
 
                   <div
@@ -1291,7 +1355,7 @@ export default function Messages({ user, leads = [], defaultTemplate = "", langu
                               return next;
                             });
                           }}
-                          placeholder={templateExample?.[i] ?? `value for {{${i + 1}}}`}
+                          placeholder={templateExample?.[i] ?? "Enter value"}
                           style={{
                             background: C.bg,
                             color: C.text,
@@ -1317,8 +1381,8 @@ export default function Messages({ user, leads = [], defaultTemplate = "", langu
                       }}
                     >
                       <div style={{ color: C.sub, fontSize: 11, marginBottom: 6, fontWeight: 700 }}>Live preview</div>
-                      <div style={{ color: C.text, fontSize: 13, lineHeight: 1.4, whiteSpace: "pre-wrap" }}>
-                        {templatePreview}
+                      <div style={{ color: C.text, fontSize: 13, lineHeight: 1.5, whiteSpace: "pre-wrap" }}>
+                        {templatePreview || "Your filled-in message will appear here."}
                       </div>
                     </div>
                   )}
@@ -1327,7 +1391,7 @@ export default function Messages({ user, leads = [], defaultTemplate = "", langu
 
               {!templateInfoLoading && !hasTemplateParams && !!templateName && !!templateBodyText && (
                 <div style={{ width: "100%", color: C.sub, fontSize: 12 }}>
-                  This template does not appear to require any body placeholders.
+                  This template does not appear to require any extra values.
                 </div>
               )}
             </div>
@@ -1389,7 +1453,7 @@ export default function Messages({ user, leads = [], defaultTemplate = "", langu
                 background: "#1e2326",
               }}
             >
-              <span style={{ color: C.accent, fontWeight: 900 }}>Suggest appointment:</span>
+              <span style={{ color: C.accent, fontWeight: 900 }}>Suggested appointment:</span>
               <span style={{ color: C.text, fontWeight: 800 }}>
                 {new Date(`${suggestion.date}T${suggestion.time}:00`).toLocaleString([], {
                   weekday: "short",
@@ -1429,12 +1493,12 @@ export default function Messages({ user, leads = [], defaultTemplate = "", langu
               paddingBottom: 110,
             }}
           >
-            {thread.length === 0 && (
+            {visibleThread.length === 0 && (
               <div style={{ textAlign: "center", color: C.sub, marginTop: 8 }}>
                 No messages yet. Say hello 👋
               </div>
             )}
-            {thread.map((m, i) => (
+            {visibleThread.map((m, i) => (
               <Bubble key={i} from={m.from} text={m.text} time={m.time} />
             ))}
           </div>
@@ -1465,9 +1529,9 @@ export default function Messages({ user, leads = [], defaultTemplate = "", langu
                     !toE164
                       ? "No WhatsApp number on this lead"
                       : gate.inside24h
-                      ? "Type a message… (Ctrl/⌘ + Enter to send)"
+                      ? "Type a message... (Ctrl/⌘ + Enter to send)"
                       : hasTemplateParams
-                      ? "Optional notes or extra details for yourself while filling the template above"
+                      ? "Optional notes or details to help you fill the template"
                       : "Outside 24h — choose an approved template above"
                   }
                   style={{
@@ -1490,7 +1554,7 @@ export default function Messages({ user, leads = [], defaultTemplate = "", langu
                   onClick={onDraftAI}
                   disabled={!canSendBase}
                   style={btn("ghost", !canSendBase)}
-                  title="Draft with AI"
+                  title="Draft a reply from this conversation"
                 >
                   AI Reply
                 </button>
@@ -1501,7 +1565,7 @@ export default function Messages({ user, leads = [], defaultTemplate = "", langu
                   style={btn("primary", !canSendBase || loading || (!gate.inside24h && !templateName))}
                   title="Send (Ctrl/⌘ + Enter)"
                 >
-                  {loading ? "Sending…" : "Send"}
+                  {loading ? "Sending..." : "Send"}
                 </button>
               </div>
             </div>
@@ -1594,6 +1658,7 @@ function btn(kind, disabled = false) {
 function Bubble({ from, text, time }) {
   const you = from === "user";
   const safe = cleanAIText(text);
+
   return (
     <div
       style={{
