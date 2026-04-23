@@ -1720,10 +1720,54 @@ def get_appointments(user_email):
     data = load_appointments()
     return jsonify({"appointments": data.get(user_email, [])}), 200
 
+def send_appointment_confirmation_email(appt):
+    try:
+        create_ics_file(appt)
+
+        display_time = datetime.datetime.strptime(
+            appt["appointment_time"], "%Y-%m-%dT%H:%M:%S"
+        ).strftime("%B %d, %Y, %I:%M %p")
+
+        ics_file_url = f"{request.host_url.rstrip('/')}/ics/{appt['id']}.ics"
+        google_calendar_link = make_google_calendar_link(appt)
+
+        send_email_with_template(
+            to_email=appt["lead_email"],
+            template_id=SG_TEMPLATE_APPT_CONFIRM,
+            dynamic_data={
+                "lead_first_name": appt.get("lead_first_name", ""),
+                "user_name": appt.get("user_name", ""),
+                "business_name": appt.get("business_name", ""),
+                "display_time": display_time,
+                "appointment_location": appt.get("appointment_location", ""),
+                "google_calendar_link": google_calendar_link,
+                "ics_file_url": ics_file_url,
+                "user_email": appt.get("user_email", ""),
+            },
+        )
+
+        add_notification(
+            appt.get("user_email", ""),
+            "Appointment confirmation sent",
+            f"Confirmation email sent to {appt.get('lead_first_name','Client')} for {display_time}.",
+            channel="appointment",
+            lead_email=appt.get("lead_email", ""),
+            extra={"appointment_id": appt.get("id")}
+        )
+
+        return True
+    except Exception as e:
+        try:
+            app.logger.warning("[APPOINTMENT CONFIRM EMAIL ERROR] %s", e)
+        except Exception:
+            pass
+        return False
+
 @app.route("/api/appointments/<user_email>", methods=["POST"])
 def create_appointment(user_email):
     data = request.get_json(silent=True) or {}
     user_email = (user_email or "").strip().lower()
+    now_iso = datetime.datetime.utcnow().isoformat() + "Z"
 
     appt = {
         "id": str(uuid4()),
@@ -1737,14 +1781,18 @@ def create_appointment(user_email):
         "duration": data.get("duration", 30),
         "notes": data.get("notes", ""),
         "status": data.get("status", "scheduled"),
-        "created_at": datetime.datetime.utcnow().isoformat() + "Z",
-        "updated_at": datetime.datetime.utcnow().isoformat() + "Z",
+        "lead_id": data.get("lead_id"),
+        "created_at": now_iso,
+        "updated_at": now_iso,
     }
 
     appointments = load_appointments() or {}
+    if not isinstance(appointments, dict):
+        appointments = {}
     appointments.setdefault(user_email, []).append(appt)
     save_appointments(appointments)
 
+    # keep appointment email logic here so every created appointment sends confirmation
     create_ics_file(appt)
 
     display_time = datetime.datetime.strptime(
@@ -1754,7 +1802,7 @@ def create_appointment(user_email):
     ics_file_url = f"{request.host_url.rstrip('/')}/ics/{appt['id']}.ics"
     google_calendar_link = make_google_calendar_link(appt)
 
-    send_email_with_template(
+    email_sent = send_email_with_template(
         to_email=appt["lead_email"],
         template_id=SG_TEMPLATE_APPT_CONFIRM,
         dynamic_data={
@@ -1765,7 +1813,7 @@ def create_appointment(user_email):
             "appointment_location": appt["appointment_location"],
             "google_calendar_link": google_calendar_link,
             "ics_file_url": ics_file_url,
-            "user_email": appt["user_email"]
+            "user_email": appt["user_email"],
         }
     )
 
@@ -1778,10 +1826,45 @@ def create_appointment(user_email):
         extra={
             "lead_name": appt.get("lead_first_name") or "",
             "appointment_id": appt.get("id"),
+            "appointment_time": appt.get("appointment_time"),
+            "email_sent": bool(email_sent),
         },
     )
 
-    return jsonify({"message": "Appointment created and confirmation sent!", "appointment": appt}), 201
+    if email_sent:
+        add_notification(
+            user_email=user_email,
+            subject="Appointment confirmation sent",
+            message=f"Confirmation email sent to {appt.get('lead_first_name') or appt.get('lead_email') or 'lead'} for {display_time}.",
+            channel="email",
+            lead_email=appt.get("lead_email") or "",
+            extra={
+                "lead_name": appt.get("lead_first_name") or "",
+                "appointment_id": appt.get("id"),
+                "appointment_time": appt.get("appointment_time"),
+            },
+        )
+    else:
+        add_notification(
+            user_email=user_email,
+            subject="Appointment confirmation failed",
+            message=f"Appointment was created, but the confirmation email did not send for {appt.get('lead_first_name') or appt.get('lead_email') or 'lead'}.",
+            channel="email",
+            lead_email=appt.get("lead_email") or "",
+            extra={
+                "lead_name": appt.get("lead_first_name") or "",
+                "appointment_id": appt.get("id"),
+                "appointment_time": appt.get("appointment_time"),
+                "error_state": "send_failed",
+            },
+        )
+
+    return jsonify({
+        "message": "Appointment created and confirmation processed!",
+        "appointment": appt,
+        "confirmation_sent": bool(email_sent),
+    }), 201
+
 
 @app.route("/api/appointments/<user_email>/<appt_id>", methods=["PUT"])
 def update_appointment(user_email, appt_id):
