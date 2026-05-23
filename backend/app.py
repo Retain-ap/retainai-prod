@@ -1825,32 +1825,50 @@ def send_appointment_confirmation_email(appt):
 def create_appointment(user_email):
     data = request.get_json(silent=True) or {}
     user_email = (user_email or "").strip().lower()
-    now_iso = datetime.datetime.utcnow().isoformat() + "Z"
+
+    lead_email = (data.get("lead_email") or "").strip()
+    lead_first_name = (data.get("lead_first_name") or "").strip()
+    lead_last_name = (data.get("lead_last_name") or "").strip()
+    lead_full_name = (data.get("lead_full_name") or "").strip()
+
+    # Fallback parsing if only full name was sent
+    if not lead_first_name and lead_full_name:
+        parts = lead_full_name.split()
+        if parts:
+            lead_first_name = parts[0].strip()
+            if len(parts) > 1:
+                lead_last_name = " ".join(parts[1:]).strip()
 
     appt = {
         "id": str(uuid4()),
-        "lead_email": data["lead_email"],
-        "lead_first_name": data["lead_first_name"],
-        "user_name": data["user_name"],
-        "user_email": data["user_email"],
-        "business_name": data["business_name"],
-        "appointment_time": data["appointment_time"],
-        "appointment_location": data["appointment_location"],
+        "lead_email": lead_email,
+        "lead_first_name": lead_first_name,
+        "lead_last_name": lead_last_name,
+        "lead_full_name": lead_full_name or " ".join(
+            [p for p in [lead_first_name, lead_last_name] if p]
+        ).strip(),
+        "user_name": data.get("user_name", ""),
+        "user_email": data.get("user_email", ""),
+        "business_name": data.get("business_name", ""),
+        "appointment_time": data.get("appointment_time", ""),
+        "appointment_location": data.get("appointment_location", ""),
         "duration": data.get("duration", 30),
         "notes": data.get("notes", ""),
         "status": data.get("status", "scheduled"),
-        "lead_id": data.get("lead_id"),
-        "created_at": now_iso,
-        "updated_at": now_iso,
+        "lead_id": data.get("lead_id", ""),
+        "created_at": datetime.datetime.utcnow().isoformat() + "Z",
+        "updated_at": datetime.datetime.utcnow().isoformat() + "Z",
     }
 
+    if not appt["lead_email"]:
+        return jsonify({"error": "Missing lead_email"}), 400
+    if not appt["appointment_time"]:
+        return jsonify({"error": "Missing appointment_time"}), 400
+
     appointments = load_appointments() or {}
-    if not isinstance(appointments, dict):
-        appointments = {}
     appointments.setdefault(user_email, []).append(appt)
     save_appointments(appointments)
 
-    # keep appointment email logic here so every created appointment sends confirmation
     create_ics_file(appt)
 
     display_time = datetime.datetime.strptime(
@@ -1860,11 +1878,13 @@ def create_appointment(user_email):
     ics_file_url = f"{request.host_url.rstrip('/')}/ics/{appt['id']}.ics"
     google_calendar_link = make_google_calendar_link(appt)
 
-    email_sent = send_email_with_template(
+    send_email_with_template(
         to_email=appt["lead_email"],
         template_id=SG_TEMPLATE_APPT_CONFIRM,
         dynamic_data={
             "lead_first_name": appt["lead_first_name"],
+            "lead_last_name": appt["lead_last_name"],
+            "lead_full_name": appt["lead_full_name"],
             "user_name": appt["user_name"],
             "business_name": appt["business_name"],
             "display_time": display_time,
@@ -1878,49 +1898,18 @@ def create_appointment(user_email):
     add_notification(
         user_email=user_email,
         subject="Appointment created",
-        message=f"Appointment booked with {appt.get('lead_first_name') or appt.get('lead_email') or 'lead'} for {display_time}.",
+        message=f"Appointment booked with {appt.get('lead_full_name') or appt.get('lead_email') or 'lead'} for {display_time}.",
         channel="appointment",
         lead_email=appt.get("lead_email") or "",
         extra={
-            "lead_name": appt.get("lead_first_name") or "",
+            "lead_name": appt.get("lead_full_name") or appt.get("lead_first_name") or "",
             "appointment_id": appt.get("id"),
-            "appointment_time": appt.get("appointment_time"),
-            "email_sent": bool(email_sent),
         },
     )
 
-    if email_sent:
-        add_notification(
-            user_email=user_email,
-            subject="Appointment confirmation sent",
-            message=f"Confirmation email sent to {appt.get('lead_first_name') or appt.get('lead_email') or 'lead'} for {display_time}.",
-            channel="email",
-            lead_email=appt.get("lead_email") or "",
-            extra={
-                "lead_name": appt.get("lead_first_name") or "",
-                "appointment_id": appt.get("id"),
-                "appointment_time": appt.get("appointment_time"),
-            },
-        )
-    else:
-        add_notification(
-            user_email=user_email,
-            subject="Appointment confirmation failed",
-            message=f"Appointment was created, but the confirmation email did not send for {appt.get('lead_first_name') or appt.get('lead_email') or 'lead'}.",
-            channel="email",
-            lead_email=appt.get("lead_email") or "",
-            extra={
-                "lead_name": appt.get("lead_first_name") or "",
-                "appointment_id": appt.get("id"),
-                "appointment_time": appt.get("appointment_time"),
-                "error_state": "send_failed",
-            },
-        )
-
     return jsonify({
-        "message": "Appointment created and confirmation processed!",
-        "appointment": appt,
-        "confirmation_sent": bool(email_sent),
+        "message": "Appointment created and confirmation sent!",
+        "appointment": appt
     }), 201
 
 

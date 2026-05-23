@@ -1,4 +1,3 @@
-// src/components/Appointments.jsx
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import {
   FaSearch,
@@ -192,7 +191,11 @@ function normalizeBackend(raw) {
     notes: raw.notes || "",
     lead: {
       id: raw.lead_id || `backend-${getRID(raw)}`,
-      name: raw.lead_first_name || raw.lead_email || "Client",
+      name:
+        raw.lead_full_name ||
+        [raw.lead_first_name, raw.lead_last_name].filter(Boolean).join(" ") ||
+        raw.lead_email ||
+        "Client",
       email: raw.lead_email || "",
       tags: [],
     },
@@ -729,30 +732,60 @@ export default function Appointments({ user, leads = [], setLeads }) {
 
         ping("appointments:changed");
       } else {
-        const newLocalKey = `${leadId}|${title}|${date}|${time || ""}|${Date.now()}`;
+        const selectedLead = (leads || []).find((l) => String(l.id) === String(leadId));
+        if (!selectedLead) {
+          throw new Error("Selected lead not found.");
+        }
 
-        updateLocalLeadAppointments((prev) =>
-          prev.map((l) =>
-            String(l.id) === String(leadId)
-              ? {
-                  ...l,
-                  appointments: [
-                    ...(l.appointments || []),
-                    {
-                      _localKey: newLocalKey,
-                      title,
-                      date,
-                      time,
-                      done: false,
-                    },
-                  ],
-                }
-              : l
-          )
+        const fullName = String(selectedLead.name || "").trim();
+        const parts = fullName ? fullName.split(/\s+/) : [];
+        const leadFirstName =
+          parts[0] || selectedLead.first_name || selectedLead.firstName || "Client";
+        const leadLastName =
+          parts.length > 1
+            ? parts.slice(1).join(" ")
+            : selectedLead.last_name || selectedLead.lastName || "";
+
+        const appointmentPayload = {
+          lead_id: selectedLead.id || "",
+          lead_email: selectedLead.email || "",
+          lead_first_name: leadFirstName,
+          lead_last_name: leadLastName,
+          lead_full_name: fullName,
+          user_name: user?.name || "",
+          user_email: user?.email || "",
+          business_name: user?.business || user?.businessType || "",
+          appointment_time: `${date}T${time || "00:00"}:00`,
+          appointment_location: selectedLead.location || user?.location || "",
+          duration: 30,
+          notes: "",
+          status: "scheduled",
+          title,
+        };
+
+        const res = await fetch(
+          `${API_BASE}/api/appointments/${encodeURIComponent(user.email)}`,
+          {
+            method: "POST",
+            credentials: "include",
+            headers: {
+              "Content-Type": "application/json",
+              Accept: "application/json",
+            },
+            body: JSON.stringify(appointmentPayload),
+          }
         );
+
+        if (!res.ok) {
+          const err = await res.json().catch(() => ({}));
+          throw new Error(err?.error || "Failed to create appointment.");
+        }
 
         ping("appointments:changed");
       }
+    } catch (err) {
+      console.error(err);
+      alert(err?.message || "Failed to save appointment.");
     } finally {
       setSaving(false);
       setShowModal(false);
