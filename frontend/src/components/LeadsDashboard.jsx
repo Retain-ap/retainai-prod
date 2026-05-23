@@ -291,6 +291,7 @@ export default function LeadsDashboard({
             setDrawerLead(null);
             if (onContactedLead) onContactedLead(drawerLead);
           }}
+          onUpdateLead={onUpdateLead}
           user={user}
         />
       )}
