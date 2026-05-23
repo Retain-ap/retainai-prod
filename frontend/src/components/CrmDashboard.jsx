@@ -391,16 +391,36 @@ function CrmDashboard() {
 
     const now = new Date().toISOString();
 
-    // optimistic local update
+    // instant UI update
     setLeads((prev) => {
       const next = prev.map((l) =>
-        String(l.id) === String(lead.id) ? { ...l, last_contacted: now } : l
+        String(l.id) === String(lead.id)
+          ? {
+              ...l,
+              last_contacted: now,
+              last_activity_at: now,
+              updated_at: now,
+              status: "active",
+            }
+          : l
       );
+
       saveLeadsToBackend(next);
       return next;
     });
 
-    // optional backend endpoint (if you add it later)
+    setDrawerLead((prev) => {
+      if (!prev || String(prev.id) !== String(lead.id)) return prev;
+      return {
+        ...prev,
+        last_contacted: now,
+        last_activity_at: now,
+        updated_at: now,
+        status: "active",
+      };
+    });
+
+    // optional backend endpoint if it exists
     try {
       await fetch(apiUrl("leads/contacted"), {
         method: "POST",
