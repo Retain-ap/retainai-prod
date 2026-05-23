@@ -21,7 +21,6 @@ const C = {
   softer: "#15181a",
   mutedBlue: "#1e2a30",
 };
-
 const PANEL_H = "72vh";
 
 /** ===== HELPERS ===== */
@@ -246,9 +245,13 @@ function inferParamKindsFromBody(bodyText, count, templateName = "") {
     const m = re.exec(body);
     if (!m) continue;
     const { index } = m;
-    const ctx = between(body, index, index + m[0].length, 46);
+    const ctx = between(body, index, index + m[0].length, 48);
     const around = `${ctx.left} ${ctx.right}`;
 
+    if (/\b(tech|technician|provider|stylist|artist|specialist|staff member)\b/.test(around)) {
+      kinds[i - 1] = "provider_name";
+      continue;
+    }
     if (/(^|\s)(hi|hello|hey|dear)\s*$/.test(ctx.left) || /(client|customer|guest|lead|name)\s*$/.test(ctx.left)) {
       kinds[i - 1] = "lead_name";
       continue;
@@ -261,7 +264,7 @@ function inferParamKindsFromBody(bodyText, count, templateName = "") {
       kinds[i - 1] = "business";
       continue;
     }
-    if (/\b(date|day|tomorrow|today|scheduled for|booked for|visit date)\b/.test(around)) {
+    if (/\b(date|day|tomorrow|today|scheduled for|booked for|visit date|call date)\b/.test(around)) {
       kinds[i - 1] = "date";
       continue;
     }
@@ -297,11 +300,22 @@ function inferParamKindsFromBody(bodyText, count, templateName = "") {
     if (/technician|tech/.test(nameLower)) {
       kinds[i] =
         i === 0 ? "lead_name" :
-        i === 1 ? "business" :
-        i === 2 ? "date" :
-        i === 3 ? "time" :
-        i === 4 ? "location" :
-        i === 5 ? "service" :
+        i === 1 ? "provider_name" :
+        i === 2 ? "business" :
+        i === 3 ? "date" :
+        i === 4 ? "time" :
+        i === 5 ? "location" :
+        i === 6 ? "service" :
+        "details";
+      continue;
+    }
+
+    if (/outreach/.test(nameLower)) {
+      kinds[i] =
+        i === 0 ? "lead_name" :
+        i === 1 ? "user_name" :
+        i === 2 ? "business" :
+        i === 3 ? "details" :
         "details";
       continue;
     }
@@ -349,7 +363,7 @@ function inferParamKindsFromBody(bodyText, count, templateName = "") {
       continue;
     }
 
-    if (/welcome|intro|outreach/.test(nameLower)) {
+    if (/welcome|intro/.test(nameLower)) {
       kinds[i] =
         i === 0 ? "lead_name" :
         i === 1 ? "user_name" :
@@ -377,6 +391,8 @@ function valueForKind(kind, { user, lead, input, suggestion }) {
       return FIRSTNAME(lead?.name) || lead?.name || (lead?.email ? lead.email.split("@")[0] : "") || "there";
     case "user_name":
       return user?.name || "";
+    case "provider_name":
+      return user?.name || "";
     case "business":
       return user?.business || user?.businessType || "";
     case "details":
@@ -403,6 +419,7 @@ function valueForKind(kind, { user, lead, input, suggestion }) {
 function friendlyLabelForKind(kind, i, templateName = "") {
   const n = LOWER(templateName);
 
+  if (kind === "provider_name") return /technician|tech/.test(n) ? "Technician name" : "Your name";
   if (kind === "date" && /technician|tech|visit/.test(n)) return "Visit date";
   if (kind === "time" && /technician|tech|visit/.test(n)) return "Visit time";
   if (kind === "location" && /technician|tech|visit/.test(n)) return "Visit location";
@@ -440,6 +457,7 @@ function friendlyLabelForKind(kind, i, templateName = "") {
 function fieldHintForKind(kind, templateName = "") {
   const n = LOWER(templateName);
 
+  if (kind === "provider_name") return "Mateo";
   if (kind === "date" && /technician|tech|visit/.test(n)) return "2026-05-24";
   if (kind === "time" && /technician|tech|visit/.test(n)) return "2:00 PM";
   if (kind === "location" && /technician|tech|visit/.test(n)) return "123 Main St";
@@ -559,7 +577,9 @@ function normalizeThreadMessages(rawMessages, userEmail, leadId) {
     if (parsed) payloadIndexes.push({ idx, parsed });
   });
 
-  if (!payloadIndexes.length) return list.filter((m) => cleanAIText(m?.text || "") || m?.from !== "user");
+  if (!payloadIndexes.length) {
+    return list.filter((m) => cleanAIText(m?.text || "") || m?.from === "lead");
+  }
 
   const { consumed } = consumeTemplateRenderCache(userEmail, leadId, payloadIndexes.length);
 
@@ -603,6 +623,28 @@ function buildConversationHistory(thread, maxItems = 8) {
     .filter((m) => m.text);
 }
 
+function latestLeadSignal(thread) {
+  for (let i = thread.length - 1; i >= 0; i--) {
+    if (thread[i]?.from === "lead") {
+      return `${thread[i]?.time || ""}|${cleanAIText(thread[i]?.text || "")}`;
+    }
+  }
+  return "";
+}
+
+function stripGreetingIfNeeded(text, recentBusinessText = "") {
+  let out = String(text || "").trim();
+  const recent = String(recentBusinessText || "").trim().toLowerCase();
+
+  const hadRecentGreeting = /^(hi|hey|hello)\b/i.test(recent);
+  if (hadRecentGreeting) {
+    out = out.replace(/^(hi|hey|hello)\s+[a-z0-9'’._-]+[!,.:\-\s]*/i, "");
+    out = out.replace(/^(hi|hey|hello)[!,.:\-\s]*/i, "");
+  }
+
+  return out.trim();
+}
+
 function quickSuggestionFromInbound(text, leadName) {
   const inbound = String(text || "").trim();
   if (!inbound) return "";
@@ -611,18 +653,18 @@ function quickSuggestionFromInbound(text, leadName) {
   const t = inbound.toLowerCase();
 
   if (/(resched|reschedule|move|another time|tomorrow|next week|what time)/i.test(t)) {
-    return `Hi ${name}! No problem at all. I can help with that. What time works best for you?`;
+    return `No problem at all — what time works best for you?`;
   }
-  if (/(confirm|confirmed|okay sounds good|sounds good|works for me|perfect)/i.test(t)) {
-    return `Hi ${name}! Perfect — you're all set. Let me know if you need anything before your appointment.`;
+  if (/(confirm|confirmed|okay sounds good|sounds good|works for me|perfect|see you then)/i.test(t)) {
+    return `Perfect, you're all set. Let me know if you need anything before then.`;
   }
   if (/(price|cost|how much|quote)/i.test(t)) {
-    return `Hi ${name}! I’d be happy to help with pricing. Tell me what service you’re looking for and I’ll send the details over.`;
+    return `Of course — tell me what service you're looking for and I’ll send the details over.`;
   }
   if (/(thanks|thank you)/i.test(t)) {
     return `You’re very welcome, ${name}!`;
   }
-  return `Hi ${name}! Thanks for the message.`;
+  return `Sounds good.`;
 }
 
 function buildSmartAutofillValues(expectedParams, paramKinds, context) {
@@ -630,15 +672,6 @@ function buildSmartAutofillValues(expectedParams, paramKinds, context) {
     const kind = paramKinds?.[idx];
     return valueForKind(kind, context) || "";
   });
-}
-
-function latestLeadSignal(thread) {
-  for (let i = thread.length - 1; i >= 0; i--) {
-    if (thread[i]?.from === "lead") {
-      return `${thread[i]?.time || ""}|${cleanAIText(thread[i]?.text || "")}`;
-    }
-  }
-  return "";
 }
 
 /** ===== COMPONENT ===== */
@@ -688,7 +721,6 @@ export default function Messages({ user, leads = [], defaultTemplate = "", langu
   /** --- thread state --- */
   const [thread, setThread] = useState([]);
   const [loading, setLoading] = useState(false);
-  const [polling, setPolling] = useState(false);
   const chatRef = useRef(null);
   const pollTimer = useRef(null);
 
@@ -718,7 +750,6 @@ export default function Messages({ user, leads = [], defaultTemplate = "", langu
     let stop = false;
 
     const tick = async () => {
-      setPolling(true);
       try {
         const r = await fetch(
           `${API}/api/whatsapp/messages?user_email=${encodeURIComponent(user.email)}&lead_id=${encodeURIComponent(
@@ -728,10 +759,7 @@ export default function Messages({ user, leads = [], defaultTemplate = "", langu
         const j = await r.json();
         const normalized = normalizeThreadMessages(j?.messages, user.email, lead.id);
         if (!stop) setThread(Array.isArray(normalized) ? normalized : []);
-      } catch {
-      } finally {
-        if (!stop) setPolling(false);
-      }
+      } catch {}
       if (!stop) pollTimer.current = setTimeout(tick, 5000);
     };
 
@@ -949,6 +977,13 @@ export default function Messages({ user, leads = [], defaultTemplate = "", langu
   }, [thread]);
 
   const leadSignal = useMemo(() => latestLeadSignal(thread), [thread]);
+
+  const recentBusinessText = useMemo(() => {
+    for (let i = thread.length - 1; i >= 0; i--) {
+      if (thread[i]?.from === "user") return cleanAIText(thread[i]?.text || "");
+    }
+    return "";
+  }, [thread]);
 
   const conversationHistory = useMemo(() => buildConversationHistory(thread, 8), [thread]);
 
@@ -1218,14 +1253,14 @@ export default function Messages({ user, leads = [], defaultTemplate = "", langu
       });
 
       const j = await r.json();
-      if (j?.reply) {
-        const draft = cleanAIText(j.reply);
-        setInput((prev) => (prev?.trim() ? prev.trim() + "\n\n" + draft : draft));
-      } else {
-        setInput((prev) => (prev?.trim() ? prev.trim() + "\n\n" + fallback : fallback));
-      }
+      const rawDraft = j?.reply ? cleanAIText(j.reply) : fallback;
+      const softened = stripGreetingIfNeeded(rawDraft, recentBusinessText);
+      const finalDraft = softened || rawDraft || fallback;
+
+      setInput((prev) => (prev?.trim() ? prev.trim() + "\n\n" + finalDraft : finalDraft));
     } catch {
-      setInput((prev) => (prev?.trim() ? prev.trim() + "\n\n" + fallback : fallback));
+      const finalDraft = stripGreetingIfNeeded(fallback, recentBusinessText) || fallback;
+      setInput((prev) => (prev?.trim() ? prev.trim() + "\n\n" + finalDraft : finalDraft));
     }
   };
 
@@ -1480,7 +1515,7 @@ export default function Messages({ user, leads = [], defaultTemplate = "", langu
                 color={gate.inside24h ? C.wa : C.accent}
                 text={
                   gate.inside24h
-                    ? polling ? "Inside 24h · syncing" : "Inside 24h session"
+                    ? "Inside 24h session"
                     : gate.templateApproved
                     ? "Outside 24h · template ready"
                     : `Outside 24h (${gate.templateStatus})`
@@ -1924,6 +1959,7 @@ function Pill({ color, text }) {
         fontSize: 12,
         fontWeight: 800,
         whiteSpace: "nowrap",
+        lineHeight: 1.1,
       }}
     >
       {text}
