@@ -32,6 +32,8 @@ const DEFAULT_TAGS = [
   "Long Term",
   "Happy",
   "Upset",
+  "Closed",
+  "Won",
 ];
 
 function normEmail(v) {
