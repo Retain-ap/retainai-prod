@@ -3,7 +3,6 @@ import { API_BASE } from "../config";
 import "./NotificationsCenter.css";
 
 const PAGE_SIZE = 12;
-const ping = (name) => window.dispatchEvent(new Event(name));
 
 function safeStr(v) {
   return v == null ? "" : String(v);
@@ -40,7 +39,7 @@ function formatDateTime(raw) {
   });
 }
 
-function extractScheduledTimeFromMessage(message = "") {
+function extractScheduledTimeFromMessage(message) {
   const text = safeStr(message);
 
   const match =
@@ -48,6 +47,28 @@ function extractScheduledTimeFromMessage(message = "") {
     text.match(/\b([A-Za-z]+\s+\d{1,2},\s+\d{4},\s+\d{1,2}:\d{2}\s*[AP]M)\b/i);
 
   return match?.[1] || "";
+}
+
+function iconForNotification(notif) {
+  const s = safeStr(notif.subject).toLowerCase();
+  const c = safeStr(notif.channel).toLowerCase();
+
+  if (c.includes("whatsapp") || s.includes("whatsapp")) return "💬";
+  if (c.includes("email") || s.includes("email")) return "📧";
+  if (s.includes("appointment") || s.includes("calendar")) return "📅";
+  if (s.includes("reminder")) return "🔔";
+  if (s.includes("automation")) return "⚙️";
+  return "📩";
+}
+
+function labelForNotification(notif) {
+  const c = safeStr(notif.channel).toLowerCase();
+  if (c.includes("whatsapp")) return "WhatsApp";
+  if (c.includes("email")) return "Email";
+  if (c.includes("automation")) return "Automation";
+  if (c.includes("appointment")) return "Appointment";
+  if (c.includes("reminder")) return "Reminder";
+  return "App";
 }
 
 function normalizeNotification(n, idx) {
@@ -79,28 +100,6 @@ function normalizeNotification(n, idx) {
     _idx: idx,
     _sortTime: parsePossiblyLocalDate(rawTimestamp)?.getTime() || 0,
   };
-}
-
-function iconForNotification(notif) {
-  const s = safeStr(notif.subject).toLowerCase();
-  const c = safeStr(notif.channel).toLowerCase();
-
-  if (c.includes("whatsapp") || s.includes("whatsapp")) return "💬";
-  if (c.includes("email") || s.includes("email")) return "📧";
-  if (s.includes("appointment") || s.includes("calendar")) return "📅";
-  if (s.includes("reminder")) return "🔔";
-  if (s.includes("automation")) return "⚙️";
-  return "📩";
-}
-
-function labelForNotification(notif) {
-  const c = safeStr(notif.channel).toLowerCase();
-  if (c.includes("whatsapp")) return "WhatsApp";
-  if (c.includes("email")) return "Email";
-  if (c.includes("automation")) return "Automation";
-  if (c.includes("appointment")) return "Appointment";
-  if (c.includes("reminder")) return "Reminder";
-  return "App";
 }
 
 function startOfToday() {
@@ -137,7 +136,7 @@ function groupNotifications(items) {
   return groups;
 }
 
-function StatCard({ label, value, accent = false }) {
+function StatCard({ label, value, accent }) {
   return (
     <div className={`notif-stat-card ${accent ? "accent" : ""}`}>
       <div className="notif-stat-label">{label}</div>
@@ -153,7 +152,7 @@ function Section({ title, items, children, defaultOpen = true }) {
 
   return (
     <section className="notif-section">
-      <button className="notif-section-header" onClick={() => setOpen((v) => !v)}>
+      <button className="notif-section-header" onClick={() => setOpen((v) => !v)} type="button">
         <div className="notif-section-title-wrap">
           <span className="notif-section-dot" />
           <span className="notif-section-title">{title}</span>
@@ -166,12 +165,44 @@ function Section({ title, items, children, defaultOpen = true }) {
   );
 }
 
+function NotificationRow({ notif, onMarkAsRead }) {
+  return (
+    <li className={`notif-item ${notif.read ? "read" : "unread"}`}>
+      <div className="notif-icon" aria-hidden>
+        {iconForNotification(notif)}
+      </div>
+
+      <div className="notif-body">
+        <div className="notif-subject-row">
+          <div className="notif-subject">{notif.subject || "—"}</div>
+          <span className="notif-channel-pill">{labelForNotification(notif)}</span>
+        </div>
+
+        {notif.message ? <div className="notif-message">{notif.message}</div> : null}
+
+        <div className="notif-meta">
+          {notif.lead_name || notif.lead_email ? (
+            <span className="notif-lead">
+              Lead: <b>{notif.lead_name || notif.lead_email}</b>
+            </span>
+          ) : null}
+          <span className="notif-time">{notif.displayTime}</span>
+        </div>
+      </div>
+
+      {!notif.read ? (
+        <button className="notif-mark-read" onClick={() => onMarkAsRead(notif)} type="button">
+          Mark as Read
+        </button>
+      ) : null}
+    </li>
+  );
+}
+
 export default function NotificationsCenter({ user }) {
   const API = (() => {
     const env = (v) => (v && v.trim()) || "";
-    const fromEnv =
-      env(process.env.REACT_APP_API_URL) ||
-      env(process.env.REACT_APP_API_BASE);
+    const fromEnv = env(process.env.REACT_APP_API_URL) || env(process.env.REACT_APP_API_BASE);
     if (fromEnv) return fromEnv.replace(/\/$/, "");
     return API_BASE;
   })();
@@ -187,10 +218,7 @@ export default function NotificationsCenter({ user }) {
     setLoading(true);
 
     try {
-      const res = await fetch(
-        `${API}/api/notifications/${encodeURIComponent(user.email)}`
-      );
-
+      const res = await fetch(`${API}/api/notifications/${encodeURIComponent(user.email)}`);
       const data = await res.json().catch(() => ({}));
       const rows = Array.isArray(data?.notifications) ? data.notifications : [];
       setNotifications(rows.map((n, idx) => normalizeNotification(n, idx)));
@@ -203,7 +231,6 @@ export default function NotificationsCenter({ user }) {
 
   useEffect(() => {
     load();
-
     const onChanged = () => load();
     window.addEventListener("notifications:changed", onChanged);
     return () => window.removeEventListener("notifications:changed", onChanged);
@@ -214,24 +241,18 @@ export default function NotificationsCenter({ user }) {
   }, [filter, query]);
 
   const markAsRead = async (notif) => {
-    setNotifications((ns) =>
-      ns.map((n) => (n._id === notif._id ? { ...n, read: true } : n))
-    );
+    setNotifications((ns) => ns.map((n) => (n._id === notif._id ? { ...n, read: true } : n)));
 
     const idParam = notif.id ?? notif._id ?? notif.uuid ?? notif._idx;
 
     try {
       await fetch(
-        `${API}/api/notifications/${encodeURIComponent(
-          user.email
-        )}/${encodeURIComponent(idParam)}/mark_read`,
+        `${API}/api/notifications/${encodeURIComponent(user.email)}/${encodeURIComponent(idParam)}/mark_read`,
         { method: "POST" }
       );
     } catch {
       // keep optimistic state
     }
-
-    ping("notifications:changed");
   };
 
   const markAllVisibleAsRead = async (items) => {
@@ -250,14 +271,7 @@ export default function NotificationsCenter({ user }) {
     const q = safeStr(query).trim().toLowerCase();
     if (q) {
       list = list.filter((n) =>
-        [
-          n.subject,
-          n.message,
-          n.lead_name,
-          n.lead_email,
-          n.channel,
-          labelForNotification(n),
-        ]
+        [n.subject, n.message, n.lead_name, n.lead_email, n.channel, labelForNotification(n)]
           .join(" ")
           .toLowerCase()
           .includes(q)
@@ -282,13 +296,15 @@ export default function NotificationsCenter({ user }) {
   }
 
   const unreadCount = notifications.filter((n) => !n.read).length;
-  const appointmentCount = notifications.filter((n) =>
-    safeStr(n.subject).toLowerCase().includes("appointment") ||
-    safeStr(n.channel).toLowerCase().includes("appointment")
+  const appointmentCount = notifications.filter(
+    (n) =>
+      safeStr(n.subject).toLowerCase().includes("appointment") ||
+      safeStr(n.channel).toLowerCase().includes("appointment")
   ).length;
-  const whatsappCount = notifications.filter((n) =>
-    safeStr(n.channel).toLowerCase().includes("whatsapp") ||
-    safeStr(n.subject).toLowerCase().includes("whatsapp")
+  const whatsappCount = notifications.filter(
+    (n) =>
+      safeStr(n.channel).toLowerCase().includes("whatsapp") ||
+      safeStr(n.subject).toLowerCase().includes("whatsapp")
   ).length;
 
   return (
@@ -296,16 +312,16 @@ export default function NotificationsCenter({ user }) {
       <div className="notif-header">
         <div className="notif-title-row">
           <h2 className="notif-title">Notifications</h2>
-          {unreadCount > 0 && (
+          {unreadCount > 0 ? (
             <span className="notif-badge" title="Unread">
               {unreadCount}
             </span>
-          )}
+          ) : null}
         </div>
 
         <p className="notif-subtitle">
-          All RetainAI activity appears here, including emails, WhatsApp activity,
-          reminders, automations, and appointment updates.
+          All RetainAI activity appears here, including emails, WhatsApp activity, reminders,
+          automations, and appointment updates.
         </p>
 
         <div className="notif-stats">
@@ -322,6 +338,7 @@ export default function NotificationsCenter({ user }) {
                 key={f}
                 className={`notif-filter-btn ${filter === f ? "active" : ""}`}
                 onClick={() => setFilter(f)}
+                type="button"
               >
                 {f.charAt(0).toUpperCase() + f.slice(1)}
               </button>
@@ -335,20 +352,17 @@ export default function NotificationsCenter({ user }) {
               onChange={(e) => setQuery(e.target.value)}
               placeholder="Search subject, lead, or message..."
             />
-            {!!visible.filter((n) => !n.read).length && (
-              <button
-                className="notif-mark-all"
-                onClick={() => markAllVisibleAsRead(visible)}
-              >
+            {visible.filter((n) => !n.read).length ? (
+              <button className="notif-mark-all" onClick={() => markAllVisibleAsRead(visible)} type="button">
                 Mark visible as read
               </button>
-            )}
+            ) : null}
           </div>
         </div>
       </div>
 
       {loading ? (
-        <div className="notif-empty">Loading notifications…</div>
+        <div className="notif-empty">Loading notifications...</div>
       ) : filtered.length === 0 ? (
         <div className="notif-empty">No notifications found.</div>
       ) : (
@@ -371,79 +385,15 @@ export default function NotificationsCenter({ user }) {
             ))}
           </Section>
 
-          {visibleCount < filtered.length && (
+          {visibleCount < filtered.length ? (
             <div className="notif-load-more-wrap">
-              <button
-                className="notif-load-more"
-                onClick={() => setVisibleCount((v) => v + PAGE_SIZE)}
-              >
+              <button className="notif-load-more" onClick={() => setVisibleCount((v) => v + PAGE_SIZE)} type="button">
                 Load More
               </button>
             </div>
-          )}
+          ) : null}
         </>
       )}
     </div>
   );
-}
-
-function NotificationRow({ notif, onMarkAsRead }) {
-  return (
-    <li className={`notif-item ${notif.read ? "read" : "unread"}`}>
-      <div className="notif-icon" aria-hidden>
-        {iconForNotification(notif)}
-      </div>
-
-      <div className="notif-body">
-        <div className="notif-subject-row">
-          <div className="notif-subject">{notif.subject || "—"}</div>
-          <span className="notif-channel-pill">
-            {labelForNotification(notif)}
-          </span>
-        </div>
-
-        {notif.message && <div className="notif-message">{notif.message}</div>}
-
-        <div className="notif-meta">
-          {(notif.lead_name || notif.lead_email) && (
-            <span className="notif-lead">
-              Lead: <b>{notif.lead_name || notif.lead_email}</b>
-            </span>
-          )}
-          <span className="notif-time">{notif.displayTime}</span>
-        </div>
-      </div>
-
-      {!notif.read && (
-        <button
-          className="notif-mark-read"
-          onClick={() => onMarkAsRead(notif)}
-        >
-          Mark as Read
-        </button>
-      )}
-    </li>
-  );
-}
-
-function iconForNotification(notif) {
-  const s = safeStr(notif.subject).toLowerCase();
-  const c = safeStr(notif.channel).toLowerCase();
-
-  if (c.includes("whatsapp") || s.includes("whatsapp")) return "💬";
-  if (c.includes("email") || s.includes("email")) return "📧";
-  if (s.includes("appointment") || s.includes("calendar")) return "📅";
-  if (s.includes("reminder")) return "🔔";
-  if (s.includes("automation")) return "⚙️";
-  return "📩";
-}
-
-function labelForNotification(notif) {
-  const c = safeStr(notif.channel).toLowerCase();
-  if (c.includes("whatsapp")) return "WhatsApp";
-  if (c.includes("email")) return "Email";
-  if (c.includes("automation")) return "Automation";
-  if (c.includes("appointment")) return "Appointment";
-  if (c.includes("reminder")) return "Reminder";
-  return "App";
 }
