@@ -11,7 +11,8 @@ export default function LeadsDashboard({
   user,
   drawerLead,
   setDrawerLead,
-  onContactedLead
+  onContactedLead,
+  onUpdateLead
 }) {
   const [search, setSearch] = useState("");
 
