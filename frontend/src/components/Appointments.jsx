@@ -1,3 +1,4 @@
+// src/components/Appointments.jsx
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import {
   FaSearch,
@@ -11,7 +12,7 @@ import {
   FaClock,
 } from "react-icons/fa";
 
-/* === THEME (aligned with Drawer / Analytics / Calendar) === */
+/* === THEME === */
 const BG = "#181a1b";
 const CARD = "#232323";
 const SOFT = "#1e2326";
@@ -237,10 +238,18 @@ function categorize(appointments) {
 
   appointments.forEach((a) => {
     const when = new Date(`${a.date}T${a.time || "00:00"}`);
-    if (a.done) return void buckets.done.push(a);
-    if (when < now) return void buckets.overdue.push(a);
-    if (isSameDay(when, now)) return void buckets.today.push(a);
-
+    if (a.done) {
+      buckets.done.push(a);
+      return;
+    }
+    if (when < now) {
+      buckets.overdue.push(a);
+      return;
+    }
+    if (isSameDay(when, now)) {
+      buckets.today.push(a);
+      return;
+    }
     const diff = Math.ceil((startOfDay(when) - startOfDay(now)) / 86400000);
     if (diff <= 7) buckets.next7.push(a);
     else buckets.later.push(a);
@@ -256,12 +265,8 @@ function monthLabel(dateStr) {
 }
 
 function statusMeta(appt) {
-  if (appt.done) {
-    return { label: "Done", color: GREEN };
-  }
-  if (appt.isOverdue) {
-    return { label: "Overdue", color: RED };
-  }
+  if (appt.done) return { label: "Done", color: GREEN };
+  if (appt.isOverdue) return { label: "Overdue", color: RED };
   return { label: "Scheduled", color: GOLD };
 }
 
@@ -275,7 +280,6 @@ export default function Appointments({ user, leads = [], setLeads }) {
   const [doneOverride, setDoneOverride] = useState({});
   const [timeOverride, setTimeOverride] = useState({});
   const [slotMap, setSlotMap] = useState({});
-
   const slotMapRef = useRef({});
 
   const [search, setSearch] = useState("");
@@ -293,7 +297,6 @@ export default function Appointments({ user, leads = [], setLeads }) {
 
   const userEmail = user?.org_id || user?.email || "";
 
-  /* hydrate per-user state on mount / user change */
   useEffect(() => {
     const K = LS_KEYS(userEmail);
     const loadedHidden = loadJSON(K.hidden, {});
@@ -308,7 +311,6 @@ export default function Appointments({ user, leads = [], setLeads }) {
     slotMapRef.current = loadedSlots;
   }, [userEmail]);
 
-  /* persist whenever they change */
   useEffect(() => {
     saveJSON(LS_KEYS(userEmail).hidden, hiddenIds);
   }, [hiddenIds, userEmail]);
@@ -412,9 +414,7 @@ export default function Appointments({ user, leads = [], setLeads }) {
 
   const buckets = useMemo(() => categorize(filtered), [filtered]);
 
-  /* ===== API helpers ===== */
   const withSeconds = (date, time) => `${date}T${time || "00:00"}:00`;
-
   const serverIdOf = (appt) => getRealIdField(appt?._backend) ?? null;
   const isBackend = (appt) => Boolean(appt._backend);
 
@@ -496,7 +496,9 @@ export default function Appointments({ user, leads = [], setLeads }) {
       };
 
       const res = await fetch(
-        `${API_BASE}/api/appointments/${encodeURIComponent(user.email)}/${encodeURIComponent(String(sid))}`,
+        `${API_BASE}/api/appointments/${encodeURIComponent(user.email)}/${encodeURIComponent(
+          String(sid)
+        )}`,
         {
           method: "PUT",
           credentials: "include",
@@ -516,7 +518,9 @@ export default function Appointments({ user, leads = [], setLeads }) {
 
     try {
       const res = await fetch(
-        `${API_BASE}/api/appointments/${encodeURIComponent(user.email)}/${encodeURIComponent(String(sid))}`,
+        `${API_BASE}/api/appointments/${encodeURIComponent(user.email)}/${encodeURIComponent(
+          String(sid)
+        )}`,
         {
           method: "DELETE",
           credentials: "include",
@@ -542,7 +546,7 @@ export default function Appointments({ user, leads = [], setLeads }) {
         body: JSON.stringify({ leads: nextLeads }),
       });
     } catch {
-      // keep optimistic UI
+      // optimistic UI stays
     }
   }
 
@@ -555,7 +559,6 @@ export default function Appointments({ user, leads = [], setLeads }) {
     });
   }
 
-  /* ===== Mutations ===== */
   async function toggleDone(appt) {
     if (isBackend(appt)) {
       const newDone = !appt.done;
@@ -698,12 +701,13 @@ export default function Appointments({ user, leads = [], setLeads }) {
 
         ping("appointments:changed");
       } else if (editing) {
-        updateLocalLeadAppointments((prev) =>
-          prev.map((l) => {
+        updateLocalLeadAppointments((prev) => {
+          return prev.map((l) => {
             if (String(l.id) !== String(leadId)) return l;
 
             const filtered = (l.appointments || []).filter((x) => {
-              const localKey = x._localKey || `${l.id}|${x.title}|${x.date}|${x.time || ""}`;
+              const localKey =
+                x._localKey || `${l.id}|${x.title}|${x.date}|${x.time || ""}`;
               return String(localKey) !== String(editing._localKey);
             });
 
@@ -720,7 +724,7 @@ export default function Appointments({ user, leads = [], setLeads }) {
                 },
               ],
             };
-          })
+          });
         });
 
         ping("appointments:changed");
@@ -757,7 +761,6 @@ export default function Appointments({ user, leads = [], setLeads }) {
     }
   }
 
-  /* ===== Stats ===== */
   const stat = {
     overdue: buckets.overdue.length,
     today: buckets.today.length,
@@ -779,7 +782,6 @@ export default function Appointments({ user, leads = [], setLeads }) {
         boxSizing: "border-box",
       }}
     >
-      {/* Header */}
       <div
         style={{
           display: "grid",
@@ -830,7 +832,6 @@ export default function Appointments({ user, leads = [], setLeads }) {
         </button>
       </div>
 
-      {/* Top controls */}
       <div
         style={{
           display: "flex",
@@ -904,7 +905,6 @@ export default function Appointments({ user, leads = [], setLeads }) {
         </div>
       </div>
 
-      {/* Stats */}
       <div
         style={{
           display: "grid",
@@ -920,7 +920,6 @@ export default function Appointments({ user, leads = [], setLeads }) {
         <StatCard icon={<FaCheckCircle />} label="Completed" value={stat.done} color={GREEN} />
       </div>
 
-      {/* Sections */}
       {!showCompleted ? (
         <>
           <Section
@@ -1005,7 +1004,6 @@ export default function Appointments({ user, leads = [], setLeads }) {
         />
       )}
 
-      {/* Modal */}
       {showModal && (
         <div
           style={{
