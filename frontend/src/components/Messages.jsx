@@ -18,11 +18,11 @@ const C = {
   in: "#202c33",
   out: "#005c4b",
   soft: "#1e2326",
+  softer: "#15181a",
 };
 const PANEL_H = "72vh";
 
 /** ===== HELPERS ===== */
-// Strip AI/system headers, template echo, and any "it's/it’s/this is <name> from|at <biz> —|–|-|:" intro anywhere
 function cleanAIText(t) {
   let s = String(t || "");
 
@@ -52,7 +52,6 @@ function cleanAIText(t) {
   return s.trim();
 }
 
-// minimal HTML → text
 const htmlToText = (s) => {
   if (!s) return "";
   let t = String(s);
@@ -78,7 +77,9 @@ const fmtNA = (num) => {
     : num || "";
 };
 
-// lang helpers
+const FIRSTNAME = (s = "") => String(s).trim().split(/\s+/)[0] || "";
+const LOWER = (s = "") => String(s).toLowerCase();
+
 const toApiLang = (ui) => String(ui || "").replace("-", "_");
 const normApi = (code) => {
   if (!code) return "en";
@@ -92,10 +93,8 @@ const toUiLang = (api) => {
   return a.startsWith("en") ? "en" : api;
 };
 
-/* simple cross-tab ping */
 const ping = (name) => window.dispatchEvent(new Event(name));
 
-/** ===== light NLP for appointment text ===== */
 function pad2(n) {
   return String(n).padStart(2, "0");
 }
@@ -119,6 +118,7 @@ function thisOrNextDow(from, targetDow) {
 function toISODate(d) {
   return `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}`;
 }
+
 function parseApptFromText(text) {
   if (!text) return null;
   const t = text.toLowerCase();
@@ -148,7 +148,16 @@ function parseApptFromText(text) {
     }
   }
 
-  const dows = { sunday: 0, monday: 1, tuesday: 2, wednesday: 3, thursday: 4, friday: 5, saturday: 6 };
+  const dows = {
+    sunday: 0,
+    monday: 1,
+    tuesday: 2,
+    wednesday: 3,
+    thursday: 4,
+    friday: 5,
+    saturday: 6,
+  };
+
   let targetDate = null;
   const now = new Date();
 
@@ -174,8 +183,7 @@ function parseApptFromText(text) {
     }
   }
 
-  if (!targetDate) return null;
-  if (hours == null) return null;
+  if (!targetDate || hours == null) return null;
 
   return {
     date: toISODate(targetDate),
@@ -183,10 +191,15 @@ function parseApptFromText(text) {
   };
 }
 
-/** ===== Suggestion persistence ===== */
+/** ===== LOCAL PERSISTENCE ===== */
 const SUG_KEYS = (email) => ({
   consumed: `msg_suggestions_consumed_${email || "anon"}`,
 });
+const AUTO_LOG_KEY = (userEmail, leadId) =>
+  `auto_log_${(userEmail || "anon").toLowerCase()}_${String(leadId || "lead")}`;
+const TEMPLATE_RENDER_KEY = (userEmail, leadId) =>
+  `wa_template_render_cache_${(userEmail || "anon").toLowerCase()}_${String(leadId || "lead")}`;
+
 const loadJSON = (k, fallback) => {
   try {
     const v = localStorage.getItem(k);
@@ -200,15 +213,11 @@ const saveJSON = (k, obj) => {
     localStorage.setItem(k, JSON.stringify(obj || {}));
   } catch {}
 };
-const sigForSuggestion = (leadId, sug) => `${String(leadId || "lead")}|${sug?.date || ""}|${sug?.time || ""}`;
 
-/** ===== Automation log persistence ===== */
-const AUTO_LOG_KEY = (userEmail, leadId) =>
-  `auto_log_${(userEmail || "anon").toLowerCase()}_${String(leadId || "lead")}`;
+const sigForSuggestion = (leadId, sug) =>
+  `${String(leadId || "lead")}|${sug?.date || ""}|${sug?.time || ""}`;
 
-/** ===== Param inference for ANY template ===== */
-const FIRSTNAME = (s = "") => String(s).trim().split(/\s+/)[0] || "";
-const LOWER = (s = "") => String(s).toLowerCase();
+/** ===== TEMPLATE PARSING / RENDERING ===== */
 const between = (txt, startIdx, endIdx, span = 32) => {
   const left = Math.max(0, startIdx - span);
   const right = Math.min(txt.length, endIdx + span);
@@ -280,8 +289,8 @@ function inferParamKindsFromBody(bodyText, count) {
         i === 1 ? "user_name" :
         i === 2 ? "business" :
         i === 3 ? "details" :
-        i === 4 ? "location" :
-        i === 5 ? "email" :
+        i === 4 ? "time" :
+        i === 5 ? "date" :
         "details";
     }
   }
@@ -317,21 +326,61 @@ function valueForKind(kind, { user, lead, input, suggestion }) {
   }
 }
 
-function labelForKind(kind, i) {
-  const base = `Parameter ${i + 1}`;
+function friendlyLabelForKind(kind, i) {
   switch (kind) {
-    case "lead_name": return `Lead name ({{${i + 1}}})`;
-    case "user_name": return `Your name ({{${i + 1}}})`;
-    case "business": return `Business ({{${i + 1}}})`;
-    case "details": return `Details / message ({{${i + 1}}})`;
-    case "date": return `Date ({{${i + 1}}})`;
-    case "time": return `Time ({{${i + 1}}})`;
-    case "location": return `Location ({{${i + 1}}})`;
-    case "service": return `Service ({{${i + 1}}})`;
-    case "price": return `Price ({{${i + 1}}})`;
-    case "email": return `Email ({{${i + 1}}})`;
-    case "phone": return `Phone ({{${i + 1}}})`;
-    default: return `${base} ({{${i + 1}}})`;
+    case "lead_name":
+      return "Lead first name";
+    case "user_name":
+      return "Your name";
+    case "business":
+      return "Business name";
+    case "details":
+      return "Message details";
+    case "date":
+      return "Date";
+    case "time":
+      return "Time";
+    case "location":
+      return "Location";
+    case "service":
+      return "Service";
+    case "price":
+      return "Price";
+    case "email":
+      return "Email";
+    case "phone":
+      return "Phone";
+    default:
+      return `Field ${i + 1}`;
+  }
+}
+
+function fieldHintForKind(kind) {
+  switch (kind) {
+    case "lead_name":
+      return "John";
+    case "user_name":
+      return "Mateo";
+    case "business":
+      return "Makijo Nails";
+    case "details":
+      return "appointment confirmed for tomorrow at 7 PM";
+    case "date":
+      return "2026-05-24";
+    case "time":
+      return "7:00 PM";
+    case "location":
+      return "123 Main St";
+    case "service":
+      return "Nail fill";
+    case "price":
+      return "$75";
+    case "email":
+      return "lead@email.com";
+    case "phone":
+      return "(226) 201-4738";
+    default:
+      return "Enter value";
   }
 }
 
@@ -342,6 +391,138 @@ function renderTemplatePreview(bodyText, values = []) {
     out = out.replace(re, v || `{{${idx + 1}}}`);
   });
   return out;
+}
+
+function parseTemplateEchoText(text) {
+  const raw = String(text || "").trim();
+  if (!raw) return null;
+
+  if (/^\[template:[^\]]+\]/i.test(raw)) {
+    return { kind: "template_echo", text: "" };
+  }
+
+  const textField = raw.match(/['"]text['"]\s*:\s*['"]([^'"]+)['"]/i);
+  if (textField && /^\s*\{/.test(raw)) {
+    return { kind: "payload_echo", text: textField[1] };
+  }
+
+  if (/^\s*\{.*payload.*text.*\}\s*$/i.test(raw)) {
+    return { kind: "payload_echo", text: "" };
+  }
+
+  return null;
+}
+
+function pushTemplateRenderCache(userEmail, leadId, renderedText, meta = {}) {
+  const key = TEMPLATE_RENDER_KEY(userEmail, leadId);
+  const existing = loadJSON(key, []);
+  const next = [
+    ...existing,
+    {
+      id: `${Date.now()}_${Math.random().toString(16).slice(2)}`,
+      text: renderedText,
+      template_name: meta.template_name || "",
+      language_code: meta.language_code || "",
+      created_at: new Date().toISOString(),
+      used: false,
+    },
+  ].slice(-12);
+  saveJSON(key, next);
+}
+
+function consumeTemplateRenderCache(userEmail, leadId, countNeeded) {
+  const key = TEMPLATE_RENDER_KEY(userEmail, leadId);
+  const existing = loadJSON(key, []);
+  if (!Array.isArray(existing) || !existing.length) return { consumed: [], nextCache: existing || [] };
+
+  const consumed = [];
+  const nextCache = existing.map((item) => {
+    if (!item.used && consumed.length < countNeeded) {
+      consumed.push(item.text || "");
+      return { ...item, used: true };
+    }
+    return item;
+  });
+
+  saveJSON(key, nextCache);
+  return { consumed, nextCache };
+}
+
+function normalizeThreadMessages(rawMessages, userEmail, leadId) {
+  const list = Array.isArray(rawMessages) ? rawMessages.map((m) => ({ ...m })) : [];
+  const echoIndexes = [];
+
+  list.forEach((m, idx) => {
+    if (m?.from !== "user") return;
+    const parsed = parseTemplateEchoText(m?.text);
+    if (parsed) echoIndexes.push(idx);
+  });
+
+  if (!echoIndexes.length) return list;
+
+  const { consumed } = consumeTemplateRenderCache(userEmail, leadId, echoIndexes.length);
+
+  echoIndexes.forEach((idx, i) => {
+    const rendered = consumed[i];
+    const original = String(list[idx]?.text || "");
+    const parsed = parseTemplateEchoText(original);
+
+    if (rendered && rendered.trim()) {
+      list[idx] = {
+        ...list[idx],
+        text: rendered,
+        _rendered_template: true,
+      };
+    } else if (parsed?.text) {
+      list[idx] = {
+        ...list[idx],
+        text: parsed.text,
+        _rendered_template: true,
+      };
+    }
+  });
+
+  return list;
+}
+
+function getChatPreview(thread) {
+  if (!Array.isArray(thread) || !thread.length) return "No messages yet";
+  const last = thread[thread.length - 1];
+  const txt = cleanAIText(last?.text || "");
+  return txt || "No messages yet";
+}
+
+function buildConversationHistory(thread, maxItems = 8) {
+  return (Array.isArray(thread) ? thread : [])
+    .slice(-maxItems)
+    .map((m) => ({
+      role: m?.from === "user" ? "business" : "lead",
+      text: cleanAIText(m?.text || ""),
+      time: m?.time || "",
+    }))
+    .filter((m) => m.text);
+}
+
+function quickSuggestionFromInbound(text, leadName) {
+  const inbound = String(text || "").trim();
+  if (!inbound) return "";
+
+  const name = FIRSTNAME(leadName) || "there";
+  const t = inbound.toLowerCase();
+
+  if (/(resched|reschedule|move|another time|tomorrow|next week|what time)/i.test(t)) {
+    return `Hi ${name}! No problem at all. I can help with that. What time works best for you?`;
+  }
+  if (/(confirm|confirmed|okay sounds good|sounds good|works for me|perfect)/i.test(t)) {
+    return `Hi ${name}! Perfect — you're all set. Let me know if you need anything before your appointment.`;
+  }
+  if (/(price|cost|how much|quote)/i.test(t)) {
+    return `Hi ${name}! I’d be happy to help with pricing. Tell me what service you’re looking for and I’ll send the details over.`;
+  }
+  if (/(thanks|thank you)/i.test(t)) {
+    return `You’re very welcome, ${name}!`;
+  }
+  return `Hi ${name}! Thanks for the message.`;
 }
 
 /** ===== COMPONENT ===== */
@@ -391,6 +572,7 @@ export default function Messages({ user, leads = [], defaultTemplate = "", langu
   /** --- thread state --- */
   const [thread, setThread] = useState([]);
   const [loading, setLoading] = useState(false);
+  const [polling, setPolling] = useState(false);
   const chatRef = useRef(null);
   const pollTimer = useRef(null);
 
@@ -420,6 +602,7 @@ export default function Messages({ user, leads = [], defaultTemplate = "", langu
     let stop = false;
 
     const tick = async () => {
+      setPolling(true);
       try {
         const r = await fetch(
           `${API}/api/whatsapp/messages?user_email=${encodeURIComponent(user.email)}&lead_id=${encodeURIComponent(
@@ -427,8 +610,12 @@ export default function Messages({ user, leads = [], defaultTemplate = "", langu
           )}`
         );
         const j = await r.json();
-        if (!stop) setThread(Array.isArray(j?.messages) ? j.messages : []);
-      } catch {}
+        const normalized = normalizeThreadMessages(j?.messages, user.email, lead.id);
+        if (!stop) setThread(Array.isArray(normalized) ? normalized : []);
+      } catch {
+      } finally {
+        if (!stop) setPolling(false);
+      }
       if (!stop) pollTimer.current = setTimeout(tick, 6000);
     };
 
@@ -470,7 +657,6 @@ export default function Messages({ user, leads = [], defaultTemplate = "", langu
     })();
   }, [API]);
 
-  // fetch template list
   useEffect(() => {
     if (!API) return;
     (async () => {
@@ -633,15 +819,6 @@ export default function Messages({ user, leads = [], defaultTemplate = "", langu
     })();
   }, [API, templateName, templateLangUI]);
 
-  const autofillParams = () => {
-    if (typeof expectedParams !== "number" || expectedParams <= 0) return;
-    const values = Array.from({ length: expectedParams }, (_, idx) => {
-      const kind = paramKinds?.[idx];
-      return valueForKind(kind, { user, lead, input, suggestion }) || "";
-    });
-    setParamValues(values);
-  };
-
   /** --- composer --- */
   const [input, setInput] = useState("");
   const [banner, setBanner] = useState(null);
@@ -654,6 +831,8 @@ export default function Messages({ user, leads = [], defaultTemplate = "", langu
     }
     return "";
   }, [thread]);
+
+  const conversationHistory = useMemo(() => buildConversationHistory(thread, 8), [thread]);
 
   const canSendBase = Boolean(API && user?.email && lead?.id && toE164);
 
@@ -686,6 +865,15 @@ export default function Messages({ user, leads = [], defaultTemplate = "", langu
     const next = { ...consumedMap, [sig]: true };
     setConsumedMap(next);
     saveJSON(key, next);
+  };
+
+  const autofillParams = () => {
+    if (typeof expectedParams !== "number" || expectedParams <= 0) return;
+    const values = Array.from({ length: expectedParams }, (_, idx) => {
+      const kind = paramKinds?.[idx];
+      return valueForKind(kind, { user, lead, input, suggestion }) || "";
+    });
+    setParamValues(values);
   };
 
   const onConfirmSuggestion = async () => {
@@ -732,7 +920,8 @@ export default function Messages({ user, leads = [], defaultTemplate = "", langu
             )}`
           );
           const jj = await r.json();
-          setThread(Array.isArray(jj?.messages) ? jj.messages : []);
+          const normalized = normalizeThreadMessages(jj?.messages, user.email, lead.id);
+          setThread(Array.isArray(normalized) ? normalized : []);
         } catch {}
       }, 250);
     } catch (e) {
@@ -781,11 +970,19 @@ export default function Messages({ user, leads = [], defaultTemplate = "", langu
           const list = (paramValues || []).map((v) => String(v || "").trim()).slice(0, expectedParams);
           const missing = list.filter((v) => !v).length;
           if (missing) {
-            setBanner(`This template needs ${expectedParams} parameters — ${missing} missing.`);
+            setBanner(`This template needs ${expectedParams} field${expectedParams > 1 ? "s" : ""}. Please fill all of them.`);
             setLoading(false);
             return;
           }
           payload.template_params = list;
+        }
+
+        const rendered = renderTemplatePreview(templateBodyText, paramValues).trim();
+        if (rendered) {
+          pushTemplateRenderCache(user.email, lead.id, rendered, {
+            template_name: templateName,
+            language_code: normApi(toApiLang(templateLangUI)),
+          });
         }
       }
 
@@ -801,7 +998,7 @@ export default function Messages({ user, leads = [], defaultTemplate = "", langu
         return;
       }
 
-      setBanner(data.mode === "template" ? `Sent via template (${data.usedLanguage || "?"}).` : null);
+      setBanner(data.mode === "template" ? `Template sent successfully.` : null);
       setInput("");
 
       if (typeof expectedParams === "number" && expectedParams > 0) {
@@ -816,7 +1013,8 @@ export default function Messages({ user, leads = [], defaultTemplate = "", langu
             )}`
           );
           const j = await r.json();
-          setThread(Array.isArray(j?.messages) ? j.messages : []);
+          const normalized = normalizeThreadMessages(j?.messages, user.email, lead.id);
+          setThread(Array.isArray(normalized) ? normalized : []);
         } catch {}
       }, 250);
     } catch (e) {
@@ -833,27 +1031,39 @@ export default function Messages({ user, leads = [], defaultTemplate = "", langu
   const onDraftAI = async () => {
     if (!API || !lead) return;
     setBanner(null);
+
+    const fallback = quickSuggestionFromInbound(lastInbound, lead?.name);
+
     try {
       const body = {
-        lead: { name: lead.name || "", tags: lead.tags || [], notes: lead.notes || "" },
+        lead: {
+          name: lead.name || "",
+          email: lead.email || "",
+          phone: lead.phone || lead.whatsapp || "",
+          tags: lead.tags || [],
+          notes: lead.notes || "",
+        },
         last_message: lastInbound || "",
+        conversation_history: conversationHistory,
         user_business: user?.business || user?.businessType || "business",
         user_name: user?.name || "",
       };
+
       const r = await fetch(`${API}/api/generate-message`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(body),
       });
+
       const j = await r.json();
       if (j?.reply) {
         const draft = cleanAIText(j.reply);
         setInput((prev) => (prev?.trim() ? prev.trim() + "\n\n" + draft : draft));
       } else {
-        setBanner(j?.error || "AI couldn’t generate a reply.");
+        setInput((prev) => (prev?.trim() ? prev.trim() + "\n\n" + fallback : fallback));
       }
-    } catch (e) {
-      setBanner(e.message || "AI draft failed.");
+    } catch {
+      setInput((prev) => (prev?.trim() ? prev.trim() + "\n\n" + fallback : fallback));
     }
   };
 
@@ -898,42 +1108,6 @@ export default function Messages({ user, leads = [], defaultTemplate = "", langu
     return () => window.removeEventListener("app:message-sent", handler);
   }, [lead, user?.email]);
 
-  /** --- Detect WA template echoes from background engine --- */
-  useEffect(() => {
-    if (!user?.email || !lead?.id) return;
-
-    const detected = thread
-      .filter((m) => m?.from === "user" && typeof m?.text === "string" && /^\[template:[^\/]+\/[^\]]+\]/i.test(m.text))
-      .map((m) => {
-        const text = String(m.text || "");
-        return {
-          id: `${m.time || ""}|${text.slice(0, 40)}`,
-          channel: "whatsapp",
-          status: "ok",
-          to: lead.email || lead.whatsapp || "",
-          text,
-          subject: "",
-          html: "",
-          created_at: m.time || new Date().toISOString(),
-          _detected: true,
-        };
-      });
-
-    if (!detected.length) return;
-
-    const key = AUTO_LOG_KEY(user.email, lead.id);
-    setAutoLog((prev) => {
-      const seen = new Set(prev.map((x) => `${x.created_at}|${(x.text || x.subject || x.html || "").slice(0, 40)}`));
-      const add = detected.filter((d) => !seen.has(`${d.created_at}|${(d.text || "").slice(0, 40)}`));
-      if (!add.length) return prev;
-      const next = [...prev, ...add];
-      try {
-        localStorage.setItem(key, JSON.stringify(next));
-      } catch {}
-      return next;
-    });
-  }, [thread, user?.email, lead?.id, lead?.email, lead?.whatsapp]);
-
   /** --- UI when no leads --- */
   if (!Array.isArray(leads) || !leads.length) {
     return (
@@ -944,9 +1118,9 @@ export default function Messages({ user, leads = [], defaultTemplate = "", langu
     );
   }
 
-  const paramLabel = (i) => labelForKind(paramKinds?.[i], i);
   const hasTemplateParams = typeof expectedParams === "number" && expectedParams > 0;
   const templatePreview = renderTemplatePreview(templateBodyText, paramValues);
+  const lastPreview = getChatPreview(thread);
 
   return (
     <div style={{ width: "100%", minHeight: "100vh", background: C.bg }}>
@@ -985,7 +1159,7 @@ export default function Messages({ user, leads = [], defaultTemplate = "", langu
             <input
               value={q}
               onChange={(e) => setQ(e.target.value)}
-              placeholder="Search…"
+              placeholder="Search..."
               style={{
                 width: "100%",
                 background: C.bg,
@@ -1002,6 +1176,10 @@ export default function Messages({ user, leads = [], defaultTemplate = "", langu
           <div style={{ overflowY: "auto", flex: 1 }}>
             {filteredLeads.map((ld) => {
               const active = String(ld.id) === String(activeLeadId);
+              const preview =
+                String(ld.id) === String(activeLeadId)
+                  ? lastPreview
+                  : "Open chat";
               return (
                 <button
                   key={ld.id}
@@ -1036,7 +1214,7 @@ export default function Messages({ user, leads = [], defaultTemplate = "", langu
                   >
                     {initials(ld.name, ld.email)}
                   </div>
-                  <div style={{ overflow: "hidden" }}>
+                  <div style={{ overflow: "hidden", minWidth: 0 }}>
                     <div
                       style={{
                         fontWeight: 700,
@@ -1048,6 +1226,18 @@ export default function Messages({ user, leads = [], defaultTemplate = "", langu
                       {ld.name || ld.email}
                     </div>
                     <div style={{ fontSize: 12, color: C.sub }}>{fmtNA(ld.phone || ld.whatsapp)}</div>
+                    <div
+                      style={{
+                        fontSize: 12,
+                        color: "#7f8a92",
+                        marginTop: 3,
+                        whiteSpace: "nowrap",
+                        overflow: "hidden",
+                        textOverflow: "ellipsis",
+                      }}
+                    >
+                      {preview}
+                    </div>
                   </div>
                 </button>
               );
@@ -1103,6 +1293,7 @@ export default function Messages({ user, leads = [], defaultTemplate = "", langu
             >
               {initials(lead?.name, lead?.email)}
             </div>
+
             <div style={{ minWidth: 0 }}>
               <div style={{ fontWeight: 800 }}>{lead?.name || lead?.email}</div>
               <div style={{ fontSize: 12, color: C.sub }}>{fmtNA(lead?.phone || lead?.whatsapp)}</div>
@@ -1130,9 +1321,9 @@ export default function Messages({ user, leads = [], defaultTemplate = "", langu
                 color={gate.inside24h ? C.wa : C.accent}
                 text={
                   gate.inside24h
-                    ? "Inside 24h session"
+                    ? polling ? "Inside 24h · syncing" : "Inside 24h session"
                     : gate.templateApproved
-                    ? "Outside 24h (template OK)"
+                    ? "Outside 24h · template ready"
                     : `Outside 24h (${gate.templateStatus})`
                 }
               />
@@ -1152,9 +1343,37 @@ export default function Messages({ user, leads = [], defaultTemplate = "", langu
                 background: C.panel,
               }}
             >
-              <div style={{ width: "100%", display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
-                <span style={{ color: C.sub, fontSize: 12, fontWeight: 700 }}>Approved template required</span>
+              <div style={{ width: "100%", display: "grid", gridTemplateColumns: "1fr auto", gap: 10, alignItems: "center" }}>
+                <div style={{ minWidth: 0 }}>
+                  <div style={{ color: C.text, fontSize: 13, fontWeight: 800 }}>
+                    Send approved template
+                  </div>
+                  <div style={{ color: C.sub, fontSize: 12, marginTop: 3 }}>
+                    Required outside the 24-hour WhatsApp session.
+                  </div>
+                </div>
 
+                <div style={{ display: "flex", gap: 8 }}>
+                  <button
+                    onClick={autofillParams}
+                    style={btn("ghost")}
+                    title="Autofill common fields"
+                    disabled={!hasTemplateParams}
+                  >
+                    Autofill
+                  </button>
+                  <button
+                    onClick={() => setParamValues(Array.from({ length: expectedParams || 0 }, () => ""))}
+                    style={btn("outline")}
+                    title="Clear fields"
+                    disabled={!hasTemplateParams}
+                  >
+                    Clear
+                  </button>
+                </div>
+              </div>
+
+              <div style={{ width: "100%" }}>
                 <select
                   value={`${templateName}|${templateLangUI}`}
                   onChange={(e) => {
@@ -1164,18 +1383,20 @@ export default function Messages({ user, leads = [], defaultTemplate = "", langu
                     setTimeout(() => refreshWindow(true), 0);
                   }}
                   style={{
+                    width: "100%",
                     background: C.bg,
                     color: C.text,
                     border: `1px solid ${C.border}`,
                     borderRadius: 10,
-                    padding: "8px 10px",
+                    padding: "10px 12px",
                     fontSize: 13,
-                    minWidth: 240,
                   }}
                   disabled={templatesLoading}
                 >
                   {!templates.find((t) => t.name === templateName && t.languageUI === templateLangUI) && templateName && (
-                    <option value={`${templateName}|${templateLangUI}`}>{templateName} ({templateLangUI})</option>
+                    <option value={`${templateName}|${templateLangUI}`}>
+                      {templateName} ({templateLangUI})
+                    </option>
                   )}
                   {templates.map((t) => (
                     <option key={`${t.name}-${t.languageUI}`} value={`${t.name}|${t.languageUI}`}>
@@ -1183,42 +1404,10 @@ export default function Messages({ user, leads = [], defaultTemplate = "", langu
                     </option>
                   ))}
                 </select>
-
-                <div style={{ marginLeft: "auto", display: "flex", gap: 8 }}>
-                  <button onClick={autofillParams} style={btn("ghost")} title="Autofill common fields" disabled={!hasTemplateParams}>
-                    Autofill
-                  </button>
-                  <button
-                    onClick={() => setParamValues(Array.from({ length: expectedParams || 0 }, () => ""))}
-                    style={btn("outline")}
-                    title="Clear params"
-                    disabled={!hasTemplateParams}
-                  >
-                    Clear
-                  </button>
-                </div>
-              </div>
-
-              <div
-                style={{
-                  width: "100%",
-                  background: C.soft,
-                  border: `1px solid ${C.border}`,
-                  borderRadius: 10,
-                  padding: "10px 12px",
-                  marginTop: 4,
-                }}
-              >
-                <div style={{ color: C.text, fontSize: 13, fontWeight: 800, marginBottom: 4 }}>
-                  How sending works outside 24 hours
-                </div>
-                <div style={{ color: C.sub, fontSize: 12, lineHeight: 1.4 }}>
-                  Pick an approved template, fill in any required placeholders below, then send. The message box at the bottom is optional and only helps with autofill or notes in your preview.
-                </div>
               </div>
 
               {templatesLoading && (
-                <div style={{ width: "100%", color: C.sub, fontSize: 12 }}>Loading templates…</div>
+                <div style={{ width: "100%", color: C.sub, fontSize: 12 }}>Loading templates...</div>
               )}
 
               {!!templatesError && (
@@ -1227,18 +1416,18 @@ export default function Messages({ user, leads = [], defaultTemplate = "", langu
 
               {!templatesLoading && !templates.length && (
                 <div style={{ width: "100%", color: C.sub, fontSize: 12 }}>
-                  No templates available yet. Create and approve a WhatsApp template in Meta first.
+                  No templates available yet. Create and approve one in Meta first.
                 </div>
               )}
 
               {!gate.templateApproved && templateName && (
                 <div style={{ width: "100%", color: C.danger, fontSize: 12, fontWeight: 700 }}>
-                  This selected template is not approved right now for sending outside the 24-hour window.
+                  This template is not approved for sending right now.
                 </div>
               )}
 
               {templateInfoLoading && (
-                <div style={{ width: "100%", color: C.sub, fontSize: 12 }}>Loading template fields…</div>
+                <div style={{ width: "100%", color: C.sub, fontSize: 12 }}>Loading template details...</div>
               )}
 
               {!!templateInfoError && (
@@ -1253,11 +1442,13 @@ export default function Messages({ user, leads = [], defaultTemplate = "", langu
                     border: `1px solid ${C.border}`,
                     borderRadius: 10,
                     padding: "10px 12px",
-                    marginTop: 4,
+                    marginTop: 2,
                   }}
                 >
-                  <div style={{ color: C.sub, fontSize: 11, marginBottom: 6, fontWeight: 700 }}>Template body</div>
-                  <div style={{ color: C.text, fontSize: 13, lineHeight: 1.4, whiteSpace: "pre-wrap" }}>
+                  <div style={{ color: C.sub, fontSize: 11, marginBottom: 6, fontWeight: 700 }}>
+                    Template message
+                  </div>
+                  <div style={{ color: C.text, fontSize: 13, lineHeight: 1.45, whiteSpace: "pre-wrap" }}>
                     {templateBodyText}
                   </div>
                 </div>
@@ -1266,21 +1457,23 @@ export default function Messages({ user, leads = [], defaultTemplate = "", langu
               {hasTemplateParams && (
                 <>
                   <div style={{ width: "100%", color: C.text, fontSize: 13, fontWeight: 800, marginTop: 4 }}>
-                    Fill in the template placeholders
+                    Fill the required fields
                   </div>
 
                   <div
                     style={{
                       display: "grid",
-                      gridTemplateColumns: "repeat(auto-fit,minmax(230px,1fr))",
+                      gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))",
                       gap: 8,
                       width: "100%",
-                      marginTop: 4,
+                      marginTop: 2,
                     }}
                   >
                     {Array.from({ length: expectedParams }).map((_, i) => (
                       <div key={i} style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-                        <label style={{ fontSize: 12, color: C.sub, fontWeight: 700 }}>{paramLabel(i)}</label>
+                        <label style={{ fontSize: 12, color: C.sub, fontWeight: 700 }}>
+                          {friendlyLabelForKind(paramKinds?.[i], i)}
+                        </label>
                         <input
                           value={paramValues?.[i] ?? ""}
                           onChange={(e) => {
@@ -1291,7 +1484,7 @@ export default function Messages({ user, leads = [], defaultTemplate = "", langu
                               return next;
                             });
                           }}
-                          placeholder={templateExample?.[i] ?? `value for {{${i + 1}}}`}
+                          placeholder={templateExample?.[i] ?? fieldHintForKind(paramKinds?.[i])}
                           style={{
                             background: C.bg,
                             color: C.text,
@@ -1299,6 +1492,7 @@ export default function Messages({ user, leads = [], defaultTemplate = "", langu
                             borderRadius: 10,
                             padding: "10px 12px",
                             fontSize: 13,
+                            outline: "none",
                           }}
                         />
                       </div>
@@ -1309,15 +1503,17 @@ export default function Messages({ user, leads = [], defaultTemplate = "", langu
                     <div
                       style={{
                         width: "100%",
-                        background: "#15181a",
+                        background: C.softer,
                         border: `1px solid ${C.border}`,
                         borderRadius: 10,
                         padding: "10px 12px",
                         marginTop: 4,
                       }}
                     >
-                      <div style={{ color: C.sub, fontSize: 11, marginBottom: 6, fontWeight: 700 }}>Live preview</div>
-                      <div style={{ color: C.text, fontSize: 13, lineHeight: 1.4, whiteSpace: "pre-wrap" }}>
+                      <div style={{ color: C.sub, fontSize: 11, marginBottom: 6, fontWeight: 700 }}>
+                        What the lead will receive
+                      </div>
+                      <div style={{ color: C.text, fontSize: 13, lineHeight: 1.45, whiteSpace: "pre-wrap" }}>
                         {templatePreview}
                       </div>
                     </div>
@@ -1327,7 +1523,7 @@ export default function Messages({ user, leads = [], defaultTemplate = "", langu
 
               {!templateInfoLoading && !hasTemplateParams && !!templateName && !!templateBodyText && (
                 <div style={{ width: "100%", color: C.sub, fontSize: 12 }}>
-                  This template does not appear to require any body placeholders.
+                  This template does not need extra fields.
                 </div>
               )}
             </div>
@@ -1339,7 +1535,7 @@ export default function Messages({ user, leads = [], defaultTemplate = "", langu
               style={{
                 padding: "8px 12px",
                 borderBottom: `1px solid ${C.border}`,
-                background: "#1e2326",
+                background: C.soft,
                 maxHeight: 160,
                 overflowY: "auto",
               }}
@@ -1386,10 +1582,11 @@ export default function Messages({ user, leads = [], defaultTemplate = "", langu
                 gap: 10,
                 padding: "10px 12px",
                 borderBottom: `1px solid ${C.border}`,
-                background: "#1e2326",
+                background: C.soft,
+                flexWrap: "wrap",
               }}
             >
-              <span style={{ color: C.accent, fontWeight: 900 }}>Suggest appointment:</span>
+              <span style={{ color: C.accent, fontWeight: 900 }}>Suggested appointment</span>
               <span style={{ color: C.text, fontWeight: 800 }}>
                 {new Date(`${suggestion.date}T${suggestion.time}:00`).toLocaleString([], {
                   weekday: "short",
@@ -1423,7 +1620,7 @@ export default function Messages({ user, leads = [], defaultTemplate = "", langu
               overflowY: "auto",
               padding: "14px 16px",
               backgroundImage:
-                "radial-gradient(rgba(255,255,255,0.03) 1px, transparent 1px),radial-gradient(rgba(255,255,255,0.02) 1px, transparent 1px)",
+                "radial-gradient(rgba(255,255,255,0.03) 1px, transparent 1px), radial-gradient(rgba(255,255,255,0.02) 1px, transparent 1px)",
               backgroundSize: "24px 24px, 48px 48px",
               backgroundPosition: "0 0, 12px 12px",
               paddingBottom: 110,
@@ -1435,7 +1632,7 @@ export default function Messages({ user, leads = [], defaultTemplate = "", langu
               </div>
             )}
             {thread.map((m, i) => (
-              <Bubble key={i} from={m.from} text={m.text} time={m.time} />
+              <Bubble key={i} from={m.from} text={m.text} time={m.time} renderedTemplate={m._rendered_template} />
             ))}
           </div>
 
@@ -1454,7 +1651,21 @@ export default function Messages({ user, leads = [], defaultTemplate = "", langu
                 {banner}
               </div>
             )}
+
             <div style={{ padding: 10 }}>
+              {!gate.inside24h && hasTemplateParams && (
+                <div
+                  style={{
+                    marginBottom: 10,
+                    color: C.sub,
+                    fontSize: 12,
+                    lineHeight: 1.4,
+                  }}
+                >
+                  The box below is optional while using a template. It helps AI Reply and autofill.
+                </div>
+              )}
+
               <div style={{ display: "flex", gap: 10 }}>
                 <textarea
                   rows={3}
@@ -1465,9 +1676,9 @@ export default function Messages({ user, leads = [], defaultTemplate = "", langu
                     !toE164
                       ? "No WhatsApp number on this lead"
                       : gate.inside24h
-                      ? "Type a message… (Ctrl/⌘ + Enter to send)"
+                      ? "Type a message... (Ctrl/⌘ + Enter to send)"
                       : hasTemplateParams
-                      ? "Optional notes or extra details for yourself while filling the template above"
+                      ? "Optional notes for AI reply or autofill..."
                       : "Outside 24h — choose an approved template above"
                   }
                   style={{
@@ -1490,7 +1701,7 @@ export default function Messages({ user, leads = [], defaultTemplate = "", langu
                   onClick={onDraftAI}
                   disabled={!canSendBase}
                   style={btn("ghost", !canSendBase)}
-                  title="Draft with AI"
+                  title="Draft from the live conversation"
                 >
                   AI Reply
                 </button>
@@ -1501,7 +1712,7 @@ export default function Messages({ user, leads = [], defaultTemplate = "", langu
                   style={btn("primary", !canSendBase || loading || (!gate.inside24h && !templateName))}
                   title="Send (Ctrl/⌘ + Enter)"
                 >
-                  {loading ? "Sending…" : "Send"}
+                  {loading ? "Sending..." : "Send"}
                 </button>
               </div>
             </div>
@@ -1559,7 +1770,6 @@ function Pill({ color, text }) {
 function btn(kind, disabled = false) {
   const base = {
     minWidth: 120,
-    border: 0,
     borderRadius: 999,
     padding: "12px 18px",
     fontWeight: 900,
@@ -1569,11 +1779,13 @@ function btn(kind, disabled = false) {
   if (kind === "primary") {
     return {
       ...base,
+      border: 0,
       background: C.accent,
       color: "#1a1a1a",
       opacity: disabled ? 0.7 : 1,
     };
   }
+
   if (kind === "outline") {
     return {
       ...base,
@@ -1583,17 +1795,20 @@ function btn(kind, disabled = false) {
       opacity: disabled ? 0.7 : 1,
     };
   }
+
   return {
     ...base,
+    border: 0,
     background: "#1e2a30",
     color: C.text,
     opacity: disabled ? 0.7 : 1,
   };
 }
 
-function Bubble({ from, text, time }) {
+function Bubble({ from, text, time, renderedTemplate }) {
   const you = from === "user";
   const safe = cleanAIText(text);
+
   return (
     <div
       style={{
@@ -1613,6 +1828,20 @@ function Bubble({ from, text, time }) {
           boxShadow: "0 1px 1px rgba(0,0,0,0.25)",
         }}
       >
+        {renderedTemplate && (
+          <div
+            style={{
+              fontSize: 11,
+              fontWeight: 800,
+              color: "#b6d7c8",
+              marginBottom: 5,
+              textTransform: "uppercase",
+              letterSpacing: 0.3,
+            }}
+          >
+            Template message
+          </div>
+        )}
         <div style={{ whiteSpace: "pre-wrap", wordBreak: "break-word", fontSize: 15 }}>{safe}</div>
         <div style={{ fontSize: 11, color: C.sub, textAlign: "right", marginTop: 6 }}>
           {time
