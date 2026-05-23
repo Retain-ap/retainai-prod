@@ -19,6 +19,7 @@ const C = {
   out: "#005c4b",
   soft: "#1e2326",
   softer: "#15181a",
+  mutedBlue: "#1e2a30",
 };
 const PANEL_H = "72vh";
 
@@ -121,7 +122,7 @@ function toISODate(d) {
 
 function parseApptFromText(text) {
   if (!text) return null;
-  const t = text.toLowerCase();
+  const t = String(text).toLowerCase();
 
   const ampm = t.match(/\b(\d{1,2})(?::(\d{2}))?\s*(a\.?m\.?|p\.?m\.?)\b/i);
   const hhmm = !ampm && t.match(/\b([01]?\d|2[0-3]):([0-5]\d)\b/);
@@ -218,7 +219,7 @@ const sigForSuggestion = (leadId, sug) =>
   `${String(leadId || "lead")}|${sug?.date || ""}|${sug?.time || ""}`;
 
 /** ===== TEMPLATE PARSING / RENDERING ===== */
-const between = (txt, startIdx, endIdx, span = 32) => {
+const between = (txt, startIdx, endIdx, span = 36) => {
   const left = Math.max(0, startIdx - span);
   const right = Math.min(txt.length, endIdx + span);
   return {
@@ -227,20 +228,23 @@ const between = (txt, startIdx, endIdx, span = 32) => {
   };
 };
 
-function inferParamKindsFromBody(bodyText, count) {
+function inferParamKindsFromBody(bodyText, count, templateName = "") {
   const kinds = Array.from({ length: count }, () => null);
-  if (!bodyText || !count) return kinds;
+  const body = String(bodyText || "");
+  const bodyLower = LOWER(body);
+  const nameLower = LOWER(templateName);
 
   for (let i = 1; i <= count; i++) {
     const re = new RegExp(`\\{\\{\\s*${i}\\s*\\}\\}`, "g");
-    const m = re.exec(bodyText);
+    const m = re.exec(body);
     if (!m) continue;
     const { index } = m;
-    const ctx = between(bodyText, index, index + m[0].length, 36);
+    const ctx = between(body, index, index + m[0].length, 44);
     const L = ctx.left;
     const R = ctx.right;
+    const around = `${L} ${R}`;
 
-    if (/(^|\s)(hi|hello|hey|dear)\s*$/.test(L) || /(client|customer|name)\s*$/.test(L)) {
+    if (/(^|\s)(hi|hello|hey|dear)\s*$/.test(L) || /(client|customer|guest|lead|name)\s*$/.test(L)) {
       kinds[i - 1] = "lead_name";
       continue;
     }
@@ -248,52 +252,94 @@ function inferParamKindsFromBody(bodyText, count) {
       kinds[i - 1] = "user_name";
       continue;
     }
-    if (/(from|at)\s*$/.test(L) || /^(\s*(from|at)\b)/.test(R)) {
+    if (/(from|at)\s*$/.test(L) || /^(\s*(from|at)\b)/.test(R) || /\bbusiness\b/.test(around)) {
       kinds[i - 1] = "business";
       continue;
     }
-    if (/\b(date|day)\b/.test(L + " " + R)) {
+    if (/\b(date|day|tomorrow|today|scheduled for|booked for)\b/.test(around)) {
       kinds[i - 1] = "date";
       continue;
     }
-    if (/\b(time|slot)\b/.test(L + " " + R)) {
+    if (/\b(time|slot|pm|am|o'clock|at)\b/.test(around)) {
       kinds[i - 1] = "time";
       continue;
     }
-    if (/\b(location|address|studio|office)\b/.test(L + " " + R)) {
+    if (/\b(location|address|studio|office|salon|shop)\b/.test(around)) {
       kinds[i - 1] = "location";
       continue;
     }
-    if (/\b(service|treatment|package)\b/.test(L + " " + R)) {
+    if (/\b(service|treatment|package|appointment type)\b/.test(around)) {
       kinds[i - 1] = "service";
       continue;
     }
-    if (/\b(price|quote|budget)\b/.test(L + " " + R)) {
+    if (/\b(price|quote|budget|total|cost)\b/.test(around)) {
       kinds[i - 1] = "price";
       continue;
     }
-    if (/\bemail\b/.test(L + " " + R)) {
+    if (/\bemail\b/.test(around)) {
       kinds[i - 1] = "email";
       continue;
     }
-    if (/\bphone|number\b/.test(L + " " + R)) {
+    if (/\bphone|number|call\b/.test(around)) {
       kinds[i - 1] = "phone";
       continue;
     }
   }
 
+  // Template-name-aware cleanup
   for (let i = 0; i < kinds.length; i++) {
-    if (!kinds[i]) {
+    if (kinds[i]) continue;
+
+    if (/resched|reschedule/.test(nameLower)) {
+      kinds[i] =
+        i === 0 ? "lead_name" :
+        i === 1 ? "business" :
+        i === 2 ? "date" :
+        i === 3 ? "time" :
+        "details";
+      continue;
+    }
+
+    if (/confirm|confirmation/.test(nameLower)) {
+      kinds[i] =
+        i === 0 ? "lead_name" :
+        i === 1 ? "business" :
+        i === 2 ? "date" :
+        i === 3 ? "time" :
+        i === 4 ? "location" :
+        "details";
+      continue;
+    }
+
+    if (/follow|reminder/.test(nameLower)) {
+      kinds[i] =
+        i === 0 ? "lead_name" :
+        i === 1 ? "business" :
+        i === 2 ? "details" :
+        "details";
+      continue;
+    }
+
+    if (/welcome|intro|outreach/.test(nameLower)) {
       kinds[i] =
         i === 0 ? "lead_name" :
         i === 1 ? "user_name" :
         i === 2 ? "business" :
         i === 3 ? "details" :
-        i === 4 ? "time" :
-        i === 5 ? "date" :
         "details";
+      continue;
     }
+
+    kinds[i] =
+      i === 0 ? "lead_name" :
+      i === 1 ? "user_name" :
+      i === 2 ? "business" :
+      i === 3 ? "details" :
+      i === 4 ? "date" :
+      i === 5 ? "time" :
+      "details";
   }
+
   return kinds;
 }
 
@@ -337,9 +383,9 @@ function friendlyLabelForKind(kind, i) {
     case "details":
       return "Message details";
     case "date":
-      return "Date";
+      return "Appointment date";
     case "time":
-      return "Time";
+      return "Appointment time";
     case "location":
       return "Location";
     case "service":
@@ -364,7 +410,7 @@ function fieldHintForKind(kind) {
     case "business":
       return "Makijo Nails";
     case "details":
-      return "appointment confirmed for tomorrow at 7 PM";
+      return "your appointment is confirmed";
     case "date":
       return "2026-05-24";
     case "time":
@@ -390,7 +436,7 @@ function renderTemplatePreview(bodyText, values = []) {
     const re = new RegExp(`\\{\\{\\s*${idx + 1}\\s*\\}\\}`, "g");
     out = out.replace(re, v || `{{${idx + 1}}}`);
   });
-  return out;
+  return cleanAIText(out).trim();
 }
 
 function parseTemplateEchoText(text) {
@@ -401,13 +447,24 @@ function parseTemplateEchoText(text) {
     return { kind: "template_echo", text: "" };
   }
 
-  const textField = raw.match(/['"]text['"]\s*:\s*['"]([^'"]+)['"]/i);
-  if (textField && /^\s*\{/.test(raw)) {
-    return { kind: "payload_echo", text: textField[1] };
-  }
+  // exact object-ish payload strings
+  if (/^\s*\{[\s\S]*payload[\s\S]*text[\s\S]*\}\s*$/i.test(raw)) {
+    const textMatch =
+      raw.match(/(?:^|[,{]\s*)text\s*:\s*'([^']*)'/i) ||
+      raw.match(/(?:^|[,{]\s*)text\s*:\s*"([^"]*)"/i) ||
+      raw.match(/['"]text['"]\s*:\s*'([^']*)'/i) ||
+      raw.match(/['"]text['"]\s*:\s*"([^"]*)"/i);
 
-  if (/^\s*\{.*payload.*text.*\}\s*$/i.test(raw)) {
-    return { kind: "payload_echo", text: "" };
+    const payloadMatch =
+      raw.match(/(?:^|[,{]\s*)payload\s*:\s*'([^']*)'/i) ||
+      raw.match(/(?:^|[,{]\s*)payload\s*:\s*"([^"]*)"/i) ||
+      raw.match(/['"]payload['"]\s*:\s*'([^']*)'/i) ||
+      raw.match(/['"]payload['"]\s*:\s*"([^"]*)"/i);
+
+    return {
+      kind: "payload_echo",
+      text: (textMatch?.[1] || payloadMatch?.[1] || "").trim(),
+    };
   }
 
   return null;
@@ -426,14 +483,16 @@ function pushTemplateRenderCache(userEmail, leadId, renderedText, meta = {}) {
       created_at: new Date().toISOString(),
       used: false,
     },
-  ].slice(-12);
+  ].slice(-20);
   saveJSON(key, next);
 }
 
 function consumeTemplateRenderCache(userEmail, leadId, countNeeded) {
   const key = TEMPLATE_RENDER_KEY(userEmail, leadId);
   const existing = loadJSON(key, []);
-  if (!Array.isArray(existing) || !existing.length) return { consumed: [], nextCache: existing || [] };
+  if (!Array.isArray(existing) || !existing.length) {
+    return { consumed: [], nextCache: existing || [] };
+  }
 
   const consumed = [];
   const nextCache = existing.map((item) => {
@@ -450,46 +509,47 @@ function consumeTemplateRenderCache(userEmail, leadId, countNeeded) {
 
 function normalizeThreadMessages(rawMessages, userEmail, leadId) {
   const list = Array.isArray(rawMessages) ? rawMessages.map((m) => ({ ...m })) : [];
-  const echoIndexes = [];
+  const payloadIndexes = [];
 
   list.forEach((m, idx) => {
     if (m?.from !== "user") return;
     const parsed = parseTemplateEchoText(m?.text);
-    if (parsed) echoIndexes.push(idx);
+    if (parsed) payloadIndexes.push({ idx, parsed });
   });
 
-  if (!echoIndexes.length) return list;
+  if (!payloadIndexes.length) return list;
 
-  const { consumed } = consumeTemplateRenderCache(userEmail, leadId, echoIndexes.length);
+  const { consumed } = consumeTemplateRenderCache(userEmail, leadId, payloadIndexes.length);
 
-  echoIndexes.forEach((idx, i) => {
+  payloadIndexes.forEach((entry, i) => {
     const rendered = consumed[i];
-    const original = String(list[idx]?.text || "");
-    const parsed = parseTemplateEchoText(original);
+    const fallbackExtracted = cleanAIText(entry?.parsed?.text || "");
+    const finalText = cleanAIText(rendered || fallbackExtracted || "");
 
-    if (rendered && rendered.trim()) {
-      list[idx] = {
-        ...list[idx],
-        text: rendered,
-        _rendered_template: true,
-      };
-    } else if (parsed?.text) {
-      list[idx] = {
-        ...list[idx],
-        text: parsed.text,
-        _rendered_template: true,
-      };
-    }
+    list[entry.idx] = {
+      ...list[entry.idx],
+      text: finalText || fallbackExtracted || "",
+      _rendered_template: true,
+      _payload_cleaned: true,
+    };
   });
 
-  return list;
+  return list.filter((m) => {
+    if (m?.from !== "user") return true;
+    const parsed = parseTemplateEchoText(m?.text);
+    if (!parsed) return true;
+    const cleaned = cleanAIText(m?.text || "");
+    return Boolean(cleaned);
+  });
 }
 
 function getChatPreview(thread) {
   if (!Array.isArray(thread) || !thread.length) return "No messages yet";
-  const last = thread[thread.length - 1];
-  const txt = cleanAIText(last?.text || "");
-  return txt || "No messages yet";
+  for (let i = thread.length - 1; i >= 0; i--) {
+    const txt = cleanAIText(thread[i]?.text || "");
+    if (txt) return txt;
+  }
+  return "No messages yet";
 }
 
 function buildConversationHistory(thread, maxItems = 8) {
@@ -523,6 +583,13 @@ function quickSuggestionFromInbound(text, leadName) {
     return `You’re very welcome, ${name}!`;
   }
   return `Hi ${name}! Thanks for the message.`;
+}
+
+function buildSmartAutofillValues(expectedParams, paramKinds, context) {
+  return Array.from({ length: expectedParams }, (_, idx) => {
+    const kind = paramKinds?.[idx];
+    return valueForKind(kind, context) || "";
+  });
 }
 
 /** ===== COMPONENT ===== */
@@ -791,7 +858,7 @@ export default function Messages({ user, leads = [], defaultTemplate = "", langu
           setTemplateExample(Array.isArray(ex) && ex.length ? ex[0] : null);
 
           if (typeof count === "number" && count > 0) {
-            const inferred = inferParamKindsFromBody(bodyText || "", count);
+            const inferred = inferParamKindsFromBody(bodyText || "", count, name);
             setParamKinds(inferred);
             setParamValues((prev) => Array.from({ length: count }, (_, i) => prev?.[i] ?? ""));
           } else {
@@ -869,9 +936,11 @@ export default function Messages({ user, leads = [], defaultTemplate = "", langu
 
   const autofillParams = () => {
     if (typeof expectedParams !== "number" || expectedParams <= 0) return;
-    const values = Array.from({ length: expectedParams }, (_, idx) => {
-      const kind = paramKinds?.[idx];
-      return valueForKind(kind, { user, lead, input, suggestion }) || "";
+    const values = buildSmartAutofillValues(expectedParams, paramKinds, {
+      user,
+      lead,
+      input,
+      suggestion,
     });
     setParamValues(values);
   };
@@ -950,6 +1019,17 @@ export default function Messages({ user, leads = [], defaultTemplate = "", langu
         }
         payload.message = text;
         payload.skip_personalization = true;
+
+        // optimistic bubble for free text
+        setThread((prev) => [
+          ...prev,
+          {
+            from: "user",
+            text,
+            time: new Date().toISOString(),
+            _optimistic: true,
+          },
+        ]);
       } else {
         if (!templateName) {
           setBanner("Pick a template to send outside the 24-hour window.");
@@ -983,6 +1063,18 @@ export default function Messages({ user, leads = [], defaultTemplate = "", langu
             template_name: templateName,
             language_code: normApi(toApiLang(templateLangUI)),
           });
+
+          // optimistic rendered bubble
+          setThread((prev) => [
+            ...prev,
+            {
+              from: "user",
+              text: rendered,
+              time: new Date().toISOString(),
+              _rendered_template: true,
+              _optimistic: true,
+            },
+          ]);
         }
       }
 
@@ -995,6 +1087,8 @@ export default function Messages({ user, leads = [], defaultTemplate = "", langu
 
       if (!res.ok || !data.ok) {
         setBanner(data?.error || `Send failed (${res.status})`);
+        // rollback the optimistic last bubble if send failed
+        setThread((prev) => prev.filter((m) => !m?._optimistic));
         return;
       }
 
@@ -1019,6 +1113,7 @@ export default function Messages({ user, leads = [], defaultTemplate = "", langu
       }, 250);
     } catch (e) {
       setBanner(e.message || "Send failed.");
+      setThread((prev) => prev.filter((m) => !m?._optimistic));
     } finally {
       setLoading(false);
     }
@@ -1343,7 +1438,15 @@ export default function Messages({ user, leads = [], defaultTemplate = "", langu
                 background: C.panel,
               }}
             >
-              <div style={{ width: "100%", display: "grid", gridTemplateColumns: "1fr auto", gap: 10, alignItems: "center" }}>
+              <div
+                style={{
+                  width: "100%",
+                  display: "grid",
+                  gridTemplateColumns: "1fr auto",
+                  gap: 10,
+                  alignItems: "center",
+                }}
+              >
                 <div style={{ minWidth: 0 }}>
                   <div style={{ color: C.text, fontSize: 13, fontWeight: 800 }}>
                     Send approved template
@@ -1632,7 +1735,13 @@ export default function Messages({ user, leads = [], defaultTemplate = "", langu
               </div>
             )}
             {thread.map((m, i) => (
-              <Bubble key={i} from={m.from} text={m.text} time={m.time} renderedTemplate={m._rendered_template} />
+              <Bubble
+                key={i}
+                from={m.from}
+                text={m.text}
+                time={m.time}
+                renderedTemplate={m._rendered_template}
+              />
             ))}
           </div>
 
@@ -1799,7 +1908,7 @@ function btn(kind, disabled = false) {
   return {
     ...base,
     border: 0,
-    background: "#1e2a30",
+    background: C.mutedBlue,
     color: C.text,
     opacity: disabled ? 0.7 : 1,
   };
@@ -1808,6 +1917,8 @@ function btn(kind, disabled = false) {
 function Bubble({ from, text, time, renderedTemplate }) {
   const you = from === "user";
   const safe = cleanAIText(text);
+
+  if (!safe) return null;
 
   return (
     <div
