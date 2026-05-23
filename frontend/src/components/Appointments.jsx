@@ -184,18 +184,12 @@ function normalizeBackend(raw) {
   const dt = parseDateSafe(raw?.appointment_time);
   if (!dt) return null;
 
-  const y = dt.getFullYear();
-  const m = pad2(dt.getMonth() + 1);
-  const d = pad2(dt.getDate());
-  const hh = pad2(dt.getHours());
-  const mm = pad2(dt.getMinutes());
-
   return {
     _backend: raw,
     _rid: getRID(raw),
     title: raw.title || raw.lead_first_name || raw.business_name || "Appointment",
-    date: `${y}-${m}-${d}`,
-    time: `${hh}:${mm}`,
+    date: `${dt.getFullYear()}-${pad2(dt.getMonth() + 1)}-${pad2(dt.getDate())}`,
+    time: `${pad2(dt.getHours())}:${pad2(dt.getMinutes())}`,
     done: !!(raw.done ?? raw.completed ?? raw.is_done),
     notes: raw.notes || "",
     lead: {
@@ -286,6 +280,10 @@ function keyFor(a) {
   return `${a._rid ?? a._localKey ?? a.lead?.id ?? "x"}|${a.title}|${a.date}|${a.time || ""}`;
 }
 
+function getLeadDisplayName(lead) {
+  return lead?.name || lead?.email || "Lead";
+}
+
 export default function Appointments({ user, leads = [], setLeads }) {
   const [backendAppointments, setBackendAppointments] = useState([]);
   const [hiddenIds, setHiddenIds] = useState({});
@@ -305,6 +303,7 @@ export default function Appointments({ user, leads = [], setLeads }) {
     title: "",
     date: "",
     time: "",
+    notes: "",
   });
 
   const userEmail = user?.org_id || user?.email || "";
@@ -613,9 +612,7 @@ export default function Appointments({ user, leads = [], setLeads }) {
         },
         body: JSON.stringify({ leads: nextLeads }),
       });
-    } catch {
-      // optimistic UI stays
-    }
+    } catch {}
   }
 
   function updateLocalLeadAppointments(mutator) {
@@ -632,7 +629,7 @@ export default function Appointments({ user, leads = [], setLeads }) {
       const newDone = !appt.done;
       updateDoneOverrides(appt, newDone);
 
-      const ok = await apiUpdateBackend(appt, { done: newDone });
+      const ok = await apiUpdateBackend(appt, { done: newDone, title: appt.title });
       if (serverIdOf(appt) && !ok) {
         rollbackDoneOverrides(appt, !newDone);
       }
@@ -671,7 +668,11 @@ export default function Appointments({ user, leads = [], setLeads }) {
 
       updateTimeOverrides(appt, iso);
 
-      const ok = await apiUpdateBackend(appt, { appointment_time: iso, title: appt.title });
+      const ok = await apiUpdateBackend(appt, {
+        appointment_time: iso,
+        title: appt.title,
+        notes: appt.notes || "",
+      });
       if (serverIdOf(appt) && !ok) {
         removeTimeOverrides(appt);
       }
@@ -743,13 +744,14 @@ export default function Appointments({ user, leads = [], setLeads }) {
       title: appt.title,
       date: appt.date,
       time: appt.time || "",
+      notes: appt.notes || "",
     });
     setEditing(appt);
     setShowModal(true);
   }
 
   async function handleSave() {
-    const { leadId, title, date, time } = form;
+    const { leadId, title, date, time, notes } = form;
     if (!leadId || !title || !date) return;
 
     setSaving(true);
@@ -763,7 +765,7 @@ export default function Appointments({ user, leads = [], setLeads }) {
         const ok = await apiUpdateBackend(editing, {
           appointment_time: iso,
           title,
-          notes: editing.notes || "",
+          notes: notes || "",
         });
 
         if (serverIdOf(editing) && !ok) {
@@ -792,6 +794,7 @@ export default function Appointments({ user, leads = [], setLeads }) {
                   title,
                   date,
                   time,
+                  notes,
                   done: false,
                 },
               ],
@@ -827,7 +830,7 @@ export default function Appointments({ user, leads = [], setLeads }) {
           appointment_time: `${date}T${time || "00:00"}:00`,
           appointment_location: selectedLead.location || user?.location || "",
           duration: 30,
-          notes: "",
+          notes: notes || "",
           status: "scheduled",
           title,
         };
@@ -860,7 +863,7 @@ export default function Appointments({ user, leads = [], setLeads }) {
       setSaving(false);
       setShowModal(false);
       setEditing(null);
-      setForm({ leadId: "", title: "", date: "", time: "" });
+      setForm({ leadId: "", title: "", date: "", time: "", notes: "" });
     }
   }
 
@@ -914,7 +917,7 @@ export default function Appointments({ user, leads = [], setLeads }) {
           onClick={() => {
             setShowModal(true);
             setEditing(null);
-            setForm({ leadId: "", title: "", date: "", time: "" });
+            setForm({ leadId: "", title: "", date: "", time: "", notes: "" });
           }}
           style={{
             background: GOLD,
@@ -956,7 +959,7 @@ export default function Appointments({ user, leads = [], setLeads }) {
         >
           <FaSearch color={GOLD} style={{ marginRight: 8 }} />
           <input
-            placeholder="Search by title, lead, email, date…"
+            placeholder="Search by title, lead, email, date..."
             value={search}
             onChange={(e) => setSearch(e.target.value)}
             style={{
@@ -1125,7 +1128,7 @@ export default function Appointments({ user, leads = [], setLeads }) {
               borderRadius: 18,
               padding: "28px 30px",
               minWidth: 420,
-              maxWidth: 520,
+              maxWidth: 560,
               width: "92%",
               boxShadow: "0 2px 22px rgba(0,0,0,0.5)",
               border: `2px solid ${GOLD}`,
@@ -1178,6 +1181,20 @@ export default function Appointments({ user, leads = [], setLeads }) {
                 value={form.time}
                 onChange={(e) => setForm((f) => ({ ...f, time: e.target.value }))}
                 style={inputStyle}
+              />
+            </Field>
+
+            <Field label="Notes">
+              <textarea
+                rows={4}
+                value={form.notes}
+                onChange={(e) => setForm((f) => ({ ...f, notes: e.target.value }))}
+                style={{
+                  ...inputStyle,
+                  resize: "vertical",
+                  lineHeight: 1.45,
+                }}
+                placeholder="Optional appointment notes..."
               />
             </Field>
 
@@ -1319,7 +1336,7 @@ function AppointmentCard({ appt, onDone, onEdit, onDelete, onResched }) {
         borderLeft: `6px solid ${meta.color}`,
         borderRadius: 14,
         padding: "15px 16px",
-        minHeight: 104,
+        minHeight: 112,
         display: "flex",
         gap: 14,
         alignItems: "center",
@@ -1347,7 +1364,7 @@ function AppointmentCard({ appt, onDone, onEdit, onDelete, onResched }) {
             color: TEXT,
             fontWeight: 900,
             lineHeight: 1.15,
-            fontSize: 15,
+            fontSize: 16,
             wordBreak: "break-word",
           }}
         >
@@ -1362,7 +1379,12 @@ function AppointmentCard({ appt, onDone, onEdit, onDelete, onResched }) {
             fontSize: 13,
           }}
         >
-          {appt.lead?.name ? `${appt.lead.name}` : "No lead name"}
+          {appt.lead?.name || getLeadDisplayName(appt.lead)}
+          {appt.lead?.email ? (
+            <span style={{ marginLeft: 8, color: "#7f8a92", fontWeight: 600 }}>
+              {appt.lead.email}
+            </span>
+          ) : null}
         </div>
 
         <div
@@ -1392,6 +1414,20 @@ function AppointmentCard({ appt, onDone, onEdit, onDelete, onResched }) {
             {meta.label}
           </span>
         </div>
+
+        {appt.notes ? (
+          <div
+            style={{
+              color: SUBTEXT,
+              marginTop: 6,
+              fontSize: 13,
+              lineHeight: 1.45,
+              wordBreak: "break-word",
+            }}
+          >
+            {appt.notes}
+          </div>
+        ) : null}
 
         {!appt.done && (
           <div style={{ display: "flex", gap: 8, marginTop: 10, flexWrap: "wrap" }}>

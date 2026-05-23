@@ -1,7 +1,18 @@
 // src/components/Calendar.jsx
-import React, { useEffect, useMemo, useRef, useState } from "react";
+import React, { useEffect, useMemo, useState } from "react";
+import {
+  FaChevronLeft,
+  FaChevronRight,
+  FaCalendarAlt,
+  FaStickyNote,
+  FaBirthdayCake,
+  FaGoogle,
+  FaPlus,
+  FaEdit,
+  FaTrash,
+} from "react-icons/fa";
 
-/* === THEME (aligned with Drawer / Analytics) === */
+/* ===== THEME ===== */
 const BG = "#181a1b";
 const CARD = "#232323";
 const SOFT = "#1e2326";
@@ -9,41 +20,26 @@ const BORDER = "#2b2f33";
 const TEXT = "#f3f4f5";
 const SUBTEXT = "#9aa3ab";
 const GOLD = "#f7cb53";
+const GREEN = "#30b46c";
+const BLUE = "#5b8def";
+const CAKE = "#d19a66";
 
-const APPT = "#30b46c";
-const NOTE = "#ffd966";
-const GOOGLE = "#4885ed";
-const BDAY = "#f7cb53";
-
-/* --- API base --- */
+/* ===== API ===== */
 const API_BASE =
   (process.env.REACT_APP_API_BASE && process.env.REACT_APP_API_BASE.trim()) ||
   (process.env.REACT_APP_API_URL && process.env.REACT_APP_API_URL.trim()) ||
   window.location.origin.replace(/\/$/, "");
 
-/* --- Helpers --- */
-function getLocalISO(dateObj) {
-  const y = dateObj.getFullYear();
-  const m = String(dateObj.getMonth() + 1).padStart(2, "0");
-  const d = String(dateObj.getDate()).padStart(2, "0");
-  return `${y}-${m}-${d}`;
+/* ===== HELPERS ===== */
+function pad2(n) {
+  return String(n).padStart(2, "0");
 }
 
-function getCalendarGrid(year, month) {
-  const first = new Date(year, month, 1);
-  const daysIn = new Date(year, month + 1, 0).getDate();
-  const start = first.getDay();
-  const days = [];
-
-  for (let i = 0; i < start; i++) days.push(null);
-  for (let d = 1; d <= daysIn; d++) days.push(new Date(year, month, d));
-  while (days.length % 7 !== 0) days.push(null);
-  while (days.length < 42) days.push(null);
-
-  return days;
+function normEmail(v) {
+  return String(v || "").trim().toLowerCase();
 }
 
-function parseDateSafe(v) {
+function safeDate(v) {
   if (!v) return null;
   try {
     const d = new Date(v);
@@ -53,1170 +49,985 @@ function parseDateSafe(v) {
   }
 }
 
-/* === Local storage keys (shared with Appointments) === */
-const LS_KEYS = (email) => ({
-  hidden: `appt_hidden_${email || "anon"}`,
-  done: `appt_done_${email || "anon"}`,
-  time: `appt_time_${email || "anon"}`,
-  slots: `appt_slots_${email || "anon"}`,
-  notes: `calendar_notes_${email || "anon"}`,
-});
+function startOfMonth(d) {
+  return new Date(d.getFullYear(), d.getMonth(), 1);
+}
 
-const loadJSON = (k, fallback = {}) => {
+function endOfMonth(d) {
+  return new Date(d.getFullYear(), d.getMonth() + 1, 0);
+}
+
+function sameDay(a, b) {
+  return (
+    a &&
+    b &&
+    a.getFullYear() === b.getFullYear() &&
+    a.getMonth() === b.getMonth() &&
+    a.getDate() === b.getDate()
+  );
+}
+
+function dateKey(d) {
+  return `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}`;
+}
+
+function monthTitle(d) {
+  return d.toLocaleDateString([], { month: "long", year: "numeric" });
+}
+
+function weekdayShort() {
+  return ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+}
+
+function getLeadName(lead) {
+  return lead?.name || lead?.email || "Lead";
+}
+
+function noteStorageKey(email) {
+  return `retainai_calendar_notes_${normEmail(email) || "anon"}`;
+}
+
+function loadJSON(key, fallback) {
   try {
-    const v = localStorage.getItem(k);
-    return v ? JSON.parse(v) : fallback;
+    const raw = localStorage.getItem(key);
+    return raw ? JSON.parse(raw) : fallback;
   } catch {
     return fallback;
   }
-};
+}
 
-const saveJSON = (k, obj) => {
+function saveJSON(key, value) {
   try {
-    localStorage.setItem(k, JSON.stringify(obj || {}));
+    localStorage.setItem(key, JSON.stringify(value));
   } catch {}
-};
-
-/** Match Appointments.jsx RID logic */
-const getRealIdField = (r) =>
-  r?.id ??
-  r?._id ??
-  r?.appointment_id ??
-  r?.appointmentId ??
-  r?.appointmentID ??
-  r?.record_id ??
-  r?.recordId ??
-  r?.aid ??
-  r?.uuid ??
-  null;
-
-const safe = (v) => (v == null ? "" : String(v));
-
-const sigOf = (r) =>
-  [
-    safe(r.lead_id ?? r.lead_email ?? r.lead_first_name ?? ""),
-    safe(r.appointment_time ?? ""),
-    safe(r.title ?? ""),
-    safe(r.notes ?? ""),
-  ].join("|");
-
-const stableKey = (r) =>
-  [
-    sigOf(r),
-    safe(r.created_at || r.updated_at || r.appointment_time || ""),
-    safe(r.title || ""),
-  ].join("~");
-
-const hasRealId = (r) => Boolean(getRealIdField(r));
-const getRID = (r) => String(r?._rid ?? r?._client_uid ?? getRealIdField(r) ?? "");
-
-/** Assign stable client RIDs using the same slot map as Appointments.jsx */
-function assignStableRIDs(rows, slotMap) {
-  const copy = (rows || []).map((r) => ({ ...r }));
-
-  copy.sort((a, b) => {
-    const ka = stableKey(a);
-    const kb = stableKey(b);
-    if (ka < kb) return -1;
-    if (ka > kb) return 1;
-    return 0;
-  });
-
-  const bySig = new Map();
-  copy.forEach((r) => {
-    const sig = hasRealId(r) ? `REAL:${getRealIdField(r)}` : `SIG:${sigOf(r)}`;
-    if (!bySig.has(sig)) bySig.set(sig, []);
-    bySig.get(sig).push(r);
-  });
-
-  const uuid = () =>
-    "xxxxxxxxxxxx4xxxyxxxxxxxxxxxxxxx".replace(/[xy]/g, (c) => {
-      const n = (Math.random() * 16) | 0;
-      const v = c === "x" ? n : (n & 0x3) | 0x8;
-      return v.toString(16);
-    });
-
-  const nextSlots = { ...(slotMap || {}) };
-
-  bySig.forEach((groupRows, sig) => {
-    if (sig.startsWith("REAL:")) {
-      groupRows.forEach((r) => {
-        r._rid = String(getRealIdField(r));
-      });
-      return;
-    }
-
-    const key = sig.slice(4);
-    const slots = Array.isArray(nextSlots[key]) ? [...nextSlots[key]] : [];
-    while (slots.length < groupRows.length) slots.push(uuid());
-
-    groupRows.forEach((r, i) => {
-      r._rid = slots[i];
-      r._client_uid = slots[i];
-    });
-
-    nextSlots[key] = slots;
-  });
-
-  return { rows: copy, nextSlots };
 }
 
-/** Apply overrides (hide, done flag, rescheduled time) */
-function applyOverrides(rows = [], email) {
-  const K = LS_KEYS(email);
-  const hidden = loadJSON(K.hidden, {});
-  const doneMap = loadJSON(K.done, {});
-  const timeMap = loadJSON(K.time, {});
-
-  return (rows || [])
-    .map((r) => {
-      const id = getRID(r);
-      if (!id) return r;
-
-      let out = r;
-      if (timeMap[id]) out = { ...out, appointment_time: timeMap[id] };
-      if (typeof doneMap[id] === "boolean") out = { ...out, done: doneMap[id] };
-      return out;
-    })
-    .filter((r) => !hidden[getRID(r)]);
-}
-
-// Normalize backend appointment using LOCAL time
-function normalizeAppt(appt) {
-  const dt = parseDateSafe(appt?.appointment_time);
+/* ===== NORMALIZERS ===== */
+function normalizeBackendAppointment(raw) {
+  const dt = safeDate(raw?.appointment_time);
   if (!dt) return null;
 
-  const y = dt.getFullYear();
-  const m = String(dt.getMonth() + 1).padStart(2, "0");
-  const d = String(dt.getDate()).padStart(2, "0");
-  const hh = String(dt.getHours()).padStart(2, "0");
-  const mm = String(dt.getMinutes()).padStart(2, "0");
-
   return {
-    type: "appointment",
-    date: `${y}-${m}-${d}`,
-    time: `${hh}:${mm}`,
-    title: appt.title || appt.lead_first_name || appt.business_name || "Appointment",
-    notes: appt.notes || "",
-    ...appt,
+    kind: "appointment",
+    source: "backend",
+    id:
+      raw?.id ||
+      raw?._id ||
+      raw?.appointment_id ||
+      raw?.appointmentId ||
+      `backend-${raw?.lead_email || raw?.lead_id || dt.toISOString()}`,
+    title: raw?.title || raw?.lead_first_name || raw?.business_name || "Appointment",
+    leadName:
+      raw?.lead_full_name ||
+      [raw?.lead_first_name, raw?.lead_last_name].filter(Boolean).join(" ") ||
+      raw?.lead_email ||
+      "",
+    leadEmail: raw?.lead_email || "",
+    note: raw?.notes || "",
+    dateObj: dt,
+    done: !!(raw?.done ?? raw?.completed ?? raw?.is_done),
   };
 }
 
-/** Normalize external events prop from parent */
-function normalizeExternalEvent(ev) {
-  if (!ev) return null;
-
-  // Appointment-like item
-  if (ev.type === "appointment" || ev.appointment_time || ev.date) {
-    if (ev.appointment_time) {
-      const normalized = normalizeAppt(ev);
-      if (normalized) return normalized;
-    }
-
-    if (ev.date) {
-      return {
-        type: ev.type === "note" ? "note" : "appointment",
-        title: ev.title || "Appointment",
-        date: ev.date,
-        time: ev.time || "",
-        notes: ev.notes || "",
-        ...ev,
-      };
-    }
-  }
-
-  // Note-like item
-  if (ev.type === "note") {
-    return {
-      type: "note",
-      title: ev.title || "Note",
-      date: ev.date,
-      time: ev.time || "",
-      notes: ev.notes || "",
-      ...ev,
-    };
-  }
-
-  return null;
-}
-
-function formatGoogleEventTime(ev) {
-  if (!ev) return "";
-
-  if (ev.start?.date && !ev.start?.dateTime) {
-    return "All day";
-  }
-
-  if (ev.start?.dateTime) {
-    const s = new Date(ev.start.dateTime);
-    if (ev.end?.dateTime) {
-      const e = new Date(ev.end.dateTime);
-      return `${s.toLocaleTimeString([], {
-        hour: "2-digit",
-        minute: "2-digit",
-      })} - ${e.toLocaleTimeString([], {
-        hour: "2-digit",
-        minute: "2-digit",
-      })}`;
-    }
-
-    return s.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
-  }
-
-  return "";
-}
-
-/* --- Birthday helpers (year-agnostic) --- */
-function parseBirthdayStr(s) {
-  if (!s) return null;
-  const t = String(s).trim();
-
-  if (/^\d{4}-\d{2}-\d{2}$/.test(t)) {
-    return { month: Number(t.slice(5, 7)), day: Number(t.slice(8, 10)) };
-  }
-
-  if (/^\d{2}\/\d{2}(\/\d{2,4})?$/.test(t)) {
-    const [m, d] = t.split("/");
-    return { month: Number(m), day: Number(d) };
-  }
-
-  return null;
-}
-
-function isLeadBirthdayOnDate(lead, dateObj) {
-  const bd = parseBirthdayStr(lead?.birthday);
-  if (!bd) return false;
-  return bd.month === dateObj.getMonth() + 1 && bd.day === dateObj.getDate();
-}
-
-function getBirthdayItems(leads, dateObj) {
-  return (leads || [])
-    .filter((lead) => isLeadBirthdayOnDate(lead, dateObj))
-    .map((lead) => ({
-      type: "birthday",
-      lead,
-      title: `${lead.name || lead.email || "Lead"} Birthday`,
-      date: getLocalISO(dateObj),
-      time: "",
-      notes: "",
-    }));
-}
-
-function dedupeItems(items = []) {
-  const seen = new Set();
+function normalizeLocalAppointments(leads = []) {
   const out = [];
 
-  items.forEach((item) => {
-    const key =
-      item.type === "google"
-        ? `google|${item.google?.id || item.google?.summary || ""}|${item.google?.start?.dateTime || item.google?.start?.date || ""}`
-        : item.type === "birthday"
-        ? `birthday|${item.lead?.email || item.lead?.name || ""}|${item.date || ""}`
-        : `${item.type}|${item.title || ""}|${item.date || ""}|${item.time || ""}|${item.notes || ""}|${item.id || item._rid || ""}`;
+  (leads || []).forEach((lead) => {
+    (lead.appointments || []).forEach((appt, idx) => {
+      const dt = safeDate(`${appt.date}T${appt.time || "00:00"}`);
+      if (!dt) return;
 
-    if (seen.has(key)) return;
-    seen.add(key);
-    out.push(item);
+      out.push({
+        kind: "appointment",
+        source: "local",
+        id: appt._localKey || `${lead.id || lead.email || "lead"}-${idx}-${appt.title || "appt"}`,
+        title: appt.title || "Appointment",
+        leadName: getLeadName(lead),
+        leadEmail: lead?.email || "",
+        note: appt?.notes || "",
+        dateObj: dt,
+        done: !!appt?.done,
+      });
+    });
   });
 
   return out;
 }
 
-function getCellEvents(dateObj, externalEvents, leads, googleEvents, appointments, localNotes) {
-  const dayISO = getLocalISO(dateObj);
-  const cellEvents = [];
+function normalizeGoogleEvents(events = []) {
+  return (events || [])
+    .map((evt, idx) => {
+      const start =
+        evt?.start?.dateTime ||
+        (evt?.start?.date ? `${evt.start.date}T00:00:00` : null);
+      const dt = safeDate(start);
+      if (!dt) return null;
 
-  (appointments || []).forEach((a) => {
-    const norm = normalizeAppt(a);
-    if (norm && norm.date === dayISO) cellEvents.push(norm);
-  });
-
-  (externalEvents || []).forEach((ev) => {
-    const norm = normalizeExternalEvent(ev);
-    if (norm && norm.date === dayISO) cellEvents.push(norm);
-  });
-
-  (localNotes || []).forEach((ev) => {
-    if (ev?.date === dayISO) cellEvents.push({ type: "note", ...ev });
-  });
-
-  (googleEvents || []).forEach((ev) => {
-    const evStart = ev.start?.dateTime || ev.start?.date;
-    if (evStart && evStart.slice(0, 10) === dayISO) {
-      cellEvents.push({ type: "google", google: ev });
-    }
-  });
-
-  getBirthdayItems(leads, dateObj).forEach((b) => cellEvents.push(b));
-
-  return dedupeItems(cellEvents);
+      return {
+        kind: "google",
+        source: "google",
+        id: evt?.id || `google-${idx}-${dt.toISOString()}`,
+        title: evt?.summary || "Google event",
+        leadName: "",
+        leadEmail: "",
+        note: evt?.location || evt?.description || "",
+        dateObj: dt,
+        done: false,
+      };
+    })
+    .filter(Boolean);
 }
 
-function getPanelEvents(dateObj, externalEvents, leads, googleEvents, appointments, localNotes) {
-  if (!dateObj) return [];
-
-  const dayISO = getLocalISO(dateObj);
+function normalizeBirthdays(leads = [], monthDate) {
   const out = [];
+  const year = monthDate.getFullYear();
 
-  (appointments || []).forEach((a) => {
-    const norm = normalizeAppt(a);
-    if (norm && norm.date === dayISO) out.push(norm);
+  (leads || []).forEach((lead, idx) => {
+    if (!lead?.birthday) return;
+
+    const parts = String(lead.birthday).split("-");
+    if (parts.length !== 3) return;
+
+    const month = Number(parts[1]);
+    const day = Number(parts[2]);
+    if (!month || !day) return;
+
+    const dt = new Date(year, month - 1, day, 12, 0, 0);
+    if (Number.isNaN(dt.getTime())) return;
+
+    out.push({
+      kind: "birthday",
+      source: "birthday",
+      id: `birthday-${lead.id || idx}-${year}`,
+      title: `${getLeadName(lead)} birthday`,
+      leadName: getLeadName(lead),
+      leadEmail: lead?.email || "",
+      note: "",
+      dateObj: dt,
+      done: false,
+    });
   });
 
-  (externalEvents || []).forEach((ev) => {
-    const norm = normalizeExternalEvent(ev);
-    if (norm && norm.date === dayISO) out.push(norm);
-  });
-
-  (localNotes || []).forEach((ev) => {
-    if (ev?.date === dayISO) out.push({ type: "note", ...ev });
-  });
-
-  (googleEvents || []).forEach((ev) => {
-    const s = ev.start?.dateTime || ev.start?.date;
-    if (s && s.slice(0, 10) === dayISO) out.push({ type: "google", google: ev });
-  });
-
-  getBirthdayItems(leads, dateObj).forEach((b) => out.push(b));
-
-  const deduped = dedupeItems(out);
-
-  return deduped.sort((a, b) => {
-    const ta = a.type === "google" ? formatGoogleEventTime(a.google) : a.time || "";
-    const tb = b.type === "google" ? formatGoogleEventTime(b.google) : b.time || "";
-    return String(ta).localeCompare(String(tb));
-  });
+  return out;
 }
 
-/* tiny count pill for day cells */
-function CountPill({ color, count, title, icon }) {
-  if (!count) return null;
+function mergeAndSortItems(items = []) {
+  return [...items].sort((a, b) => a.dateObj.getTime() - b.dateObj.getTime());
+}
 
-  return (
-    <span
-      title={title}
-      style={{
-        display: "inline-flex",
-        alignItems: "center",
-        justifyContent: "center",
-        gap: 4,
-        minWidth: 18,
-        height: 18,
-        padding: "0 6px",
-        borderRadius: 9,
-        fontSize: 11,
-        fontWeight: 900,
-        background: color,
-        color: "#111",
-        lineHeight: 1,
-      }}
-    >
-      {icon ? <span style={{ fontSize: 12 }}>{icon}</span> : null}
-      {count}
-    </span>
-  );
+function itemTimeLabel(item) {
+  if (item.kind === "birthday") return "All day";
+  return item.dateObj.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+}
+
+function itemMeta(item) {
+  if (item.kind === "appointment") {
+    return {
+      icon: <FaCalendarAlt />,
+      color: GREEN,
+      label: item.done ? "Completed appointment" : "Appointment",
+    };
+  }
+  if (item.kind === "google") {
+    return {
+      icon: <FaGoogle />,
+      color: BLUE,
+      label: "Google event",
+    };
+  }
+  if (item.kind === "birthday") {
+    return {
+      icon: <FaBirthdayCake />,
+      color: CAKE,
+      label: "Birthday",
+    };
+  }
+  return {
+    icon: <FaStickyNote />,
+    color: GOLD,
+    label: "Note",
+  };
 }
 
 export default function Calendar({
   user,
   leads = [],
-  events = [],
   googleEvents = [],
   selectedDate,
   setSelectedDate,
   onDayClick,
 }) {
-  const today = new Date();
-  const [month, setMonth] = useState(today.getMonth());
-  const [year, setYear] = useState(today.getFullYear());
-  const [showAddEvent, setShowAddEvent] = useState(false);
-  const [addEventDate, setAddEventDate] = useState(null);
+  const [monthDate, setMonthDate] = useState(() => {
+    const base = selectedDate ? safeDate(selectedDate) : new Date();
+    return base || new Date();
+  });
 
-  // local note events only
-  const [localNotes, setLocalNotes] = useState([]);
+  const [backendAppointments, setBackendAppointments] = useState([]);
+  const [notesMap, setNotesMap] = useState({});
+  const [noteModalOpen, setNoteModalOpen] = useState(false);
+  const [noteText, setNoteText] = useState("");
+  const [editingNoteId, setEditingNoteId] = useState(null);
 
-  // backend appointments
-  const [appointments, setAppointments] = useState([]);
-
-  // same RID slot map as Appointments.jsx
-  const [slotMap, setSlotMap] = useState({});
-  const slotMapRef = useRef({});
-
-  // bump when overrides change
-  const [overrideBump, setOverrideBump] = useState(0);
+  const userEmail = user?.org_id || user?.email || "";
 
   useEffect(() => {
-    const savedSlots = loadJSON(LS_KEYS(user?.email).slots, {});
-    slotMapRef.current = savedSlots;
-    setSlotMap(savedSlots);
+    setNotesMap(loadJSON(noteStorageKey(userEmail), {}));
+  }, [userEmail]);
 
-    const savedNotes = loadJSON(LS_KEYS(user?.email).notes, []);
-    setLocalNotes(Array.isArray(savedNotes) ? savedNotes : []);
-  }, [user?.email]);
+  useEffect(() => {
+    saveJSON(noteStorageKey(userEmail), notesMap);
+  }, [notesMap, userEmail]);
 
-  const fetchAppointments = async () => {
-    if (!user?.email) return;
-    try {
-      const r = await fetch(`${API_BASE}/api/appointments/${encodeURIComponent(user.email)}`, {
-        credentials: "include",
-        headers: { Accept: "application/json" },
-      });
-      const j = await r.json().catch(() => ({}));
-      setAppointments(Array.isArray(j?.appointments) ? j.appointments : []);
-    } catch {
-      setAppointments([]);
+  useEffect(() => {
+    let cancelled = false;
+
+    async function loadBackendAppointments() {
+      if (!user?.email) {
+        if (!cancelled) setBackendAppointments([]);
+        return;
+      }
+
+      try {
+        const res = await fetch(`${API_BASE}/api/appointments/${encodeURIComponent(user.email)}`, {
+          credentials: "include",
+          headers: { Accept: "application/json" },
+        });
+        const data = await res.json().catch(() => ({}));
+        if (!cancelled) {
+          setBackendAppointments(Array.isArray(data?.appointments) ? data.appointments : []);
+        }
+      } catch {
+        if (!cancelled) setBackendAppointments([]);
+      }
     }
-  };
 
-  useEffect(() => {
-    fetchAppointments();
+    loadBackendAppointments();
 
-    const onChanged = () => fetchAppointments();
-    const onOverrides = () => setOverrideBump((x) => x + 1);
-
-    window.addEventListener("appointments:changed", onChanged);
-    window.addEventListener("appointments:overrides-updated", onOverrides);
+    const refresh = () => loadBackendAppointments();
+    window.addEventListener("appointments:changed", refresh);
+    document.addEventListener("visibilitychange", refresh);
 
     return () => {
-      window.removeEventListener("appointments:changed", onChanged);
-      window.removeEventListener("appointments:overrides-updated", onOverrides);
+      cancelled = true;
+      window.removeEventListener("appointments:changed", refresh);
+      document.removeEventListener("visibilitychange", refresh);
     };
   }, [user?.email]);
 
-  const assignedAppointments = useMemo(() => {
-    const result = assignStableRIDs(appointments || [], slotMapRef.current || {});
-    return result;
-  }, [appointments]);
-
-  useEffect(() => {
-    const oldStr = JSON.stringify(slotMapRef.current || {});
-    const newStr = JSON.stringify(assignedAppointments.nextSlots || {});
-
-    if (oldStr !== newStr) {
-      slotMapRef.current = assignedAppointments.nextSlots || {};
-      setSlotMap(assignedAppointments.nextSlots || {});
-      saveJSON(LS_KEYS(user?.email).slots, assignedAppointments.nextSlots || {});
-    }
-  }, [assignedAppointments.nextSlots, user?.email]);
-
-  const effectiveAppointments = useMemo(
-    () => applyOverrides(assignedAppointments.rows, user?.email),
-    [assignedAppointments.rows, user?.email, overrideBump]
+  const normalizedBackendAppointments = useMemo(
+    () => (backendAppointments || []).map((raw) => normalizeBackendAppointment(raw)).filter(Boolean),
+    [backendAppointments]
   );
 
-  const calendarGrid = useMemo(() => getCalendarGrid(year, month), [year, month]);
-  const currMonthStr = new Date(year, month).toLocaleString("default", {
-    month: "long",
-    year: "numeric",
-  });
-
-  const dayEvents = useMemo(
-    () =>
-      getPanelEvents(
-        selectedDate,
-        events,
-        leads,
-        googleEvents,
-        effectiveAppointments,
-        localNotes
-      ),
-    [selectedDate, events, leads, googleEvents, effectiveAppointments, localNotes]
+  const normalizedLocalAppointments = useMemo(
+    () => normalizeLocalAppointments(leads),
+    [leads]
   );
 
-  function changeMonth(delta) {
-    let m = month + delta;
-    let y = year;
+  const normalizedGoogleEvents = useMemo(
+    () => normalizeGoogleEvents(googleEvents),
+    [googleEvents]
+  );
 
-    if (m < 0) {
-      m = 11;
-      y -= 1;
+  const normalizedBirthdays = useMemo(
+    () => normalizeBirthdays(leads, monthDate),
+    [leads, monthDate]
+  );
+
+  const selectedDay =
+    selectedDate && safeDate(selectedDate) ? safeDate(selectedDate) : null;
+
+  const dayNotes = useMemo(() => {
+    if (!selectedDay) return [];
+    const key = dateKey(selectedDay);
+    return Array.isArray(notesMap[key]) ? notesMap[key] : [];
+  }, [notesMap, selectedDay]);
+
+  const selectedDayItems = useMemo(() => {
+    if (!selectedDay) return [];
+
+    const key = dateKey(selectedDay);
+
+    const notes = (notesMap[key] || []).map((n) => ({
+      kind: "note",
+      source: "note",
+      id: n.id,
+      title: n.title || "Note",
+      leadName: n.leadName || "",
+      leadEmail: n.leadEmail || "",
+      note: n.text || "",
+      dateObj: safeDate(n.createdAt) || selectedDay,
+      done: false,
+    }));
+
+    return mergeAndSortItems([
+      ...normalizedBackendAppointments.filter((a) => sameDay(a.dateObj, selectedDay)),
+      ...normalizedLocalAppointments.filter((a) => sameDay(a.dateObj, selectedDay)),
+      ...normalizedGoogleEvents.filter((a) => sameDay(a.dateObj, selectedDay)),
+      ...normalizedBirthdays.filter((a) => sameDay(a.dateObj, selectedDay)),
+      ...notes,
+    ]);
+  }, [
+    selectedDay,
+    notesMap,
+    normalizedBackendAppointments,
+    normalizedLocalAppointments,
+    normalizedGoogleEvents,
+    normalizedBirthdays,
+  ]);
+
+  const monthGrid = useMemo(() => {
+    const first = startOfMonth(monthDate);
+    const last = endOfMonth(monthDate);
+    const start = new Date(first);
+    start.setDate(first.getDate() - first.getDay());
+
+    const end = new Date(last);
+    end.setDate(last.getDate() + (6 - last.getDay()));
+
+    const days = [];
+    const cursor = new Date(start);
+
+    while (cursor <= end) {
+      days.push(new Date(cursor));
+      cursor.setDate(cursor.getDate() + 1);
     }
-    if (m > 11) {
-      m = 0;
-      y += 1;
-    }
 
-    setMonth(m);
-    setYear(y);
-    setSelectedDate && setSelectedDate(null);
+    return days;
+  }, [monthDate]);
+
+  const countsByDate = useMemo(() => {
+    const map = {};
+
+    const add = (d, type) => {
+      const key = dateKey(d);
+      if (!map[key]) map[key] = { appointment: 0, google: 0, birthday: 0, note: 0 };
+      map[key][type] = (map[key][type] || 0) + 1;
+    };
+
+    normalizedBackendAppointments.forEach((a) => add(a.dateObj, "appointment"));
+    normalizedLocalAppointments.forEach((a) => add(a.dateObj, "appointment"));
+    normalizedGoogleEvents.forEach((a) => add(a.dateObj, "google"));
+    normalizedBirthdays.forEach((a) => add(a.dateObj, "birthday"));
+
+    Object.entries(notesMap || {}).forEach(([key, notes]) => {
+      const d = safeDate(`${key}T12:00:00`);
+      if (!d) return;
+      if (!Array.isArray(notes)) return;
+      notes.forEach(() => add(d, "note"));
+    });
+
+    return map;
+  }, [
+    normalizedBackendAppointments,
+    normalizedLocalAppointments,
+    normalizedGoogleEvents,
+    normalizedBirthdays,
+    notesMap,
+  ]);
+
+  function openNewNote() {
+    if (!selectedDay) return;
+    setEditingNoteId(null);
+    setNoteText("");
+    setNoteModalOpen(true);
   }
 
-  function handleAddEventClick(dateObj) {
-    setAddEventDate(dateObj);
-    setShowAddEvent(true);
-    setSelectedDate && setSelectedDate(dateObj);
+  function openEditNote(noteItem) {
+    setEditingNoteId(noteItem.id);
+    setNoteText(noteItem.note || "");
+    setNoteModalOpen(true);
   }
 
-  function handleAddEventSave(newEvent) {
-    const next = [
-      ...localNotes,
-      {
-        id: `note_${Date.now()}_${Math.random().toString(16).slice(2)}`,
-        title: newEvent.title,
-        date: getLocalISO(addEventDate),
-        time: newEvent.time,
-        notes: newEvent.notes,
-        type: "note",
-      },
-    ];
+  function saveNote() {
+    if (!selectedDay) return;
+    const key = dateKey(selectedDay);
+    const existing = Array.isArray(notesMap[key]) ? [...notesMap[key]] : [];
 
-    setLocalNotes(next);
-    saveJSON(LS_KEYS(user?.email).notes, next);
-    setShowAddEvent(false);
-    setAddEventDate(null);
-  }
-
-  function handleCellClick(day) {
-    if (!day) return;
-    setSelectedDate && setSelectedDate(day);
-  }
-
-  function handleCellDoubleClick(day) {
-    if (!day) return;
-    if (typeof onDayClick === "function") {
-      onDayClick(day);
+    if (editingNoteId) {
+      const next = existing.map((n) =>
+        n.id === editingNoteId ? { ...n, text: noteText, updatedAt: new Date().toISOString() } : n
+      );
+      setNotesMap((prev) => ({ ...prev, [key]: next }));
     } else {
-      handleAddEventClick(day);
+      const newNote = {
+        id: `note_${Date.now()}_${Math.random().toString(16).slice(2)}`,
+        title: "Day note",
+        text: noteText,
+        leadName: "",
+        leadEmail: "",
+        createdAt: new Date().toISOString(),
+      };
+      setNotesMap((prev) => ({ ...prev, [key]: [...existing, newNote] }));
     }
+
+    setNoteModalOpen(false);
+    setEditingNoteId(null);
+    setNoteText("");
   }
 
-  const googleCountThisMonth = useMemo(() => {
-    const currentMonth = `${year}-${String(month + 1).padStart(2, "0")}`;
-    return (googleEvents || []).filter((ev) => {
-      const s = ev?.start?.dateTime || ev?.start?.date;
-      return s && String(s).slice(0, 7) === currentMonth;
-    }).length;
-  }, [googleEvents, month, year]);
+  function deleteNote(noteItem) {
+    if (!selectedDay) return;
+    const key = dateKey(selectedDay);
+    const existing = Array.isArray(notesMap[key]) ? [...notesMap[key]] : [];
+    const next = existing.filter((n) => n.id !== noteItem.id);
+    setNotesMap((prev) => ({ ...prev, [key]: next }));
+  }
 
-  const apptCountThisMonth = useMemo(() => {
-    const currentMonth = `${year}-${String(month + 1).padStart(2, "0")}`;
-    return (effectiveAppointments || []).filter((a) => {
-      const dt = normalizeAppt(a);
-      return dt && dt.date.slice(0, 7) === currentMonth;
-    }).length;
-  }, [effectiveAppointments, month, year]);
+  const currentMonthStats = useMemo(() => {
+    const inMonth = (d) =>
+      d.getFullYear() === monthDate.getFullYear() &&
+      d.getMonth() === monthDate.getMonth();
+
+    return {
+      backendAppointments: normalizedBackendAppointments.filter((a) => inMonth(a.dateObj)).length,
+      googleEvents: normalizedGoogleEvents.filter((a) => inMonth(a.dateObj)).length,
+      birthdays: normalizedBirthdays.filter((a) => inMonth(a.dateObj)).length,
+    };
+  }, [monthDate, normalizedBackendAppointments, normalizedGoogleEvents, normalizedBirthdays]);
 
   return (
-    <div
-      style={{
-        padding: "28px",
-        background: BG,
-        minHeight: "100vh",
-        boxSizing: "border-box",
-      }}
-    >
-      <div style={{ display: "flex", alignItems: "flex-start", gap: 18 }}>
-        {/* Calendar card */}
+    <div style={{ padding: 28, background: BG, minHeight: "100vh", boxSizing: "border-box" }}>
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1.35fr", gap: 18 }}>
+        {/* LEFT */}
         <div
           style={{
-            background: CARD,
-            padding: 22,
-            borderRadius: 18,
-            minWidth: 630,
-            flex: "0 0 650px",
-            border: `1px solid ${BORDER}`,
-            boxShadow: "0 2px 28px rgba(0,0,0,0.35)",
+            ...card,
+            padding: 18,
+            display: "flex",
+            flexDirection: "column",
+            gap: 16,
           }}
         >
-          {/* Header */}
-          <div
-            style={{
-              display: "flex",
-              alignItems: "flex-start",
-              justifyContent: "space-between",
-              marginBottom: 14,
-              gap: 18,
-            }}
-          >
-            <div>
-              <div style={{ fontWeight: 900, fontSize: 22, color: TEXT }}>Calendar</div>
-              <div style={{ color: SUBTEXT, fontSize: 13, marginTop: 4 }}>
-                View appointments, Google events, birthdays, and internal notes in one place.
-              </div>
-            </div>
-
-            <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-              <button onClick={() => changeMonth(-1)} style={monthBtnStyle}>
-                &lt;
-              </button>
-              <span
-                style={{
-                  fontSize: 18,
-                  fontWeight: 900,
-                  color: GOLD,
-                  minWidth: 170,
-                  textAlign: "center",
-                }}
-              >
-                {currMonthStr}
-              </span>
-              <button onClick={() => changeMonth(1)} style={monthBtnStyle}>
-                &gt;
-              </button>
+          <div>
+            <div style={{ color: TEXT, fontWeight: 900, fontSize: 18 }}>Calendar</div>
+            <div style={{ color: SUBTEXT, marginTop: 6, lineHeight: 1.45, fontSize: 13 }}>
+              View appointments, Google events, birthdays, and internal notes in one place.
             </div>
           </div>
 
-          {/* Mini summary */}
           <div
             style={{
               display: "grid",
-              gridTemplateColumns: "repeat(3, minmax(0, 1fr))",
+              gridTemplateColumns: "repeat(3, 1fr)",
               gap: 10,
-              marginBottom: 16,
             }}
           >
-            <MiniMetric label="Backend appointments" value={apptCountThisMonth} />
-            <MiniMetric label="Google events" value={googleCountThisMonth} />
-            <MiniMetric
-              label="Birthdays"
-              value={(leads || []).filter((lead) => parseBirthdayStr(lead?.birthday)).length}
-            />
+            <MiniStat label="Backend appointments" value={currentMonthStats.backendAppointments} />
+            <MiniStat label="Google events" value={currentMonthStats.googleEvents} />
+            <MiniStat label="Birthdays" value={currentMonthStats.birthdays} />
           </div>
 
-          {/* DOW */}
+          <div
+            style={{
+              display: "grid",
+              gridTemplateColumns: "40px 1fr 40px",
+              alignItems: "center",
+              gap: 12,
+            }}
+          >
+            <NavBtn onClick={() => setMonthDate(new Date(monthDate.getFullYear(), monthDate.getMonth() - 1, 1))}>
+              <FaChevronLeft />
+            </NavBtn>
+
+            <div
+              style={{
+                color: GOLD,
+                fontWeight: 900,
+                textAlign: "center",
+                fontSize: 18,
+              }}
+            >
+              {monthTitle(monthDate)}
+            </div>
+
+            <NavBtn onClick={() => setMonthDate(new Date(monthDate.getFullYear(), monthDate.getMonth() + 1, 1))}>
+              <FaChevronRight />
+            </NavBtn>
+          </div>
+
           <div
             style={{
               display: "grid",
               gridTemplateColumns: "repeat(7, 1fr)",
               gap: 8,
-              width: "100%",
-              marginBottom: 6,
+              alignItems: "center",
             }}
           >
-            {["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"].map((d) => (
+            {weekdayShort().map((day) => (
               <div
-                key={d}
+                key={day}
                 style={{
                   textAlign: "center",
                   color: GOLD,
-                  fontWeight: 900,
-                  fontSize: 14,
+                  fontWeight: 800,
+                  fontSize: 13,
+                  paddingBottom: 4,
                 }}
               >
-                {d}
+                {day}
               </div>
             ))}
-          </div>
 
-          {/* Grid */}
-          <div
-            style={{
-              display: "grid",
-              gridTemplateColumns: "repeat(7, 1fr)",
-              gap: 8,
-              width: "100%",
-              minHeight: 420,
-            }}
-          >
-            {calendarGrid.map((d, i) => {
-              if (!d) return <div key={i} />;
-
-              const isToday = d.toDateString() === today.toDateString();
-              const isSelected = selectedDate && d.toDateString() === selectedDate.toDateString();
-
-              const evs = getCellEvents(
-                d,
-                events,
-                leads,
-                googleEvents,
-                effectiveAppointments,
-                localNotes
-              );
-
-              const counts = evs.reduce(
-                (acc, e) => {
-                  acc[e.type] = (acc[e.type] || 0) + 1;
-                  return acc;
-                },
-                { appointment: 0, google: 0, note: 0, birthday: 0 }
-              );
-
-              const tooltip = [
-                counts.appointment
-                  ? `${counts.appointment} appointment${counts.appointment > 1 ? "s" : ""}`
-                  : null,
-                counts.google ? `${counts.google} Google event${counts.google > 1 ? "s" : ""}` : null,
-                counts.note ? `${counts.note} note${counts.note > 1 ? "s" : ""}` : null,
-                counts.birthday
-                  ? `${counts.birthday} birthday${counts.birthday > 1 ? "s" : ""}`
-                  : null,
-              ]
-                .filter(Boolean)
-                .join(" • ");
+            {monthGrid.map((day) => {
+              const key = dateKey(day);
+              const counts = countsByDate[key] || {
+                appointment: 0,
+                google: 0,
+                birthday: 0,
+                note: 0,
+              };
+              const inMonth =
+                day.getMonth() === monthDate.getMonth() &&
+                day.getFullYear() === monthDate.getFullYear();
+              const isSelected = selectedDay && sameDay(day, selectedDay);
 
               return (
-                <div
-                  key={`${d.getTime()}-${i}`}
-                  onClick={() => handleCellClick(d)}
-                  onDoubleClick={() => handleCellDoubleClick(d)}
-                  title={tooltip}
+                <button
+                  key={key}
+                  onClick={() => setSelectedDate && setSelectedDate(day)}
+                  onDoubleClick={() => onDayClick && onDayClick(day)}
                   style={{
-                    minHeight: 72,
+                    minHeight: 62,
+                    background: isSelected ? "#23262a" : "#181b1e",
+                    border: `2px solid ${isSelected ? GOLD : BORDER}`,
                     borderRadius: 14,
-                    border: isSelected
-                      ? `2px solid ${GOLD}`
-                      : isToday
-                      ? `2px solid ${TEXT}`
-                      : `1px solid ${BORDER}`,
-                    background: isSelected ? SOFT : BG,
-                    textAlign: "center",
+                    color: inMonth ? TEXT : "#5e666d",
+                    padding: "8px 8px 6px",
                     cursor: "pointer",
-                    paddingTop: 8,
-                    boxShadow: isSelected ? "0 2px 16px rgba(247,203,83,0.22)" : "",
-                    transition: "all .12s ease",
+                    display: "flex",
+                    flexDirection: "column",
+                    justifyContent: "space-between",
+                    alignItems: "flex-end",
                   }}
                 >
-                  <div
-                    style={{
-                      color: isSelected ? GOLD : TEXT,
-                      fontWeight: 900,
-                      fontSize: 14,
-                      marginBottom: 8,
-                    }}
-                  >
-                    {d.getDate()}
-                  </div>
+                  <div style={{ fontWeight: 800, fontSize: 14 }}>{day.getDate()}</div>
 
                   <div
                     style={{
                       display: "flex",
-                      justifyContent: "center",
-                      gap: 6,
+                      gap: 5,
+                      alignSelf: "flex-end",
                       flexWrap: "wrap",
-                      padding: "0 4px",
+                      justifyContent: "flex-end",
                     }}
                   >
-                    <CountPill color={APPT} count={counts.appointment} title="Appointments" />
-                    <CountPill color={GOOGLE} count={counts.google} title="Google events" />
-                    <CountPill color={NOTE} count={counts.note} title="Notes" />
-                    <CountPill color={BDAY} count={counts.birthday} title="Birthdays" icon="🎂" />
+                    {counts.appointment > 0 && <DotBadge color={GREEN} text={counts.appointment} />}
+                    {counts.note > 0 && <DotBadge color={GOLD} text={counts.note} />}
+                    {counts.google > 0 && <DotBadge color={BLUE} text={counts.google} />}
+                    {counts.birthday > 0 && <DotBadge color={CAKE} text={counts.birthday} />}
                   </div>
-                </div>
+                </button>
               );
             })}
           </div>
 
-          {/* Legend */}
           <div
             style={{
               display: "flex",
-              gap: 16,
-              marginTop: 14,
-              alignItems: "center",
-              color: SUBTEXT,
-              fontWeight: 800,
               flexWrap: "wrap",
+              gap: 14,
+              alignItems: "center",
+              justifyContent: "space-between",
+              marginTop: 4,
             }}
           >
-            <LegendDot color={APPT} label="Appointment" />
-            <LegendDot color={NOTE} label="Note" />
-            <LegendDot color={GOOGLE} label="Google" outlined />
-            <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
-              <span>🎂</span>
-              <span style={{ color: SUBTEXT, fontWeight: 800, fontSize: 12 }}>Birthday</span>
+            <div style={{ display: "flex", gap: 14, flexWrap: "wrap" }}>
+              <LegendPill color={GREEN} label="Appointment" />
+              <LegendPill color={GOLD} label="Note" />
+              <LegendPill color={BLUE} label="Google" />
+              <LegendPill color={CAKE} label="Birthday" />
             </div>
-            <span style={{ color: SUBTEXT, fontSize: 12, marginLeft: "auto" }}>
+
+            <div style={{ color: SUBTEXT, fontSize: 12, fontWeight: 700 }}>
               Double-click a day to quick add
-            </span>
+            </div>
           </div>
         </div>
 
-        {/* Right panel */}
+        {/* RIGHT */}
         <div
           style={{
-            flex: 1,
-            minWidth: 360,
-            background: CARD,
-            borderRadius: 18,
-            padding: "22px 20px",
-            color: TEXT,
-            border: `1px solid ${BORDER}`,
-            boxShadow: "0 2px 28px rgba(0,0,0,0.35)",
+            ...card,
+            padding: 18,
+            display: "flex",
+            flexDirection: "column",
+            minHeight: 560,
           }}
         >
           <div
             style={{
-              display: "flex",
-              alignItems: "flex-start",
-              justifyContent: "space-between",
-              marginBottom: 14,
+              display: "grid",
+              gridTemplateColumns: "1fr auto",
               gap: 12,
+              alignItems: "start",
+              marginBottom: 16,
             }}
           >
             <div>
-              <h3
-                style={{
-                  fontWeight: 900,
-                  fontSize: 18,
-                  color: GOLD,
-                  margin: 0,
-                }}
-              >
-                {selectedDate
-                  ? selectedDate.toLocaleDateString(undefined, {
+              <div style={{ color: GOLD, fontWeight: 900, fontSize: 18 }}>
+                {selectedDay
+                  ? selectedDay.toLocaleDateString([], {
                       weekday: "long",
                       month: "long",
                       day: "numeric",
                     })
                   : "Select a date"}
-              </h3>
-              <div style={{ color: SUBTEXT, fontSize: 13, marginTop: 5 }}>
-                {selectedDate
+              </div>
+              <div style={{ color: SUBTEXT, marginTop: 6, fontSize: 13 }}>
+                {selectedDay
                   ? "Daily timeline for CRM activity and Google Calendar events."
                   : "Choose a date to inspect activity."}
               </div>
             </div>
 
-            {selectedDate && (
-              <button
-                style={{
-                  background: GOLD,
-                  color: "#191a1d",
-                  fontWeight: 900,
-                  border: "none",
-                  borderRadius: 10,
-                  padding: "9px 14px",
-                  cursor: "pointer",
-                  boxShadow: "0 1.5px 8px rgba(247,203,83,0.3)",
-                }}
-                onClick={() => handleAddEventClick(selectedDate)}
-              >
-                + Add Note
-              </button>
-            )}
+            <button
+              onClick={openNewNote}
+              disabled={!selectedDay}
+              style={{
+                background: GOLD,
+                color: "#191919",
+                border: "none",
+                borderRadius: 10,
+                fontWeight: 900,
+                padding: "10px 16px",
+                cursor: selectedDay ? "pointer" : "not-allowed",
+                opacity: selectedDay ? 1 : 0.6,
+                display: "flex",
+                alignItems: "center",
+                gap: 8,
+              }}
+            >
+              <FaPlus />
+              Add Note
+            </button>
           </div>
 
-          {!selectedDate && (
-            <EmptyState
-              title="Nothing selected"
-              text="Pick a day on the calendar to review appointments, Google events, notes, and birthdays."
-            />
+          {!selectedDay ? (
+            <div
+              style={{
+                background: "#17191b",
+                border: `1px solid ${BORDER}`,
+                borderRadius: 14,
+                padding: 16,
+                color: SUBTEXT,
+              }}
+            >
+              <div style={{ color: TEXT, fontWeight: 800, marginBottom: 6 }}>Nothing selected</div>
+              Pick a day on the calendar to review appointments, Google events, notes, and birthdays.
+            </div>
+          ) : selectedDayItems.length === 0 ? (
+            <div
+              style={{
+                background: "#17191b",
+                border: `1px solid ${BORDER}`,
+                borderRadius: 14,
+                padding: 16,
+                color: SUBTEXT,
+              }}
+            >
+              <div style={{ color: TEXT, fontWeight: 800, marginBottom: 6 }}>No activity yet</div>
+              There is nothing scheduled or recorded for this day yet.
+            </div>
+          ) : (
+            <div
+              style={{
+                display: "flex",
+                flexDirection: "column",
+                gap: 12,
+              }}
+            >
+              {selectedDayItems.map((item) => (
+                <TimelineCard
+                  key={item.id}
+                  item={item}
+                  onEditNote={item.kind === "note" ? () => openEditNote(item) : null}
+                  onDeleteNote={item.kind === "note" ? () => deleteNote(item) : null}
+                />
+              ))}
+            </div>
           )}
-
-          {selectedDate && (!dayEvents || dayEvents.length === 0) && (
-            <EmptyState
-              title="No events for this day"
-              text="This date is currently clear. You can still add an internal note."
-            />
-          )}
-
-          {selectedDate &&
-            dayEvents.map((ev, i) => {
-              const eventType = ev.type;
-              const icon =
-                eventType === "birthday"
-                  ? "🎂"
-                  : eventType === "google"
-                  ? "🗓️"
-                  : eventType === "note"
-                  ? "📝"
-                  : "📅";
-
-              const color =
-                eventType === "appointment"
-                  ? APPT
-                  : eventType === "google"
-                  ? GOOGLE
-                  : eventType === "birthday"
-                  ? GOLD
-                  : NOTE;
-
-              const title =
-                ev.title || ev.google?.summary || ev.lead?.name || "Calendar Item";
-
-              const subline =
-                eventType === "birthday"
-                  ? "Birthday"
-                  : eventType === "google"
-                  ? formatGoogleEventTime(ev.google)
-                  : ev.time
-                  ? ev.time
-                  : "No time set";
-
-              const detail =
-                eventType === "google"
-                  ? ev.google?.description || ev.google?.location || ""
-                  : ev.notes || "";
-
-              return (
-                <div
-                  key={`${eventType}-${i}-${title}`}
-                  style={{
-                    background: "#191919",
-                    borderRadius: 14,
-                    marginBottom: 12,
-                    padding: 14,
-                    display: "flex",
-                    alignItems: "flex-start",
-                    gap: 12,
-                    borderLeft: `6px solid ${color}`,
-                    border: `1px solid ${BORDER}`,
-                  }}
-                >
-                  <span
-                    style={{
-                      fontSize: 24,
-                      color,
-                      lineHeight: 1,
-                      marginTop: 2,
-                    }}
-                  >
-                    {icon}
-                  </span>
-
-                  <div style={{ flex: 1, minWidth: 0 }}>
-                    <div
-                      style={{
-                        color: TEXT,
-                        fontWeight: 900,
-                        fontSize: 15,
-                        marginBottom: 4,
-                      }}
-                    >
-                      {title}
-                    </div>
-
-                    <div
-                      style={{
-                        color: color === GOLD ? GOLD : GOLD,
-                        fontWeight: 800,
-                        marginBottom: detail ? 4 : 0,
-                        fontSize: 13,
-                      }}
-                    >
-                      {subline}
-                    </div>
-
-                    {!!detail && (
-                      <div
-                        style={{
-                          color: SUBTEXT,
-                          fontSize: 13,
-                          lineHeight: 1.45,
-                          whiteSpace: "pre-wrap",
-                          wordBreak: "break-word",
-                        }}
-                      >
-                        {detail}
-                      </div>
-                    )}
-                  </div>
-                </div>
-              );
-            })}
         </div>
       </div>
 
-      {showAddEvent && (
-        <AddEventModal
-          onSave={handleAddEventSave}
-          onClose={() => setShowAddEvent(false)}
-          date={addEventDate}
-        />
+      {noteModalOpen && (
+        <div
+          style={{
+            position: "fixed",
+            inset: 0,
+            background: "#000a",
+            zIndex: 100,
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+          }}
+        >
+          <div
+            style={{
+              width: "92%",
+              maxWidth: 540,
+              background: CARD,
+              border: `2px solid ${GOLD}`,
+              borderRadius: 18,
+              padding: 24,
+              boxShadow: "0 12px 30px rgba(0,0,0,0.45)",
+            }}
+          >
+            <div style={{ color: GOLD, fontWeight: 900, fontSize: 20, marginBottom: 14 }}>
+              {editingNoteId ? "Edit note" : "Add note"}
+            </div>
+
+            <textarea
+              rows={8}
+              value={noteText}
+              onChange={(e) => setNoteText(e.target.value)}
+              placeholder="Write your note for this day..."
+              style={{
+                width: "100%",
+                resize: "vertical",
+                boxSizing: "border-box",
+                background: BG,
+                color: TEXT,
+                border: `1px solid ${BORDER}`,
+                borderRadius: 12,
+                padding: 14,
+                outline: "none",
+                fontSize: 14,
+                lineHeight: 1.5,
+              }}
+            />
+
+            <div style={{ display: "flex", gap: 10, marginTop: 16 }}>
+              <button
+                onClick={saveNote}
+                style={{
+                  flex: 1,
+                  background: GOLD,
+                  color: "#191919",
+                  border: "none",
+                  borderRadius: 10,
+                  fontWeight: 900,
+                  padding: "12px 16px",
+                  cursor: "pointer",
+                }}
+              >
+                Save
+              </button>
+
+              <button
+                onClick={() => {
+                  setNoteModalOpen(false);
+                  setEditingNoteId(null);
+                  setNoteText("");
+                }}
+                style={{
+                  flex: 1,
+                  background: "transparent",
+                  color: TEXT,
+                  border: `1.5px solid ${GOLD}`,
+                  borderRadius: 10,
+                  fontWeight: 900,
+                  padding: "12px 16px",
+                  cursor: "pointer",
+                }}
+              >
+                Cancel
+              </button>
+            </div>
+          </div>
+        </div>
       )}
     </div>
   );
 }
 
-/* Legend chip */
-function LegendDot({ color, label, outlined }) {
-  return (
-    <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
-      <span
-        style={{
-          width: 12,
-          height: 12,
-          borderRadius: "50%",
-          background: color,
-          outline: outlined ? `2px solid ${color}` : "none",
-        }}
-      />
-      <span style={{ color: SUBTEXT, fontWeight: 800, fontSize: 12 }}>{label}</span>
-    </div>
-  );
-}
+/* ===== SMALL UI ===== */
+const card = {
+  background: CARD,
+  borderRadius: 18,
+  border: `1px solid ${BORDER}`,
+  boxShadow: "0 2px 18px rgba(0,0,0,0.35)",
+};
 
-function MiniMetric({ label, value }) {
+function MiniStat({ label, value }) {
   return (
     <div
       style={{
         background: SOFT,
         border: `1px solid ${BORDER}`,
         borderRadius: 12,
-        padding: "10px 12px",
+        padding: 12,
       }}
     >
-      <div style={{ color: SUBTEXT, fontSize: 12, fontWeight: 700 }}>{label}</div>
-      <div style={{ color: TEXT, fontWeight: 900, fontSize: 22, marginTop: 2 }}>{value}</div>
+      <div style={{ color: SUBTEXT, fontWeight: 700, fontSize: 12 }}>{label}</div>
+      <div style={{ color: TEXT, fontWeight: 900, fontSize: 18, marginTop: 4 }}>{value}</div>
     </div>
   );
 }
 
-function EmptyState({ title, text }) {
+function NavBtn({ children, onClick }) {
   return (
-    <div
+    <button
+      onClick={onClick}
       style={{
-        color: TEXT,
-        background: "#191919",
-        borderRadius: 12,
-        padding: 16,
+        width: 36,
+        height: 36,
+        borderRadius: 10,
+        background: "#1d2023",
+        color: GOLD,
         border: `1px solid ${BORDER}`,
+        cursor: "pointer",
+        display: "grid",
+        placeItems: "center",
       }}
     >
-      <div style={{ fontWeight: 900, marginBottom: 6 }}>{title}</div>
-      <div style={{ color: SUBTEXT, lineHeight: 1.5 }}>{text}</div>
+      {children}
+    </button>
+  );
+}
+
+function DotBadge({ color, text }) {
+  return (
+    <span
+      style={{
+        minWidth: 18,
+        height: 18,
+        borderRadius: 999,
+        background: color,
+        color: "#111",
+        fontSize: 11,
+        fontWeight: 900,
+        display: "grid",
+        placeItems: "center",
+        padding: "0 4px",
+      }}
+    >
+      {text}
+    </span>
+  );
+}
+
+function LegendPill({ color, label }) {
+  return (
+    <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+      <span
+        style={{
+          width: 10,
+          height: 10,
+          borderRadius: "50%",
+          background: color,
+          display: "inline-block",
+        }}
+      />
+      <span style={{ color: SUBTEXT, fontSize: 13, fontWeight: 700 }}>{label}</span>
     </div>
   );
 }
 
-/* Add Event Modal (local note only) */
-function AddEventModal({ onSave, onClose, date }) {
-  const [title, setTitle] = useState("");
-  const [time, setTime] = useState("");
-  const [notes, setNotes] = useState("");
+function TimelineCard({ item, onEditNote, onDeleteNote }) {
+  const meta = itemMeta(item);
 
   return (
     <div
       style={{
-        position: "fixed",
-        inset: 0,
-        background: "#000a",
-        zIndex: 99,
-        display: "flex",
-        alignItems: "center",
-        justifyContent: "center",
+        background: "#17191b",
+        border: `1px solid ${BORDER}`,
+        borderRadius: 14,
+        padding: 14,
+        display: "grid",
+        gridTemplateColumns: "28px 1fr auto",
+        gap: 12,
+        alignItems: "start",
       }}
     >
       <div
         style={{
-          background: CARD,
-          borderRadius: 18,
-          padding: "26px 24px",
-          minWidth: 360,
-          maxWidth: 520,
-          width: "92%",
-          boxShadow: "0 2px 22px rgba(0,0,0,0.5)",
-          border: `2px solid ${GOLD}`,
+          width: 28,
+          height: 28,
+          borderRadius: 8,
+          background: SOFT,
+          color: meta.color,
+          display: "grid",
+          placeItems: "center",
+          marginTop: 2,
         }}
       >
-        <h3 style={{ color: GOLD, fontWeight: 900, marginBottom: 14 }}>
-          Add Calendar Note ({date?.toLocaleDateString()})
-        </h3>
+        {meta.icon}
+      </div>
 
-        <form
-          onSubmit={(e) => {
-            e.preventDefault();
-            onSave({ title, time, notes });
+      <div>
+        <div style={{ color: TEXT, fontWeight: 900, fontSize: 16 }}>{item.title}</div>
+        <div style={{ color: meta.color, fontWeight: 800, fontSize: 13, marginTop: 4 }}>
+          {itemTimeLabel(item)}
+        </div>
+
+        {item.leadName ? (
+          <div style={{ color: TEXT, fontWeight: 700, fontSize: 13, marginTop: 6 }}>
+            Lead: {item.leadName}
+            {item.leadEmail ? (
+              <span style={{ color: SUBTEXT, marginLeft: 8, fontWeight: 600 }}>
+                {item.leadEmail}
+              </span>
+            ) : null}
+          </div>
+        ) : null}
+
+        {item.note ? (
+          <div style={{ color: SUBTEXT, marginTop: 6, lineHeight: 1.5, fontSize: 13 }}>
+            {item.note}
+          </div>
+        ) : null}
+
+        {item.kind === "appointment" && item.done ? (
+          <div style={{ color: GREEN, marginTop: 6, fontSize: 12, fontWeight: 800 }}>
+            Completed
+          </div>
+        ) : null}
+      </div>
+
+      {item.kind === "note" ? (
+        <div style={{ display: "flex", gap: 8 }}>
+          <button
+            onClick={onEditNote}
+            style={tinyBtn(GOLD, "transparent")}
+            title="Edit note"
+          >
+            <FaEdit />
+          </button>
+          <button
+            onClick={onDeleteNote}
+            style={tinyBtn("#e66565", "transparent")}
+            title="Delete note"
+          >
+            <FaTrash />
+          </button>
+        </div>
+      ) : (
+        <div
+          style={{
+            color: SUBTEXT,
+            fontSize: 12,
+            fontWeight: 700,
+            whiteSpace: "nowrap",
           }}
         >
-          <Field label="Title">
-            <input
-              value={title}
-              onChange={(e) => setTitle(e.target.value)}
-              style={inputStyle}
-              placeholder="Event title"
-              required
-            />
-          </Field>
-
-          <Field label="Time">
-            <input
-              type="time"
-              value={time}
-              onChange={(e) => setTime(e.target.value)}
-              style={inputStyle}
-            />
-          </Field>
-
-          <Field label="Notes">
-            <textarea
-              rows={3}
-              value={notes}
-              onChange={(e) => setNotes(e.target.value)}
-              style={{ ...inputStyle, resize: "vertical" }}
-              placeholder="Notes"
-            />
-          </Field>
-
-          <div style={{ display: "flex", gap: 10, marginTop: 10 }}>
-            <button
-              type="submit"
-              style={{
-                background: GOLD,
-                color: "#232323",
-                fontWeight: 900,
-                border: "none",
-                borderRadius: 8,
-                padding: "11px 16px",
-                cursor: "pointer",
-                flex: 1,
-              }}
-            >
-              Save
-            </button>
-
-            <button
-              type="button"
-              onClick={onClose}
-              style={{
-                background: "transparent",
-                color: TEXT,
-                fontWeight: 900,
-                border: `1.3px solid ${GOLD}`,
-                borderRadius: 8,
-                padding: "11px 16px",
-                cursor: "pointer",
-                flex: 1,
-              }}
-            >
-              Cancel
-            </button>
-          </div>
-        </form>
-      </div>
+          {meta.label}
+        </div>
+      )}
     </div>
   );
 }
 
-/* Shared UI bits */
-function Field({ label, children }) {
-  return (
-    <div style={{ marginBottom: 12 }}>
-      <label
-        style={{
-          color: TEXT,
-          marginRight: 8,
-          fontWeight: 900,
-          display: "block",
-          marginBottom: 6,
-        }}
-      >
-        {label}
-      </label>
-      {children}
-    </div>
-  );
+function tinyBtn(color, bg) {
+  return {
+    width: 34,
+    height: 34,
+    borderRadius: 10,
+    background: bg,
+    color,
+    border: `1px solid ${color}`,
+    cursor: "pointer",
+    display: "grid",
+    placeItems: "center",
+  };
 }
-
-const inputStyle = {
-  padding: "10px 12px",
-  borderRadius: 8,
-  fontWeight: 700,
-  fontSize: "1.02em",
-  background: BG,
-  color: TEXT,
-  border: `1.5px solid ${BORDER}`,
-  width: "100%",
-  boxSizing: "border-box",
-};
-
-const monthBtnStyle = {
-  background: CARD,
-  color: GOLD,
-  border: `1.5px solid ${BORDER}`,
-  borderRadius: 8,
-  padding: "8px 14px",
-  fontWeight: 900,
-  fontSize: "1.02em",
-  cursor: "pointer",
-};
