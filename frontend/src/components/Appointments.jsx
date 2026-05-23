@@ -1,5 +1,4 @@
-// src/components/Appointments.jsx
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import {
   FaSearch,
   FaCalendarAlt,
@@ -7,36 +6,58 @@ import {
   FaExclamationTriangle,
   FaSun,
   FaCalendarWeek,
-  FaForward
+  FaForward,
+  FaCheckCircle,
+  FaClock,
 } from "react-icons/fa";
 
-/* === THEME (aligned with Analytics/Calendar) === */
+/* === THEME (aligned with Drawer / Analytics / Calendar) === */
 const BG = "#181a1b";
 const CARD = "#232323";
-const BORDER = "#2a3942";
-const TEXT = "#e9edef";
-const SUBTEXT = "#9fb0bb";
+const SOFT = "#1e2326";
+const BORDER = "#2b2f33";
+const TEXT = "#f3f4f5";
+const SUBTEXT = "#9aa3ab";
 
-const GOLD = "#ffd966";
+const GOLD = "#f7cb53";
 const GREEN = "#30b46c";
 const RED = "#e66565";
 
+/* === API === */
+const API_BASE =
+  (process.env.REACT_APP_API_BASE && process.env.REACT_APP_API_BASE.trim()) ||
+  (process.env.REACT_APP_API_URL && process.env.REACT_APP_API_URL.trim()) ||
+  window.location.origin.replace(/\/$/, "");
+
 /* ===== Helpers ===== */
 const pad2 = (n) => String(n).padStart(2, "0");
-const keyFor = (a) =>
-  `${a._rid ?? a.lead?.id ?? "x"}|${a.title}|${a.date}|${a.time || ""}`;
 
 function startOfDay(d) {
   const x = new Date(d);
   x.setHours(0, 0, 0, 0);
   return x;
 }
+
 function isSameDay(a, b) {
   return (
     a.getFullYear() === b.getFullYear() &&
     a.getMonth() === b.getMonth() &&
     a.getDate() === b.getDate()
   );
+}
+
+function parseDateSafe(v) {
+  if (!v) return null;
+  try {
+    const d = new Date(v);
+    return Number.isNaN(d.getTime()) ? null : d;
+  } catch {
+    return null;
+  }
+}
+
+function normText(v) {
+  return String(v || "").trim().toLowerCase();
 }
 
 /** server-provided id field (if any) */
@@ -52,20 +73,21 @@ const getRealIdField = (r) =>
   r?.uuid ??
   null;
 
-/** do we have a real backend id? */
 const hasRealId = (r) => Boolean(getRealIdField(r));
 
-/** read-only rid (prefers previously set _rid/_client_uid, else server id) */
 const getRID = (r) =>
   String(r?._rid ?? r?._client_uid ?? getRealIdField(r) ?? "");
+
+const safe = (v) => (v == null ? "" : String(v));
 
 /* === Local-storage persistence (per-user) === */
 const LS_KEYS = (email) => ({
   hidden: `appt_hidden_${email || "anon"}`,
   done: `appt_done_${email || "anon"}`,
   time: `appt_time_${email || "anon"}`,
-  slots: `appt_slots_${email || "anon"}`
+  slots: `appt_slots_${email || "anon"}`,
 });
+
 const loadJSON = (k, fallback) => {
   try {
     const v = localStorage.getItem(k);
@@ -74,13 +96,13 @@ const loadJSON = (k, fallback) => {
     return fallback;
   }
 };
+
 const saveJSON = (k, obj) => {
   try {
     localStorage.setItem(k, JSON.stringify(obj || {}));
   } catch {}
 };
 
-/** very small uuid (enough for client-only IDs) */
 const uuid = () =>
   "xxxxxxxxxxxx4xxxyxxxxxxxxxxxxxxx".replace(/[xy]/g, (c) => {
     const r = (Math.random() * 16) | 0;
@@ -90,27 +112,25 @@ const uuid = () =>
 
 const ping = (name) => window.dispatchEvent(new Event(name));
 
-/* ======= Fingerprints for “no-id” rows ======= */
-const safe = (v) => (v == null ? "" : String(v));
+/* ===== Fingerprints for no-id rows ===== */
 const sigOf = (r) =>
   [
     safe(r.lead_id ?? r.lead_email ?? r.lead_first_name ?? ""),
     safe(r.appointment_time ?? ""),
     safe(r.title ?? ""),
-    safe(r.notes ?? "")
+    safe(r.notes ?? ""),
   ].join("|");
 
-/** stable sort key so order doesn't flicker by server order */
 const stableKey = (r) =>
   [
     sigOf(r),
     safe(r.created_at || r.updated_at || r.appointment_time || ""),
-    safe(r.title || "")
+    safe(r.title || ""),
   ].join("~");
 
-/** Assign stable client RIDs using a persisted “slot map” so duplicates don't shift. */
 function assignStableRIDs(rows, slotMap) {
-  const copy = rows.map((r) => ({ ...r }));
+  const copy = (rows || []).map((r) => ({ ...r }));
+
   copy.sort((a, b) => {
     const ka = stableKey(a);
     const kb = stableKey(b);
@@ -126,6 +146,8 @@ function assignStableRIDs(rows, slotMap) {
     bySig.get(sig).push(r);
   });
 
+  const nextSlots = { ...(slotMap || {}) };
+
   bySig.forEach((groupRows, sig) => {
     if (sig.startsWith("REAL:")) {
       groupRows.forEach((r) => {
@@ -133,24 +155,25 @@ function assignStableRIDs(rows, slotMap) {
       });
       return;
     }
+
     const key = sig.slice(4);
-    const slots = Array.isArray(slotMap[key]) ? [...slotMap[key]] : [];
+    const slots = Array.isArray(nextSlots[key]) ? [...nextSlots[key]] : [];
     while (slots.length < groupRows.length) slots.push(uuid());
+
     groupRows.forEach((r, i) => {
       r._rid = slots[i];
       r._client_uid = slots[i];
     });
-    slotMap[key] = slots;
+
+    nextSlots[key] = slots;
   });
 
-  return copy;
+  return { rows: copy, nextSlots };
 }
 
-/** Normalize backend appointment -> local shape {title,date,time,done,lead,...} */
 function normalizeBackend(raw) {
-  if (!raw?.appointment_time) return null;
-  const dt = new Date(raw.appointment_time);
-  if (isNaN(dt)) return null;
+  const dt = parseDateSafe(raw?.appointment_time);
+  if (!dt) return null;
 
   const y = dt.getFullYear();
   const m = pad2(dt.getMonth() + 1);
@@ -169,24 +192,28 @@ function normalizeBackend(raw) {
     lead: {
       id: raw.lead_id || `backend-${getRID(raw)}`,
       name: raw.lead_first_name || raw.lead_email || "Client",
-      tags: []
-    }
+      email: raw.lead_email || "",
+      tags: [],
+    },
   };
 }
 
-/** Merge local lead appointments + backend (with overrides already applied) */
 function getAppointments(leads = [], backendRows = []) {
   const list = [];
   const now = new Date();
 
   (leads || []).forEach((lead) =>
-    (lead.appointments || []).forEach((app) => {
+    (lead.appointments || []).forEach((app, idx) => {
       const dt = new Date(`${app.date}T${app.time || "00:00"}`);
       list.push({
         ...app,
+        _local: true,
+        _localKey:
+          app._localKey ||
+          `${String(lead.id)}|${String(app.title)}|${String(app.date)}|${String(app.time || "")}|${idx}`,
         lead,
         sortKey: dt.getTime(),
-        isOverdue: !app.done && dt < now
+        isOverdue: !app.done && dt < now,
       });
     })
   );
@@ -196,7 +223,7 @@ function getAppointments(leads = [], backendRows = []) {
     list.push({
       ...a,
       sortKey: dt.getTime(),
-      isOverdue: !a.done && dt < now
+      isOverdue: !a.done && dt < now,
     });
   });
 
@@ -213,6 +240,7 @@ function categorize(appointments) {
     if (a.done) return void buckets.done.push(a);
     if (when < now) return void buckets.overdue.push(a);
     if (isSameDay(when, now)) return void buckets.today.push(a);
+
     const diff = Math.ceil((startOfDay(when) - startOfDay(now)) / 86400000);
     if (diff <= 7) buckets.next7.push(a);
     else buckets.later.push(a);
@@ -221,90 +249,128 @@ function categorize(appointments) {
   return buckets;
 }
 
+function monthLabel(dateStr) {
+  const d = parseDateSafe(dateStr);
+  if (!d) return "";
+  return d.toLocaleDateString([], { month: "short", day: "numeric", year: "numeric" });
+}
+
+function statusMeta(appt) {
+  if (appt.done) {
+    return { label: "Done", color: GREEN };
+  }
+  if (appt.isOverdue) {
+    return { label: "Overdue", color: RED };
+  }
+  return { label: "Scheduled", color: GOLD };
+}
+
+function keyFor(a) {
+  return `${a._rid ?? a._localKey ?? a.lead?.id ?? "x"}|${a.title}|${a.date}|${a.time || ""}`;
+}
+
 export default function Appointments({ user, leads = [], setLeads }) {
-  const API_BASE = process.env.REACT_APP_API_URL || "";
-
-  /** Backend list straight from server */
   const [backendAppointments, setBackendAppointments] = useState([]);
-
-  /** Frontend overrides persisted across tab switches (per client RID and server ID) */
   const [hiddenIds, setHiddenIds] = useState({});
   const [doneOverride, setDoneOverride] = useState({});
   const [timeOverride, setTimeOverride] = useState({});
-  const [slotMap, setSlotMap] = useState({}); // signature -> [rid,rid,...]
+  const [slotMap, setSlotMap] = useState({});
+
+  const slotMapRef = useRef({});
+
+  const [search, setSearch] = useState("");
+  const [showCompleted, setShowCompleted] = useState(false);
+  const [saving, setSaving] = useState(false);
+
+  const [showModal, setShowModal] = useState(false);
+  const [editing, setEditing] = useState(null);
+  const [form, setForm] = useState({
+    leadId: "",
+    title: "",
+    date: "",
+    time: "",
+  });
+
+  const userEmail = user?.org_id || user?.email || "";
 
   /* hydrate per-user state on mount / user change */
   useEffect(() => {
-    const K = LS_KEYS(user?.email);
-    setHiddenIds(loadJSON(K.hidden, {}));
-    setDoneOverride(loadJSON(K.done, {}));
-    setTimeOverride(loadJSON(K.time, {}));
-    setSlotMap(loadJSON(K.slots, {}));
-  }, [user?.email]);
+    const K = LS_KEYS(userEmail);
+    const loadedHidden = loadJSON(K.hidden, {});
+    const loadedDone = loadJSON(K.done, {});
+    const loadedTime = loadJSON(K.time, {});
+    const loadedSlots = loadJSON(K.slots, {});
+
+    setHiddenIds(loadedHidden);
+    setDoneOverride(loadedDone);
+    setTimeOverride(loadedTime);
+    setSlotMap(loadedSlots);
+    slotMapRef.current = loadedSlots;
+  }, [userEmail]);
 
   /* persist whenever they change */
   useEffect(() => {
-    saveJSON(LS_KEYS(user?.email).hidden, hiddenIds);
-  }, [hiddenIds, user?.email]);
-  useEffect(() => {
-    saveJSON(LS_KEYS(user?.email).done, doneOverride);
-  }, [doneOverride, user?.email]);
-  useEffect(() => {
-    saveJSON(LS_KEYS(user?.email).time, timeOverride);
-  }, [timeOverride, user?.email]);
-  useEffect(() => {
-    saveJSON(LS_KEYS(user?.email).slots, slotMap);
-  }, [slotMap, user?.email]);
+    saveJSON(LS_KEYS(userEmail).hidden, hiddenIds);
+  }, [hiddenIds, userEmail]);
 
-  /* fetch backend rows */
+  useEffect(() => {
+    saveJSON(LS_KEYS(userEmail).done, doneOverride);
+  }, [doneOverride, userEmail]);
+
+  useEffect(() => {
+    saveJSON(LS_KEYS(userEmail).time, timeOverride);
+  }, [timeOverride, userEmail]);
+
+  useEffect(() => {
+    saveJSON(LS_KEYS(userEmail).slots, slotMap);
+  }, [slotMap, userEmail]);
+
   const fetchBackend = async () => {
     if (!user?.email) return;
     try {
-      const r = await fetch(`${API_BASE}/api/appointments/${encodeURIComponent(user.email)}`);
+      const r = await fetch(`${API_BASE}/api/appointments/${encodeURIComponent(user.email)}`, {
+        credentials: "include",
+        headers: { Accept: "application/json" },
+      });
       const j = await r.json().catch(() => ({}));
       setBackendAppointments(Array.isArray(j?.appointments) ? j.appointments : []);
     } catch {
-      /* ignore */
+      setBackendAppointments([]);
     }
   };
 
   useEffect(() => {
     fetchBackend();
 
-    const onChanged = () => fetchBackend(); // other tabs/views may change
-    window.addEventListener("appointments:changed", onChanged);
-
-    // also refresh when tab regains focus
+    const onChanged = () => fetchBackend();
     const onVis = () => {
       if (document.visibilityState === "visible") fetchBackend();
     };
+
+    window.addEventListener("appointments:changed", onChanged);
     document.addEventListener("visibilitychange", onVis);
 
     return () => {
       window.removeEventListener("appointments:changed", onChanged);
       document.removeEventListener("visibilitychange", onVis);
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [API_BASE, user?.email]);
+  }, [user?.email]);
 
-  /**
-   * STEP 1 — Build stable client RIDs (slot map).
-   */
-  const withStableRIDs = useMemo(() => {
-    const nextSlots = { ...slotMap };
-    const rowsWithRIDs = assignStableRIDs(backendAppointments || [], nextSlots);
-    if (JSON.stringify(nextSlots) !== JSON.stringify(slotMap)) {
-      setSlotMap(nextSlots);
-    }
-    return rowsWithRIDs;
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+  const assignedBackend = useMemo(() => {
+    return assignStableRIDs(backendAppointments || [], slotMapRef.current || {});
   }, [backendAppointments]);
 
-  /**
-   * STEP 2 — Apply local overrides by rid (time/done) and filter hidden by rid.
-   */
+  useEffect(() => {
+    const oldStr = JSON.stringify(slotMapRef.current || {});
+    const newStr = JSON.stringify(assignedBackend.nextSlots || {});
+    if (oldStr !== newStr) {
+      slotMapRef.current = assignedBackend.nextSlots || {};
+      setSlotMap(assignedBackend.nextSlots || {});
+    }
+  }, [assignedBackend.nextSlots]);
+
   const effectiveBackend = useMemo(() => {
-    return (withStableRIDs || [])
+    return (assignedBackend.rows || [])
       .map((r) => {
         const id = r._rid;
         const clone = { ...r };
@@ -313,9 +379,8 @@ export default function Appointments({ user, leads = [], setLeads }) {
         return clone;
       })
       .filter((r) => !hiddenIds[r._rid]);
-  }, [withStableRIDs, hiddenIds, doneOverride, timeOverride]);
+  }, [assignedBackend.rows, hiddenIds, doneOverride, timeOverride]);
 
-  /** STEP 3 — Normalize AFTER overrides */
   const normalizedBackend = useMemo(
     () => effectiveBackend.map((r) => normalizeBackend(r)).filter(Boolean),
     [effectiveBackend]
@@ -326,80 +391,96 @@ export default function Appointments({ user, leads = [], setLeads }) {
     [leads, normalizedBackend]
   );
 
-  const [search, setSearch] = useState("");
-  const [showCompleted, setShowCompleted] = useState(false);
-
   const filtered = useMemo(() => {
     if (!search) return allAppointments;
-    const q = search.toLowerCase();
-    return allAppointments.filter((a) =>
-      `${a.title} ${a.lead?.name || ""}`.toLowerCase().includes(q)
-    );
+    const q = normText(search);
+
+    return allAppointments.filter((a) => {
+      const hay = [
+        a.title,
+        a.lead?.name || "",
+        a.lead?.email || "",
+        a.notes || "",
+        a.date || "",
+      ]
+        .join(" ")
+        .toLowerCase();
+
+      return hay.includes(q);
+    });
   }, [allAppointments, search]);
 
   const buckets = useMemo(() => categorize(filtered), [filtered]);
 
   /* ===== API helpers ===== */
-  const withSeconds = (date, time) => `${date}T${(time || "00:00")}:00`;
+  const withSeconds = (date, time) => `${date}T${time || "00:00"}:00`;
 
-  // real backend id to talk to the API, else null
   const serverIdOf = (appt) => getRealIdField(appt?._backend) ?? null;
+  const isBackend = (appt) => Boolean(appt._backend);
 
-  // convenience: update override maps under both RID and ServerID (so Calendar can apply immediately)
   const updateDoneOverrides = (appt, val) => {
     const rid = appt._rid;
     const sid = serverIdOf(appt);
     setDoneOverride((m) => ({ ...m, [rid]: val, ...(sid ? { [sid]: val } : {}) }));
     ping("appointments:overrides-updated");
   };
+
   const rollbackDoneOverrides = (appt, prevVal) => {
     const rid = appt._rid;
     const sid = serverIdOf(appt);
     setDoneOverride((m) => ({ ...m, [rid]: prevVal, ...(sid ? { [sid]: prevVal } : {}) }));
     ping("appointments:overrides-updated");
   };
+
   const updateTimeOverrides = (appt, iso) => {
     const rid = appt._rid;
     const sid = serverIdOf(appt);
     setTimeOverride((m) => ({ ...m, [rid]: iso, ...(sid ? { [sid]: iso } : {}) }));
     ping("appointments:overrides-updated");
   };
+
   const removeTimeOverrides = (appt) => {
     const rid = appt._rid;
     const sid = serverIdOf(appt);
+
     setTimeOverride((m) => {
       const c = { ...m };
       delete c[rid];
       if (sid) delete c[sid];
       return c;
     });
+
     ping("appointments:overrides-updated");
   };
+
   const hideOverrides = (appt) => {
     const rid = appt._rid;
     const sid = serverIdOf(appt);
     setHiddenIds((m) => ({ ...m, [rid]: true, ...(sid ? { [sid]: true } : {}) }));
     ping("appointments:overrides-updated");
   };
+
   const unhideOverrides = (appt) => {
     const rid = appt._rid;
     const sid = serverIdOf(appt);
+
     setHiddenIds((m) => {
       const c = { ...m };
       delete c[rid];
       if (sid) delete c[sid];
       return c;
     });
+
     ping("appointments:overrides-updated");
   };
 
   async function apiUpdateBackend(appt, updates) {
     const sid = serverIdOf(appt);
-    if (!user?.email || !sid) return false; // cannot update without real id
+    if (!user?.email || !sid) return false;
+
     try {
       const body = {
         ...updates,
-        // common aliases
         done: updates.done,
         is_done: updates.done,
         completed: updates.done,
@@ -410,21 +491,17 @@ export default function Appointments({ user, leads = [], setLeads }) {
             ? "scheduled"
             : undefined,
         appointment_time: updates.appointment_time,
-        date: updates.appointment_time
-          ? updates.appointment_time.slice(0, 10)
-          : undefined,
-        time: updates.appointment_time
-          ? updates.appointment_time.slice(11, 16)
-          : undefined
+        date: updates.appointment_time ? updates.appointment_time.slice(0, 10) : undefined,
+        time: updates.appointment_time ? updates.appointment_time.slice(11, 16) : undefined,
       };
+
       const res = await fetch(
-        `${API_BASE}/api/appointments/${encodeURIComponent(
-          user.email
-        )}/${encodeURIComponent(String(sid))}`,
+        `${API_BASE}/api/appointments/${encodeURIComponent(user.email)}/${encodeURIComponent(String(sid))}`,
         {
-          method: "PUT", // change to "PATCH" if your Flask route expects PATCH
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(body)
+          method: "PUT",
+          credentials: "include",
+          headers: { "Content-Type": "application/json", Accept: "application/json" },
+          body: JSON.stringify(body),
         }
       );
       return res.ok;
@@ -435,13 +512,15 @@ export default function Appointments({ user, leads = [], setLeads }) {
 
   async function apiDeleteBackend(appt) {
     const sid = serverIdOf(appt);
-    if (!user?.email || !sid) return false; // cannot DELETE without real id
+    if (!user?.email || !sid) return false;
+
     try {
       const res = await fetch(
-        `${API_BASE}/api/appointments/${encodeURIComponent(
-          user.email
-        )}/${encodeURIComponent(String(sid))}`,
-        { method: "DELETE" }
+        `${API_BASE}/api/appointments/${encodeURIComponent(user.email)}/${encodeURIComponent(String(sid))}`,
+        {
+          method: "DELETE",
+          credentials: "include",
+        }
       );
       return res.ok;
     } catch {
@@ -449,43 +528,63 @@ export default function Appointments({ user, leads = [], setLeads }) {
     }
   }
 
-  /* ===== Mutations (backend + local with persistence) ===== */
-  const isBackend = (appt) => Boolean(appt._backend);
+  async function persistLocalLeads(nextLeads) {
+    if (!userEmail) return;
+    try {
+      await fetch(`${API_BASE}/api/leads`, {
+        method: "POST",
+        credentials: "include",
+        headers: {
+          "Content-Type": "application/json",
+          Accept: "application/json",
+          "X-User-Email": userEmail,
+        },
+        body: JSON.stringify({ leads: nextLeads }),
+      });
+    } catch {
+      // keep optimistic UI
+    }
+  }
 
+  function updateLocalLeadAppointments(mutator) {
+    setLeads((prev) => {
+      const safePrev = Array.isArray(prev) ? prev : [];
+      const next = mutator(safePrev);
+      persistLocalLeads(next);
+      return next;
+    });
+  }
+
+  /* ===== Mutations ===== */
   async function toggleDone(appt) {
     if (isBackend(appt)) {
       const newDone = !appt.done;
-
-      // optimistic local override under both keys
       updateDoneOverrides(appt, newDone);
 
-      // try to update server; rollback if real id and fail
       const ok = await apiUpdateBackend(appt, { done: newDone });
       if (serverIdOf(appt) && !ok) {
         rollbackDoneOverrides(appt, !newDone);
       }
 
-      // notify other views
       ping("appointments:changed");
       return;
     }
-    // LOCAL lead appointment
-    const { lead, date, title, time } = appt;
-    setLeads((prev) =>
-      (prev || []).map((l) => {
-        if (l.id !== lead.id) return l;
+
+    updateLocalLeadAppointments((prev) =>
+      prev.map((l) => {
+        if (String(l.id) !== String(appt.lead.id)) return l;
         return {
           ...l,
           appointments: (l.appointments || []).map((x) =>
-            x.date === date &&
-            x.title === title &&
-            (x.time || "") === (time || "")
+            String(x._localKey || `${l.id}|${x.title}|${x.date}|${x.time || ""}`) ===
+            String(appt._localKey)
               ? { ...x, done: !x.done }
               : x
-          )
+          ),
         };
       })
     );
+
     ping("appointments:changed");
   }
 
@@ -493,9 +592,8 @@ export default function Appointments({ user, leads = [], setLeads }) {
     if (isBackend(appt)) {
       const base = new Date(`${appt.date}T${appt.time || "00:00"}`);
       base.setDate(base.getDate() + days);
-      const newDate = `${base.getFullYear()}-${pad2(
-        base.getMonth() + 1
-      )}-${pad2(base.getDate())}`;
+
+      const newDate = `${base.getFullYear()}-${pad2(base.getMonth() + 1)}-${pad2(base.getDate())}`;
       const newTime = `${pad2(base.getHours())}:${pad2(base.getMinutes())}`;
       const iso = withSeconds(newDate, newTime);
 
@@ -505,65 +603,63 @@ export default function Appointments({ user, leads = [], setLeads }) {
       if (serverIdOf(appt) && !ok) {
         removeTimeOverrides(appt);
       }
+
       ping("appointments:changed");
       return;
     }
-    // LOCAL lead appointment
-    const { lead, date, title, time } = appt;
-    const base = new Date(`${date}T${time || "00:00"}`);
-    base.setDate(base.getDate() + days);
-    const newDate = `${base.getFullYear()}-${pad2(
-      base.getMonth() + 1
-    )}-${pad2(base.getDate())}`;
-    setLeads((prev) =>
-      (prev || []).map((l) => {
-        if (l.id !== lead.id) return l;
+
+    updateLocalLeadAppointments((prev) =>
+      prev.map((l) => {
+        if (String(l.id) !== String(appt.lead.id)) return l;
+
         return {
           ...l,
-          appointments: (l.appointments || []).map((x) =>
-            x.date === date &&
-            x.title === title &&
-            (x.time || "") === (time || "")
-              ? { ...x, date: newDate }
-              : x
-          )
+          appointments: (l.appointments || []).map((x) => {
+            const localKey = x._localKey || `${l.id}|${x.title}|${x.date}|${x.time || ""}`;
+            if (String(localKey) !== String(appt._localKey)) return x;
+
+            const base = new Date(`${x.date}T${x.time || "00:00"}`);
+            base.setDate(base.getDate() + days);
+
+            const movedDate = `${base.getFullYear()}-${pad2(base.getMonth() + 1)}-${pad2(base.getDate())}`;
+            const movedTime = `${pad2(base.getHours())}:${pad2(base.getMinutes())}`;
+
+            return { ...x, date: movedDate, time: movedTime };
+          }),
         };
       })
     );
+
     ping("appointments:changed");
   }
 
   async function remove(appt) {
     if (isBackend(appt)) {
-      // optimistic tombstone for THIS exact rid and server id
       hideOverrides(appt);
 
       const ok = await apiDeleteBackend(appt);
       if (serverIdOf(appt) && !ok) {
         unhideOverrides(appt);
       }
+
       ping("appointments:changed");
       return;
     }
-    // LOCAL lead appointment
-    const { lead, date, title, time } = appt;
-    setLeads((prev) =>
-      (prev || []).map((l) =>
-        l.id === lead.id
+
+    updateLocalLeadAppointments((prev) =>
+      prev.map((l) =>
+        String(l.id) === String(appt.lead.id)
           ? {
               ...l,
-              appointments: (l.appointments || []).filter(
-                (x) =>
-                  !(
-                    x.date === date &&
-                    x.title === title &&
-                    (x.time || "") === (time || "")
-                  )
-              )
+              appointments: (l.appointments || []).filter((x) => {
+                const localKey = x._localKey || `${l.id}|${x.title}|${x.date}|${x.time || ""}`;
+                return String(localKey) !== String(appt._localKey);
+              }),
             }
           : l
       )
     );
+
     ping("appointments:changed");
   }
 
@@ -572,74 +668,96 @@ export default function Appointments({ user, leads = [], setLeads }) {
       leadId: String(appt.lead.id),
       title: appt.title,
       date: appt.date,
-      time: appt.time || ""
+      time: appt.time || "",
     });
     setEditing(appt);
     setShowModal(true);
   }
 
-  const [showModal, setShowModal] = useState(false);
-  const [form, setForm] = useState({
-    leadId: "",
-    title: "",
-    date: "",
-    time: ""
-  });
-  const [editing, setEditing] = useState(null);
-
   async function handleSave() {
     const { leadId, title, date, time } = form;
     if (!leadId || !title || !date) return;
 
-    if (editing && editing._backend) {
-      const iso = `${date}T${(time || "00:00")}:00`;
+    setSaving(true);
 
-      updateTimeOverrides(editing, iso);
+    try {
+      if (editing && editing._backend) {
+        const iso = `${date}T${time || "00:00"}:00`;
 
-      const ok = await apiUpdateBackend(editing, {
-        appointment_time: iso,
-        title,
-        notes: editing.notes || ""
-      });
-      if (serverIdOf(editing) && !ok) {
-        removeTimeOverrides(editing);
+        updateTimeOverrides(editing, iso);
+
+        const ok = await apiUpdateBackend(editing, {
+          appointment_time: iso,
+          title,
+          notes: editing.notes || "",
+        });
+
+        if (serverIdOf(editing) && !ok) {
+          removeTimeOverrides(editing);
+        }
+
+        ping("appointments:changed");
+      } else if (editing) {
+        updateLocalLeadAppointments((prev) =>
+          prev.map((l) => {
+            if (String(l.id) !== String(leadId)) return l;
+
+            const filtered = (l.appointments || []).filter((x) => {
+              const localKey = x._localKey || `${l.id}|${x.title}|${x.date}|${x.time || ""}`;
+              return String(localKey) !== String(editing._localKey);
+            });
+
+            return {
+              ...l,
+              appointments: [
+                ...filtered,
+                {
+                  _localKey: editing._localKey,
+                  title,
+                  date,
+                  time,
+                  done: false,
+                },
+              ],
+            };
+          })
+        });
+
+        ping("appointments:changed");
+      } else {
+        const newLocalKey = `${leadId}|${title}|${date}|${time || ""}|${Date.now()}`;
+
+        updateLocalLeadAppointments((prev) =>
+          prev.map((l) =>
+            String(l.id) === String(leadId)
+              ? {
+                  ...l,
+                  appointments: [
+                    ...(l.appointments || []),
+                    {
+                      _localKey: newLocalKey,
+                      title,
+                      date,
+                      time,
+                      done: false,
+                    },
+                  ],
+                }
+              : l
+          )
+        );
+
+        ping("appointments:changed");
       }
+    } finally {
+      setSaving(false);
       setShowModal(false);
       setEditing(null);
       setForm({ leadId: "", title: "", date: "", time: "" });
-      ping("appointments:changed");
-      return;
     }
-
-    // LOCAL lead appointment
-    setLeads((prev) =>
-      (prev || []).map((l) =>
-        String(l.id) === String(leadId)
-          ? {
-              ...l,
-              appointments: [
-                ...(l.appointments || []).filter(
-                  (x) =>
-                    !editing ||
-                    !(
-                      x.date === editing?.date &&
-                      x.title === editing?.title &&
-                      (x.time || "") === (editing?.time || "")
-                    )
-                ),
-                { title, date, time, done: false }
-              ]
-            }
-          : l
-      )
-    );
-    setShowModal(false);
-    setEditing(null);
-    setForm({ leadId: "", title: "", date: "", time: "" });
-    ping("appointments:changed");
   }
 
-  /* ===== UI ===== */
+  /* ===== Stats ===== */
   const stat = {
     overdue: buckets.overdue.length,
     today: buckets.today.length,
@@ -649,7 +767,7 @@ export default function Appointments({ user, leads = [], setLeads }) {
       buckets.today.length +
       buckets.next7.length +
       buckets.later.length,
-    done: buckets.done.length
+    done: buckets.done.length,
   };
 
   return (
@@ -658,28 +776,35 @@ export default function Appointments({ user, leads = [], setLeads }) {
         padding: "28px",
         background: BG,
         minHeight: "100vh",
-        boxSizing: "border-box"
+        boxSizing: "border-box",
       }}
     >
-      {/* Header + Add */}
+      {/* Header */}
       <div
         style={{
-          display: "flex",
-          justifyContent: "space-between",
+          display: "grid",
+          gridTemplateColumns: "1fr auto",
           alignItems: "center",
-          marginBottom: 16
+          gap: 16,
+          marginBottom: 18,
         }}
       >
-        <div
-          style={{
-            color: TEXT,
-            fontWeight: 900,
-            fontSize: "2.05em",
-            letterSpacing: "-0.5px"
-          }}
-        >
-          Appointments
+        <div>
+          <div
+            style={{
+              color: TEXT,
+              fontWeight: 900,
+              fontSize: "2.05em",
+              letterSpacing: "-0.5px",
+            }}
+          >
+            Appointments
+          </div>
+          <div style={{ color: SUBTEXT, marginTop: 5, fontSize: 13 }}>
+            Manage scheduled work, track overdue items, and keep appointment changes synced.
+          </div>
         </div>
+
         <button
           onClick={() => {
             setShowModal(true);
@@ -698,7 +823,7 @@ export default function Appointments({ user, leads = [], setLeads }) {
             boxShadow: "0 2px 8px rgba(0,0,0,0.2)",
             display: "flex",
             alignItems: "center",
-            gap: 10
+            gap: 10,
           }}
         >
           <FaPlus /> Add Appointment
@@ -712,10 +837,9 @@ export default function Appointments({ user, leads = [], setLeads }) {
           flexWrap: "wrap",
           gap: 12,
           marginBottom: 18,
-          alignItems: "center"
+          alignItems: "center",
         }}
       >
-        {/* search */}
         <div
           style={{
             display: "flex",
@@ -723,12 +847,12 @@ export default function Appointments({ user, leads = [], setLeads }) {
             background: CARD,
             borderRadius: 10,
             padding: "0 12px",
-            border: `1px solid ${BORDER}`
+            border: `1px solid ${BORDER}`,
           }}
         >
           <FaSearch color={GOLD} style={{ marginRight: 8 }} />
           <input
-            placeholder="Search by title or lead…"
+            placeholder="Search by title, lead, email, date…"
             value={search}
             onChange={(e) => setSearch(e.target.value)}
             style={{
@@ -738,18 +862,17 @@ export default function Appointments({ user, leads = [], setLeads }) {
               color: TEXT,
               fontSize: "1.02em",
               padding: "10px 0",
-              width: 260
+              width: 280,
             }}
           />
         </div>
 
-        {/* view toggle */}
         <div
           style={{
             display: "inline-flex",
             border: `1px solid ${BORDER}`,
             borderRadius: 10,
-            overflow: "hidden"
+            overflow: "hidden",
           }}
         >
           <button
@@ -760,7 +883,7 @@ export default function Appointments({ user, leads = [], setLeads }) {
               padding: "8px 14px",
               fontWeight: 900,
               border: "none",
-              cursor: "pointer"
+              cursor: "pointer",
             }}
           >
             Active
@@ -773,7 +896,7 @@ export default function Appointments({ user, leads = [], setLeads }) {
               padding: "8px 14px",
               fontWeight: 900,
               border: "none",
-              cursor: "pointer"
+              cursor: "pointer",
             }}
           >
             Completed
@@ -781,34 +904,20 @@ export default function Appointments({ user, leads = [], setLeads }) {
         </div>
       </div>
 
-      {/* Stats bar */}
+      {/* Stats */}
       <div
         style={{
           display: "grid",
           gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))",
           gap: 12,
-          marginBottom: 18
+          marginBottom: 18,
         }}
       >
-        <StatCard
-          icon={<FaExclamationTriangle />}
-          label="Overdue"
-          value={stat.overdue}
-          color={RED}
-        />
+        <StatCard icon={<FaExclamationTriangle />} label="Overdue" value={stat.overdue} color={RED} />
         <StatCard icon={<FaSun />} label="Today" value={stat.today} color={GOLD} />
-        <StatCard
-          icon={<FaCalendarWeek />}
-          label="Next 7 days"
-          value={stat.week}
-          color={GREEN}
-        />
-        <StatCard
-          icon={<FaForward />}
-          label="All upcoming"
-          value={stat.upcoming}
-          color={TEXT}
-        />
+        <StatCard icon={<FaCalendarWeek />} label="Next 7 days" value={stat.week} color={GREEN} />
+        <StatCard icon={<FaForward />} label="All upcoming" value={stat.upcoming} color={TEXT} />
+        <StatCard icon={<FaCheckCircle />} label="Completed" value={stat.done} color={GREEN} />
       </div>
 
       {/* Sections */}
@@ -817,6 +926,7 @@ export default function Appointments({ user, leads = [], setLeads }) {
           <Section
             title="Overdue"
             color={RED}
+            subtitle="Appointments that should already have been handled"
             items={buckets.overdue}
             renderItem={(a) => (
               <AppointmentCard
@@ -832,6 +942,7 @@ export default function Appointments({ user, leads = [], setLeads }) {
           <Section
             title="Today"
             color={GOLD}
+            subtitle="Appointments scheduled for today"
             items={buckets.today}
             renderItem={(a) => (
               <AppointmentCard
@@ -847,6 +958,7 @@ export default function Appointments({ user, leads = [], setLeads }) {
           <Section
             title="Next 7 Days"
             color={GREEN}
+            subtitle="Upcoming appointments this week"
             items={buckets.next7}
             renderItem={(a) => (
               <AppointmentCard
@@ -862,6 +974,7 @@ export default function Appointments({ user, leads = [], setLeads }) {
           <Section
             title="Later"
             color={SUBTEXT}
+            subtitle="Future appointments beyond 7 days"
             items={buckets.later}
             renderItem={(a) => (
               <AppointmentCard
@@ -878,6 +991,7 @@ export default function Appointments({ user, leads = [], setLeads }) {
         <Section
           title="Completed"
           color={GREEN}
+          subtitle="Finished appointments"
           items={[...buckets.done].sort((a, b) => b.sortKey - a.sortKey)}
           renderItem={(a) => (
             <AppointmentCard
@@ -901,7 +1015,7 @@ export default function Appointments({ user, leads = [], setLeads }) {
             zIndex: 99,
             display: "flex",
             alignItems: "center",
-            justifyContent: "center"
+            justifyContent: "center",
           }}
         >
           <div
@@ -913,7 +1027,7 @@ export default function Appointments({ user, leads = [], setLeads }) {
               maxWidth: 520,
               width: "92%",
               boxShadow: "0 2px 22px rgba(0,0,0,0.5)",
-              border: `2px solid ${GOLD}`
+              border: `2px solid ${GOLD}`,
             }}
           >
             <h3 style={{ color: GOLD, fontWeight: 900, marginBottom: 16 }}>
@@ -921,8 +1035,16 @@ export default function Appointments({ user, leads = [], setLeads }) {
             </h3>
 
             <div style={{ marginBottom: 14 }}>
-              <label style={{ color: TEXT, marginRight: 8, fontWeight: 900 }}>
-                Lead:
+              <label
+                style={{
+                  color: TEXT,
+                  marginRight: 8,
+                  fontWeight: 900,
+                  display: "block",
+                  marginBottom: 6,
+                }}
+              >
+                Lead
               </label>
               <LiveLeadSearch
                 leads={leads}
@@ -934,11 +1056,9 @@ export default function Appointments({ user, leads = [], setLeads }) {
             <Field label="Title">
               <input
                 value={form.title}
-                onChange={(e) =>
-                  setForm((f) => ({ ...f, title: e.target.value }))
-                }
+                onChange={(e) => setForm((f) => ({ ...f, title: e.target.value }))}
                 style={inputStyle}
-                placeholder="Appointment Title"
+                placeholder="Appointment title"
               />
             </Field>
 
@@ -946,9 +1066,7 @@ export default function Appointments({ user, leads = [], setLeads }) {
               <input
                 type="date"
                 value={form.date}
-                onChange={(e) =>
-                  setForm((f) => ({ ...f, date: e.target.value }))
-                }
+                onChange={(e) => setForm((f) => ({ ...f, date: e.target.value }))}
                 style={inputStyle}
               />
             </Field>
@@ -957,9 +1075,7 @@ export default function Appointments({ user, leads = [], setLeads }) {
               <input
                 type="time"
                 value={form.time}
-                onChange={(e) =>
-                  setForm((f) => ({ ...f, time: e.target.value }))
-                }
+                onChange={(e) => setForm((f) => ({ ...f, time: e.target.value }))}
                 style={inputStyle}
               />
             </Field>
@@ -967,6 +1083,7 @@ export default function Appointments({ user, leads = [], setLeads }) {
             <div style={{ display: "flex", gap: 10, marginTop: 12 }}>
               <button
                 onClick={handleSave}
+                disabled={saving}
                 style={{
                   background: GOLD,
                   color: "#232323",
@@ -975,10 +1092,11 @@ export default function Appointments({ user, leads = [], setLeads }) {
                   borderRadius: 8,
                   padding: "11px 16px",
                   cursor: "pointer",
-                  flex: 1
+                  flex: 1,
+                  opacity: saving ? 0.75 : 1,
                 }}
               >
-                {editing ? "Save" : "Add"}
+                {saving ? "Saving..." : editing ? "Save" : "Add"}
               </button>
               <button
                 onClick={() => {
@@ -993,7 +1111,7 @@ export default function Appointments({ user, leads = [], setLeads }) {
                   borderRadius: 8,
                   padding: "11px 16px",
                   cursor: "pointer",
-                  flex: 1
+                  flex: 1,
                 }}
               >
                 Cancel
@@ -1013,35 +1131,49 @@ function StatCard({ icon, label, value, color }) {
       style={{
         background: CARD,
         border: `1px solid ${BORDER}`,
-        borderRadius: 12,
-        padding: "12px 14px",
+        borderRadius: 14,
+        padding: "13px 14px",
         display: "flex",
         alignItems: "center",
-        gap: 12
+        gap: 12,
       }}
     >
-      <div style={{ fontSize: 18, color }}>{icon}</div>
+      <div
+        style={{
+          width: 40,
+          height: 40,
+          borderRadius: 12,
+          display: "grid",
+          placeItems: "center",
+          background: SOFT,
+          color,
+          fontSize: 17,
+          flex: "0 0 40px",
+        }}
+      >
+        {icon}
+      </div>
       <div style={{ flex: 1 }}>
-        <div style={{ color: SUBTEXT, fontWeight: 800, fontSize: 12 }}>
-          {label}
-        </div>
+        <div style={{ color: SUBTEXT, fontWeight: 800, fontSize: 12 }}>{label}</div>
         <div style={{ color: TEXT, fontWeight: 900, fontSize: 20 }}>{value}</div>
       </div>
     </div>
   );
 }
 
-function Section({ title, color, items, renderItem }) {
+function Section({ title, color, subtitle, items, renderItem }) {
   if (!items || items.length === 0) return null;
+
   return (
     <div style={{ marginTop: 16 }}>
       <div
         style={{
           display: "flex",
-          alignItems: "center",
+          alignItems: "baseline",
           gap: 10,
           marginBottom: 10,
-          paddingLeft: 2
+          paddingLeft: 2,
+          flexWrap: "wrap",
         }}
       >
         <span
@@ -1050,20 +1182,21 @@ function Section({ title, color, items, renderItem }) {
             height: 10,
             borderRadius: "50%",
             background: color,
-            display: "inline-block"
+            display: "inline-block",
           }}
         />
         <div style={{ color: TEXT, fontWeight: 900 }}>{title}</div>
-        <div style={{ color: SUBTEXT, fontWeight: 800, fontSize: 12 }}>
-          ({items.length})
-        </div>
+        <div style={{ color: SUBTEXT, fontWeight: 800, fontSize: 12 }}>({items.length})</div>
+        {subtitle ? (
+          <div style={{ color: SUBTEXT, fontSize: 12, marginLeft: 4 }}>{subtitle}</div>
+        ) : null}
       </div>
 
       <div
         style={{
           display: "grid",
           gridTemplateColumns: "repeat(auto-fit, minmax(420px, 1fr))",
-          gap: 14
+          gap: 14,
         }}
       >
         {items.map((a) => (
@@ -1075,90 +1208,142 @@ function Section({ title, color, items, renderItem }) {
 }
 
 function AppointmentCard({ appt, onDone, onEdit, onDelete, onResched }) {
-  const isOverdue = appt.isOverdue && !appt.done;
-  const statusColor = isOverdue ? RED : appt.done ? GREEN : GOLD;
+  const meta = statusMeta(appt);
 
   return (
     <div
       style={{
         background: CARD,
         border: `1px solid ${BORDER}`,
-        borderLeft: `6px solid ${statusColor}`,
-        borderRadius: 12,
-        padding: "14px 16px",
-        minHeight: 90,
+        borderLeft: `6px solid ${meta.color}`,
+        borderRadius: 14,
+        padding: "15px 16px",
+        minHeight: 104,
         display: "flex",
         gap: 14,
         alignItems: "center",
         boxShadow: "0 2px 18px rgba(0,0,0,0.25)",
-        opacity: appt.done ? 0.65 : 1
+        opacity: appt.done ? 0.7 : 1,
       }}
     >
-      <div style={{ fontSize: 24 }}>
+      <div
+        style={{
+          width: 42,
+          height: 42,
+          borderRadius: 12,
+          display: "grid",
+          placeItems: "center",
+          background: SOFT,
+          flex: "0 0 42px",
+        }}
+      >
         <FaCalendarAlt color={GOLD} />
       </div>
 
-      <div style={{ flex: 1 }}>
-        <div style={{ color: TEXT, fontWeight: 900, lineHeight: 1.15 }}>
+      <div style={{ flex: 1, minWidth: 0 }}>
+        <div
+          style={{
+            color: TEXT,
+            fontWeight: 900,
+            lineHeight: 1.15,
+            fontSize: 15,
+            wordBreak: "break-word",
+          }}
+        >
           {appt.title}
-          <span style={{ color: SUBTEXT, marginLeft: 8, fontWeight: 800 }}>
-            {appt.lead?.name ? `(${appt.lead.name})` : ""}
-          </span>
         </div>
-        <div style={{ color: statusColor, fontWeight: 800, marginTop: 6 }}>
-          {appt.time ? `${appt.date} ${appt.time}` : appt.date}
-          {isOverdue && <span style={{ color: RED, marginLeft: 10 }}>(Overdue)</span>}
-          {appt.done && <span style={{ color: GREEN, marginLeft: 10 }}>(Done)</span>}
+
+        <div
+          style={{
+            color: SUBTEXT,
+            marginTop: 4,
+            fontWeight: 700,
+            fontSize: 13,
+          }}
+        >
+          {appt.lead?.name ? `${appt.lead.name}` : "No lead name"}
+        </div>
+
+        <div
+          style={{
+            color: meta.color,
+            fontWeight: 800,
+            marginTop: 7,
+            display: "flex",
+            gap: 10,
+            alignItems: "center",
+            flexWrap: "wrap",
+            fontSize: 13,
+          }}
+        >
+          <span>{appt.time ? `${monthLabel(appt.date)} • ${appt.time}` : monthLabel(appt.date)}</span>
+          <span
+            style={{
+              background: "rgba(255,255,255,0.04)",
+              border: `1px solid ${BORDER}`,
+              color: meta.color,
+              borderRadius: 999,
+              padding: "3px 8px",
+              fontSize: 11,
+              fontWeight: 900,
+            }}
+          >
+            {meta.label}
+          </span>
         </div>
 
         {!appt.done && (
-          <div style={{ display: "flex", gap: 8, marginTop: 8 }}>
-            <Chip onClick={() => onResched(1)}>+1d</Chip>
-            <Chip onClick={() => onResched(3)}>+3d</Chip>
-            <Chip onClick={() => onResched(7)}>+1w</Chip>
+          <div style={{ display: "flex", gap: 8, marginTop: 10, flexWrap: "wrap" }}>
+            <Chip icon={<FaClock />} onClick={() => onResched(1)}>
+              +1 day
+            </Chip>
+            <Chip onClick={() => onResched(3)}>+3 days</Chip>
+            <Chip onClick={() => onResched(7)}>+1 week</Chip>
           </div>
         )}
       </div>
 
-      <div style={{ display: "flex", gap: 8 }}>
+      <div style={{ display: "flex", gap: 8, flexWrap: "wrap", justifyContent: "flex-end" }}>
         <button
           onClick={onDone}
           style={{
             background: appt.done ? GREEN : "transparent",
-            color: appt.done ? "#232323" : GOLD,
+            color: appt.done ? "#172119" : GOLD,
             border: `2px solid ${GOLD}`,
             borderRadius: 8,
             padding: "7px 12px",
             fontWeight: 900,
-            cursor: "pointer"
+            cursor: "pointer",
           }}
         >
           {appt.done ? "Undo" : "Done"}
         </button>
+
         <button
           onClick={onEdit}
           style={{
             background: "transparent",
             color: GOLD,
             border: `1.5px solid ${GOLD}`,
-            borderRadius: 7,
-            padding: "6px 10px",
+            borderRadius: 8,
+            padding: "7px 10px",
             fontWeight: 800,
-            cursor: "pointer"
+            cursor: "pointer",
           }}
         >
           Edit
         </button>
+
         <button
           onClick={onDelete}
           style={{
             background: "transparent",
             color: RED,
             border: `1.5px solid ${RED}`,
-            borderRadius: 7,
-            padding: "6px 10px",
+            borderRadius: 8,
+            padding: "7px 10px",
             fontWeight: 800,
-            cursor: "pointer"
+            cursor: "pointer",
           }}
         >
           Delete
@@ -1168,21 +1353,25 @@ function AppointmentCard({ appt, onDone, onEdit, onDelete, onResched }) {
   );
 }
 
-function Chip({ children, onClick }) {
+function Chip({ children, onClick, icon }) {
   return (
     <button
       onClick={onClick}
       style={{
-        background: "#1e2326",
+        background: SOFT,
         color: TEXT,
         border: `1px solid ${BORDER}`,
         borderRadius: 999,
-        padding: "4px 10px",
+        padding: "5px 10px",
         fontWeight: 800,
         fontSize: 12,
-        cursor: "pointer"
+        cursor: "pointer",
+        display: "inline-flex",
+        alignItems: "center",
+        gap: 6,
       }}
     >
+      {icon || null}
       {children}
     </button>
   );
@@ -1191,11 +1380,22 @@ function Chip({ children, onClick }) {
 function Field({ label, children }) {
   return (
     <div style={{ marginBottom: 12 }}>
-      <label style={{ color: TEXT, marginRight: 8, fontWeight: 900 }}>{label}:</label>
+      <label
+        style={{
+          color: TEXT,
+          marginRight: 8,
+          fontWeight: 900,
+          display: "block",
+          marginBottom: 6,
+        }}
+      >
+        {label}
+      </label>
       {children}
     </div>
   );
 }
+
 const inputStyle = {
   padding: "10px 12px",
   borderRadius: 8,
@@ -1204,19 +1404,23 @@ const inputStyle = {
   background: BG,
   color: TEXT,
   border: `1.5px solid ${BORDER}`,
-  width: "100%"
+  width: "100%",
+  boxSizing: "border-box",
 };
 
 function LiveLeadSearch({ leads, value, onChange }) {
   const [search, setSearch] = useState("");
+
+  const selected = leads.find((l) => String(l.id) === String(value));
+
   const filtered = !search
     ? leads
     : leads.filter(
         (l) =>
-          (l.name || "").toLowerCase().includes(search.toLowerCase()) ||
-          (l.email || "").toLowerCase().includes(search.toLowerCase())
+          normText(l.name || "").includes(normText(search)) ||
+          normText(l.email || "").includes(normText(search))
       );
-  const selected = leads.find((l) => String(l.id) === String(value));
+
   return (
     <>
       <input
@@ -1229,40 +1433,52 @@ function LiveLeadSearch({ leads, value, onChange }) {
         }}
         style={inputStyle}
       />
+
       <div
         style={{
-          maxHeight: 140,
+          maxHeight: 160,
           overflowY: "auto",
           border: `1px solid ${BORDER}`,
           borderRadius: 8,
           background: BG,
-          marginTop: 6
+          marginTop: 6,
         }}
       >
         {filtered.length === 0 && (
           <div style={{ color: GOLD, padding: 10, fontWeight: 700 }}>No leads found.</div>
         )}
-        {filtered.map((l) => (
-          <div
-            key={l.id}
-            style={{
-              padding: "9px 12px",
-              color: value === String(l.id) ? "#232323" : TEXT,
-              background: value === String(l.id) ? GOLD : "transparent",
-              cursor: "pointer",
-              fontWeight: 900
-            }}
-            onClick={() => {
-              onChange(String(l.id));
-              setSearch(l.name);
-            }}
-          >
-            {l.name}{" "}
-            <span style={{ color: GOLD, marginLeft: 7, fontWeight: 700, fontSize: 12 }}>
-              {l.email}
-            </span>
-          </div>
-        ))}
+
+        {filtered.map((l) => {
+          const active = value === String(l.id);
+          return (
+            <div
+              key={l.id}
+              style={{
+                padding: "9px 12px",
+                color: active ? "#232323" : TEXT,
+                background: active ? GOLD : "transparent",
+                cursor: "pointer",
+                fontWeight: 900,
+              }}
+              onClick={() => {
+                onChange(String(l.id));
+                setSearch(l.name || "");
+              }}
+            >
+              {l.name || "Unnamed Lead"}
+              <span
+                style={{
+                  color: active ? "#232323" : GOLD,
+                  marginLeft: 7,
+                  fontWeight: 700,
+                  fontSize: 12,
+                }}
+              >
+                {l.email}
+              </span>
+            </div>
+          );
+        })}
       </div>
     </>
   );
