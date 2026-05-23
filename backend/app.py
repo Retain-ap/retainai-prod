@@ -1423,6 +1423,39 @@ def _org_is_active(owner_record: dict) -> bool:
         return False
     return (owner_record.get("status") == "active") or _within_trial(owner_record, TRIAL_DAYS)
 
+def _lead_status_from_dates(lead: dict) -> str:
+    now = datetime.datetime.utcnow()
+
+    def parse_dt(val):
+        if not val:
+            return None
+        try:
+            return datetime.datetime.fromisoformat(str(val).replace("Z", ""))
+        except Exception:
+            return None
+
+    last_contacted = (
+        parse_dt(lead.get("last_contacted"))
+        or parse_dt(lead.get("last_activity_at"))
+        or parse_dt(lead.get("last_inbound_at"))
+        or parse_dt(lead.get("last_outbound_at"))
+        or parse_dt(lead.get("updated_at"))
+        or parse_dt(lead.get("createdAt"))
+        or parse_dt(lead.get("created_at"))
+    )
+
+    if not last_contacted:
+        return "cold"
+
+    days_since = (now - last_contacted).days
+
+    if days_since >= 14:
+        return "cold"
+    if days_since >= 7:
+        return "warning"
+    return "active"
+
+
 @app.route("/api/leads", methods=["GET", "OPTIONS"])
 def api_get_leads():
     if request.method == "OPTIONS":
@@ -1441,7 +1474,32 @@ def api_get_leads():
         if not isinstance(leads, list):
             leads = []
 
-        return jsonify({"ok": True, "email": email, "leads": leads}), 200
+        normalized = []
+        changed = False
+
+        for lead in leads:
+            if not isinstance(lead, dict):
+                continue
+
+            item = dict(lead)
+            computed_status = _lead_status_from_dates(item)
+
+            if item.get("status") != computed_status:
+                item["status"] = computed_status
+                changed = True
+
+            normalized.append(item)
+
+        if changed:
+            all_leads[email] = normalized
+            save_leads(all_leads)
+
+        return jsonify({
+            "ok": True,
+            "email": email,
+            "leads": normalized
+        }), 200
+
     except Exception as e:
         return jsonify({"ok": False, "error": str(e)[:300]}), 500
 
@@ -4410,23 +4468,45 @@ def read_json(path: str, default: Any):
         return default
 
 def write_json(path: str, data: Any):
-    tmp = path + ".tmp"
-    with open(tmp, "w", encoding="utf-8") as f:
-        json.dump(data, f, indent=2, ensure_ascii=False)
-    os.replace(tmp, path)
+    directory = os.path.dirname(path) or "."
+    os.makedirs(directory, exist_ok=True)
+
+    tmp = f"{path}.tmp"
+    try:
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(data, f, indent=2, ensure_ascii=False)
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp, path)
+    finally:
+        try:
+            if os.path.exists(tmp):
+                os.remove(tmp)
+        except Exception:
+            pass
 
 def ensure_files():
     os.makedirs(DATA_ROOT, exist_ok=True)
-    if not os.path.exists(FILE_AUTOMATIONS):
-        write_json(FILE_AUTOMATIONS, {"users": {}})
-    if not os.path.exists(FILE_STATE):
-        write_json(FILE_STATE, {})
-    if not os.path.exists(FILE_NOTIFICATIONS):
-        write_json(FILE_NOTIFICATIONS, {"notifications": []})
-    if not os.path.exists(FILE_USERS):
-        write_json(FILE_USERS, {"users": {}})
-    if not os.path.exists(FILE_SUBSCRIPTIONS):
-        write_json(FILE_SUBSCRIPTIONS, {"subscriptions": {}})
+
+    defaults = {
+        FILE_AUTOMATIONS: {"users": {}},
+        FILE_STATE: {},
+        FILE_NOTIFICATIONS: {"notifications": []},
+        FILE_USERS: {"users": {}},
+        FILE_SUBSCRIPTIONS: {"subscriptions": {}},
+    }
+
+    for path, default_data in defaults.items():
+        try:
+            directory = os.path.dirname(path) or "."
+            os.makedirs(directory, exist_ok=True)
+            if not os.path.exists(path):
+                write_json(path, default_data)
+        except Exception as e:
+            try:
+                app.logger.warning("[AUTOMATIONS ensure_files] failed for %s: %s", path, e)
+            except Exception:
+                pass
 
 def create_notification(owner_email: str, title: str, body: str):
     return add_notification(
@@ -4458,7 +4538,14 @@ def load_state() -> Dict[str, Any]:
     return read_json(FILE_STATE, {}) or {}
 
 def save_state(state: Dict[str, Any]):
-    write_json(FILE_STATE, state)
+    try:
+        ensure_files()
+        write_json(FILE_STATE, state or {})
+    except Exception as e:
+        try:
+            app.logger.warning("[AUTOMATIONS save_state] failed: %s", e)
+        except Exception:
+            pass
 
 def user_from_request() -> str:
     h = request.headers.get("X-User-Email")
@@ -4935,57 +5022,125 @@ def execute_step(flow: Dict[str, Any], step: Dict[str, Any], lead: Dict[str, Any
     return True
 
 def engine_tick():
-    ensure_files()
-    flows_db = read_json(FILE_AUTOMATIONS, {"users": {}})
-    state = load_state()
-    leads_by_user = load_leads()
+    try:
+        ensure_files()
+        flows_db = read_json(FILE_AUTOMATIONS, {"users": {}}) or {"users": {}}
+        state = load_state() or {}
+        leads_by_user = load_leads() or {}
 
-    for user, flows in (flows_db.get("users", {}) or {}).items():
-        profile = load_user_profile(user)
-        user_leads = leads_by_user.get(user, []) or []
+        if not isinstance(flows_db, dict):
+            flows_db = {"users": {}}
+        if not isinstance(state, dict):
+            state = {}
+        if not isinstance(leads_by_user, dict):
+            leads_by_user = {}
 
-        for flow in (flows or []):
-            if not flow.get("enabled", False):
-                continue
-            flow_id = flow.get("id") or str(uuid4())
-            steps = flow.get("steps", []) or []
-            caps = flow.get("caps", {"per_lead_per_day": 1, "respect_quiet_hours": True}) or {}
-            trigger = flow.get("trigger", {}) or {}
+        for user, flows in (flows_db.get("users", {}) or {}).items():
+            try:
+                profile = load_user_profile(user)
+                user_leads = leads_by_user.get(user, []) or []
 
-            for lead in user_leads:
-                owner = (lead.get("owner") or user or "").lower()
-                if owner != user:
-                    continue
+                if not isinstance(user_leads, list):
+                    user_leads = []
+                if not isinstance(flows, list):
+                    flows = []
 
-                lead_id = lead.get("id")
-                if lead_id is None:
-                    continue
-                lead_key = str(lead_id)
+                for flow in flows:
+                    try:
+                        if not isinstance(flow, dict):
+                            continue
+                        if not flow.get("enabled", False):
+                            continue
 
-                run = get_run(state, flow_id, lead_key)
-                if run.get("done"):
-                    continue
+                        flow_id = flow.get("id") or str(uuid4())
+                        steps = flow.get("steps", []) or []
+                        caps = flow.get("caps", {"per_lead_per_day": 1, "respect_quiet_hours": True}) or {}
+                        trigger = flow.get("trigger", {}) or {}
 
-                if run.get("step", 0) == 0:
-                    if not trigger_met(trigger, lead):
-                        state.setdefault(flow_id, {}).pop(lead_key, None)
+                        if not isinstance(steps, list):
+                            steps = []
+                        if not isinstance(caps, dict):
+                            caps = {"per_lead_per_day": 1, "respect_quiet_hours": True}
+                        if not isinstance(trigger, dict):
+                            trigger = {}
+
+                        for lead in user_leads:
+                            try:
+                                if not isinstance(lead, dict):
+                                    continue
+
+                                owner = (lead.get("owner") or user or "").lower()
+                                if owner != user:
+                                    continue
+
+                                lead_id = lead.get("id")
+                                if lead_id is None:
+                                    continue
+
+                                lead_key = str(lead_id)
+                                run = get_run(state, flow_id, lead_key)
+
+                                if run.get("done"):
+                                    continue
+
+                                if run.get("step", 0) == 0:
+                                    if not trigger_met(trigger, lead):
+                                        state.setdefault(flow_id, {}).pop(lead_key, None)
+                                        continue
+
+                                if should_auto_stop(flow, lead, run):
+                                    run["done"] = True
+                                    continue
+
+                                step_index = int(run.get("step", 0))
+                                if step_index >= len(steps):
+                                    run["done"] = True
+                                    continue
+
+                                step = steps[step_index]
+                                progressed = execute_step(flow, step, lead, run, caps, profile)
+                                if progressed:
+                                    advance(run)
+
+                            except Exception as e:
+                                try:
+                                    app.logger.warning(
+                                        "[AUTOMATIONS engine_tick] lead failure user=%s flow_id=%s lead_id=%s error=%s",
+                                        user,
+                                        flow_id,
+                                        lead.get("id") if isinstance(lead, dict) else None,
+                                        e,
+                                    )
+                                except Exception:
+                                    pass
+                                continue
+
+                    except Exception as e:
+                        try:
+                            app.logger.warning(
+                                "[AUTOMATIONS engine_tick] flow failure user=%s flow_id=%s error=%s",
+                                user,
+                                flow.get("id") if isinstance(flow, dict) else None,
+                                e,
+                            )
+                        except Exception:
+                            pass
                         continue
 
-                if should_auto_stop(flow, lead, run):
-                    run["done"] = True
-                    continue
+            except Exception as e:
+                try:
+                    app.logger.warning("[AUTOMATIONS engine_tick] user failure user=%s error=%s", user, e)
+                except Exception:
+                    pass
+                continue
 
-                step_index = int(run.get("step", 0))
-                if step_index >= len(steps):
-                    run["done"] = True
-                    continue
+        save_state(state)
 
-                step = steps[step_index]
-                progressed = execute_step(flow, step, lead, run, caps, profile)
-                if progressed:
-                    advance(run)
-
-    save_state(state)
+    except Exception as e:
+        try:
+            app.logger.warning("[AUTOMATIONS engine_tick] fatal error: %s", e)
+        except Exception:
+            pass
 
 def _normalize_flow_for_user(flow: Dict[str, Any], user: str) -> Dict[str, Any]:
     f = dict(flow or {})
