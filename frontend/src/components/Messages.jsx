@@ -925,6 +925,26 @@ export default function Messages({ user, leads = [], defaultTemplate = "", langu
     setSuggestion({ ...s });
   }, [lastInbound, user?.email, lead?.id, consumedMap]);
 
+  useEffect(() => {
+    if (!API || !user?.email || !lead?.id) return;
+    if (!lastInbound) return;
+
+    const t = setTimeout(() => {
+      refreshWindow(true);
+    }, 250);
+
+    return () => clearTimeout(t);
+  }, [lastInbound, API, user?.email, lead?.id, templateName, templateLangUI]);
+
+  useEffect(() => {
+    if (!gate.inside24h) return;
+
+    setTemplateInfoError("");
+    if (typeof expectedParams === "number" && expectedParams > 0) {
+      setParamValues(Array.from({ length: expectedParams }, () => ""));
+    }
+  }, [gate.inside24h, expectedParams]);
+  
   const markConsumed = (sug) => {
     if (!sug || !user?.email || !lead?.id) return;
     const key = SUG_KEYS(user?.email).consumed;
