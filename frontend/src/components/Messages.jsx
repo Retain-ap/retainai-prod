@@ -21,6 +21,7 @@ const C = {
   softer: "#15181a",
   mutedBlue: "#1e2a30",
 };
+
 const PANEL_H = "72vh";
 
 /** ===== HELPERS ===== */
@@ -62,12 +63,19 @@ const htmlToText = (s) => {
   return t.trim();
 };
 
-const initials = (name, email) =>
-  !name && !email
-    ? "?"
-    : (name ? name.split(" ").map((p) => p[0]).join("") : (email || "?")[0])
-        .toUpperCase()
-        .slice(0, 2);
+const firstName = (name = "", email = "") => {
+  const n = String(name || "").trim();
+  if (n) return n.split(/\s+/)[0];
+  const e = String(email || "").trim();
+  if (e.includes("@")) return e.split("@")[0];
+  return e || "";
+};
+
+const initials = (name, email) => {
+  const first = firstName(name, email);
+  if (!first) return "?";
+  return first.replace(/[^a-z0-9]/gi, "").slice(0, 2).toUpperCase() || "?";
+};
 
 const digits = (s = "") => (s || "").replace(/\D/g, "");
 
@@ -219,7 +227,7 @@ const sigForSuggestion = (leadId, sug) =>
   `${String(leadId || "lead")}|${sug?.date || ""}|${sug?.time || ""}`;
 
 /** ===== TEMPLATE PARSING / RENDERING ===== */
-const between = (txt, startIdx, endIdx, span = 36) => {
+const between = (txt, startIdx, endIdx, span = 40) => {
   const left = Math.max(0, startIdx - span);
   const right = Math.min(txt.length, endIdx + span);
   return {
@@ -231,7 +239,6 @@ const between = (txt, startIdx, endIdx, span = 36) => {
 function inferParamKindsFromBody(bodyText, count, templateName = "") {
   const kinds = Array.from({ length: count }, () => null);
   const body = String(bodyText || "");
-  const bodyLower = LOWER(body);
   const nameLower = LOWER(templateName);
 
   for (let i = 1; i <= count; i++) {
@@ -239,36 +246,34 @@ function inferParamKindsFromBody(bodyText, count, templateName = "") {
     const m = re.exec(body);
     if (!m) continue;
     const { index } = m;
-    const ctx = between(body, index, index + m[0].length, 44);
-    const L = ctx.left;
-    const R = ctx.right;
-    const around = `${L} ${R}`;
+    const ctx = between(body, index, index + m[0].length, 46);
+    const around = `${ctx.left} ${ctx.right}`;
 
-    if (/(^|\s)(hi|hello|hey|dear)\s*$/.test(L) || /(client|customer|guest|lead|name)\s*$/.test(L)) {
+    if (/(^|\s)(hi|hello|hey|dear)\s*$/.test(ctx.left) || /(client|customer|guest|lead|name)\s*$/.test(ctx.left)) {
       kinds[i - 1] = "lead_name";
       continue;
     }
-    if (/(i'?m|i am|this is)\s*$/.test(L)) {
+    if (/(i'?m|i am|this is)\s*$/.test(ctx.left)) {
       kinds[i - 1] = "user_name";
       continue;
     }
-    if (/(from|at)\s*$/.test(L) || /^(\s*(from|at)\b)/.test(R) || /\bbusiness\b/.test(around)) {
+    if (/(from|at)\s*$/.test(ctx.left) || /^(\s*(from|at)\b)/.test(ctx.right) || /\bbusiness\b/.test(around)) {
       kinds[i - 1] = "business";
       continue;
     }
-    if (/\b(date|day|tomorrow|today|scheduled for|booked for)\b/.test(around)) {
+    if (/\b(date|day|tomorrow|today|scheduled for|booked for|visit date)\b/.test(around)) {
       kinds[i - 1] = "date";
       continue;
     }
-    if (/\b(time|slot|pm|am|o'clock|at)\b/.test(around)) {
+    if (/\b(time|slot|pm|am|o'clock|appointment time|call time|visit time)\b/.test(around)) {
       kinds[i - 1] = "time";
       continue;
     }
-    if (/\b(location|address|studio|office|salon|shop)\b/.test(around)) {
+    if (/\b(location|address|studio|office|salon|shop|site|visit location)\b/.test(around)) {
       kinds[i - 1] = "location";
       continue;
     }
-    if (/\b(service|treatment|package|appointment type)\b/.test(around)) {
+    if (/\b(service|treatment|package|appointment type|visit type)\b/.test(around)) {
       kinds[i - 1] = "service";
       continue;
     }
@@ -286,9 +291,31 @@ function inferParamKindsFromBody(bodyText, count, templateName = "") {
     }
   }
 
-  // Template-name-aware cleanup
   for (let i = 0; i < kinds.length; i++) {
     if (kinds[i]) continue;
+
+    if (/technician|tech/.test(nameLower)) {
+      kinds[i] =
+        i === 0 ? "lead_name" :
+        i === 1 ? "business" :
+        i === 2 ? "date" :
+        i === 3 ? "time" :
+        i === 4 ? "location" :
+        i === 5 ? "service" :
+        "details";
+      continue;
+    }
+
+    if (/call/.test(nameLower) && /reminder/.test(nameLower)) {
+      kinds[i] =
+        i === 0 ? "lead_name" :
+        i === 1 ? "business" :
+        i === 2 ? "date" :
+        i === 3 ? "time" :
+        i === 4 ? "phone" :
+        "details";
+      continue;
+    }
 
     if (/resched|reschedule/.test(nameLower)) {
       kinds[i] =
@@ -296,6 +323,7 @@ function inferParamKindsFromBody(bodyText, count, templateName = "") {
         i === 1 ? "business" :
         i === 2 ? "date" :
         i === 3 ? "time" :
+        i === 4 ? "location" :
         "details";
       continue;
     }
@@ -315,7 +343,8 @@ function inferParamKindsFromBody(bodyText, count, templateName = "") {
       kinds[i] =
         i === 0 ? "lead_name" :
         i === 1 ? "business" :
-        i === 2 ? "details" :
+        i === 2 ? "date" :
+        i === 3 ? "time" :
         "details";
       continue;
     }
@@ -332,11 +361,10 @@ function inferParamKindsFromBody(bodyText, count, templateName = "") {
 
     kinds[i] =
       i === 0 ? "lead_name" :
-      i === 1 ? "user_name" :
-      i === 2 ? "business" :
-      i === 3 ? "details" :
-      i === 4 ? "date" :
-      i === 5 ? "time" :
+      i === 1 ? "business" :
+      i === 2 ? "date" :
+      i === 3 ? "time" :
+      i === 4 ? "location" :
       "details";
   }
 
@@ -372,7 +400,15 @@ function valueForKind(kind, { user, lead, input, suggestion }) {
   }
 }
 
-function friendlyLabelForKind(kind, i) {
+function friendlyLabelForKind(kind, i, templateName = "") {
+  const n = LOWER(templateName);
+
+  if (kind === "date" && /technician|tech|visit/.test(n)) return "Visit date";
+  if (kind === "time" && /technician|tech|visit/.test(n)) return "Visit time";
+  if (kind === "location" && /technician|tech|visit/.test(n)) return "Visit location";
+  if (kind === "date" && /call/.test(n)) return "Call date";
+  if (kind === "time" && /call/.test(n)) return "Call time";
+
   switch (kind) {
     case "lead_name":
       return "Lead first name";
@@ -401,7 +437,15 @@ function friendlyLabelForKind(kind, i) {
   }
 }
 
-function fieldHintForKind(kind) {
+function fieldHintForKind(kind, templateName = "") {
+  const n = LOWER(templateName);
+
+  if (kind === "date" && /technician|tech|visit/.test(n)) return "2026-05-24";
+  if (kind === "time" && /technician|tech|visit/.test(n)) return "2:00 PM";
+  if (kind === "location" && /technician|tech|visit/.test(n)) return "123 Main St";
+  if (kind === "date" && /call/.test(n)) return "2026-05-24";
+  if (kind === "time" && /call/.test(n)) return "7:00 PM";
+
   switch (kind) {
     case "lead_name":
       return "John";
@@ -447,7 +491,6 @@ function parseTemplateEchoText(text) {
     return { kind: "template_echo", text: "" };
   }
 
-  // exact object-ish payload strings
   if (/^\s*\{[\s\S]*payload[\s\S]*text[\s\S]*\}\s*$/i.test(raw)) {
     const textMatch =
       raw.match(/(?:^|[,{]\s*)text\s*:\s*'([^']*)'/i) ||
@@ -483,7 +526,7 @@ function pushTemplateRenderCache(userEmail, leadId, renderedText, meta = {}) {
       created_at: new Date().toISOString(),
       used: false,
     },
-  ].slice(-20);
+  ].slice(-30);
   saveJSON(key, next);
 }
 
@@ -512,12 +555,11 @@ function normalizeThreadMessages(rawMessages, userEmail, leadId) {
   const payloadIndexes = [];
 
   list.forEach((m, idx) => {
-    if (m?.from !== "user") return;
     const parsed = parseTemplateEchoText(m?.text);
     if (parsed) payloadIndexes.push({ idx, parsed });
   });
 
-  if (!payloadIndexes.length) return list;
+  if (!payloadIndexes.length) return list.filter((m) => cleanAIText(m?.text || "") || m?.from !== "user");
 
   const { consumed } = consumeTemplateRenderCache(userEmail, leadId, payloadIndexes.length);
 
@@ -528,6 +570,7 @@ function normalizeThreadMessages(rawMessages, userEmail, leadId) {
 
     list[entry.idx] = {
       ...list[entry.idx],
+      from: "user",
       text: finalText || fallbackExtracted || "",
       _rendered_template: true,
       _payload_cleaned: true,
@@ -535,11 +578,8 @@ function normalizeThreadMessages(rawMessages, userEmail, leadId) {
   });
 
   return list.filter((m) => {
-    if (m?.from !== "user") return true;
-    const parsed = parseTemplateEchoText(m?.text);
-    if (!parsed) return true;
     const cleaned = cleanAIText(m?.text || "");
-    return Boolean(cleaned);
+    return Boolean(cleaned) || m?.from === "lead";
   });
 }
 
@@ -590,6 +630,15 @@ function buildSmartAutofillValues(expectedParams, paramKinds, context) {
     const kind = paramKinds?.[idx];
     return valueForKind(kind, context) || "";
   });
+}
+
+function latestLeadSignal(thread) {
+  for (let i = thread.length - 1; i >= 0; i--) {
+    if (thread[i]?.from === "lead") {
+      return `${thread[i]?.time || ""}|${cleanAIText(thread[i]?.text || "")}`;
+    }
+  }
+  return "";
 }
 
 /** ===== COMPONENT ===== */
@@ -683,7 +732,7 @@ export default function Messages({ user, leads = [], defaultTemplate = "", langu
       } finally {
         if (!stop) setPolling(false);
       }
-      if (!stop) pollTimer.current = setTimeout(tick, 6000);
+      if (!stop) pollTimer.current = setTimeout(tick, 5000);
     };
 
     tick();
@@ -899,6 +948,8 @@ export default function Messages({ user, leads = [], defaultTemplate = "", langu
     return "";
   }, [thread]);
 
+  const leadSignal = useMemo(() => latestLeadSignal(thread), [thread]);
+
   const conversationHistory = useMemo(() => buildConversationHistory(thread, 8), [thread]);
 
   const canSendBase = Boolean(API && user?.email && lead?.id && toE164);
@@ -927,24 +978,23 @@ export default function Messages({ user, leads = [], defaultTemplate = "", langu
 
   useEffect(() => {
     if (!API || !user?.email || !lead?.id) return;
-    if (!lastInbound) return;
+    if (!leadSignal) return;
 
     const t = setTimeout(() => {
       refreshWindow(true);
     }, 250);
 
     return () => clearTimeout(t);
-  }, [lastInbound, API, user?.email, lead?.id, templateName, templateLangUI]);
+  }, [leadSignal, API, user?.email, lead?.id, templateName, templateLangUI]);
 
   useEffect(() => {
     if (!gate.inside24h) return;
-
     setTemplateInfoError("");
     if (typeof expectedParams === "number" && expectedParams > 0) {
       setParamValues(Array.from({ length: expectedParams }, () => ""));
     }
   }, [gate.inside24h, expectedParams]);
-  
+
   const markConsumed = (sug) => {
     if (!sug || !user?.email || !lead?.id) return;
     const key = SUG_KEYS(user?.email).consumed;
@@ -972,7 +1022,7 @@ export default function Messages({ user, leads = [], defaultTemplate = "", langu
 
       const payload = {
         lead_email: lead?.email || "",
-        lead_first_name: (lead?.name || "").split(" ")[0] || (lead?.name || "Client"),
+        lead_first_name: FIRSTNAME(lead?.name || "") || "Client",
         user_name: user?.name || "",
         user_email: user?.email,
         business_name: user?.business || user?.businessType || "",
@@ -1040,7 +1090,6 @@ export default function Messages({ user, leads = [], defaultTemplate = "", langu
         payload.message = text;
         payload.skip_personalization = true;
 
-        // optimistic bubble for free text
         setThread((prev) => [
           ...prev,
           {
@@ -1084,7 +1133,6 @@ export default function Messages({ user, leads = [], defaultTemplate = "", langu
             language_code: normApi(toApiLang(templateLangUI)),
           });
 
-          // optimistic rendered bubble
           setThread((prev) => [
             ...prev,
             {
@@ -1107,12 +1155,11 @@ export default function Messages({ user, leads = [], defaultTemplate = "", langu
 
       if (!res.ok || !data.ok) {
         setBanner(data?.error || `Send failed (${res.status})`);
-        // rollback the optimistic last bubble if send failed
         setThread((prev) => prev.filter((m) => !m?._optimistic));
         return;
       }
 
-      setBanner(data.mode === "template" ? `Template sent successfully.` : null);
+      setBanner(data.mode === "template" ? "Template sent successfully." : null);
       setInput("");
 
       if (typeof expectedParams === "number" && expectedParams > 0) {
@@ -1291,10 +1338,7 @@ export default function Messages({ user, leads = [], defaultTemplate = "", langu
           <div style={{ overflowY: "auto", flex: 1 }}>
             {filteredLeads.map((ld) => {
               const active = String(ld.id) === String(activeLeadId);
-              const preview =
-                String(ld.id) === String(activeLeadId)
-                  ? lastPreview
-                  : "Open chat";
+              const preview = String(ld.id) === String(activeLeadId) ? lastPreview : "Open chat";
               return (
                 <button
                   key={ld.id}
@@ -1379,7 +1423,7 @@ export default function Messages({ user, leads = [], defaultTemplate = "", langu
             overflow: "hidden",
           }}
         >
-          {/* Chat header */}
+          {/* Header */}
           <div
             style={{
               height: 56,
@@ -1565,7 +1609,6 @@ export default function Messages({ user, leads = [], defaultTemplate = "", langu
                     border: `1px solid ${C.border}`,
                     borderRadius: 10,
                     padding: "10px 12px",
-                    marginTop: 2,
                   }}
                 >
                   <div style={{ color: C.sub, fontSize: 11, marginBottom: 6, fontWeight: 700 }}>
@@ -1579,7 +1622,7 @@ export default function Messages({ user, leads = [], defaultTemplate = "", langu
 
               {hasTemplateParams && (
                 <>
-                  <div style={{ width: "100%", color: C.text, fontSize: 13, fontWeight: 800, marginTop: 4 }}>
+                  <div style={{ width: "100%", color: C.text, fontSize: 13, fontWeight: 800, marginTop: 2 }}>
                     Fill the required fields
                   </div>
 
@@ -1589,13 +1632,12 @@ export default function Messages({ user, leads = [], defaultTemplate = "", langu
                       gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))",
                       gap: 8,
                       width: "100%",
-                      marginTop: 2,
                     }}
                   >
                     {Array.from({ length: expectedParams }).map((_, i) => (
                       <div key={i} style={{ display: "flex", flexDirection: "column", gap: 6 }}>
                         <label style={{ fontSize: 12, color: C.sub, fontWeight: 700 }}>
-                          {friendlyLabelForKind(paramKinds?.[i], i)}
+                          {friendlyLabelForKind(paramKinds?.[i], i, templateName)}
                         </label>
                         <input
                           value={paramValues?.[i] ?? ""}
@@ -1607,7 +1649,7 @@ export default function Messages({ user, leads = [], defaultTemplate = "", langu
                               return next;
                             });
                           }}
-                          placeholder={templateExample?.[i] ?? fieldHintForKind(paramKinds?.[i])}
+                          placeholder={templateExample?.[i] ?? fieldHintForKind(paramKinds?.[i], templateName)}
                           style={{
                             background: C.bg,
                             color: C.text,
@@ -1621,32 +1663,25 @@ export default function Messages({ user, leads = [], defaultTemplate = "", langu
                       </div>
                     ))}
                   </div>
-
-                  {!!templateBodyText && (
-                    <div
-                      style={{
-                        width: "100%",
-                        background: C.softer,
-                        border: `1px solid ${C.border}`,
-                        borderRadius: 10,
-                        padding: "10px 12px",
-                        marginTop: 4,
-                      }}
-                    >
-                      <div style={{ color: C.sub, fontSize: 11, marginBottom: 6, fontWeight: 700 }}>
-                        What the lead will receive
-                      </div>
-                      <div style={{ color: C.text, fontSize: 13, lineHeight: 1.45, whiteSpace: "pre-wrap" }}>
-                        {templatePreview}
-                      </div>
-                    </div>
-                  )}
                 </>
               )}
 
-              {!templateInfoLoading && !hasTemplateParams && !!templateName && !!templateBodyText && (
-                <div style={{ width: "100%", color: C.sub, fontSize: 12 }}>
-                  This template does not need extra fields.
+              {!!templateBodyText && (
+                <div
+                  style={{
+                    width: "100%",
+                    background: C.softer,
+                    border: `1px solid ${C.border}`,
+                    borderRadius: 10,
+                    padding: "10px 12px",
+                  }}
+                >
+                  <div style={{ color: C.sub, fontSize: 11, marginBottom: 6, fontWeight: 700 }}>
+                    What the lead will receive
+                  </div>
+                  <div style={{ color: C.text, fontSize: 13, lineHeight: 1.45, whiteSpace: "pre-wrap" }}>
+                    {templatePreview || "Complete the fields above to preview the final message."}
+                  </div>
                 </div>
               )}
             </div>
