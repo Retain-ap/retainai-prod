@@ -1,17 +1,25 @@
 // src/components/Calendar.jsx
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 
-/* === THEME (aligned with Analytics) === */
+/* === THEME (aligned with Drawer / Analytics) === */
 const BG = "#181a1b";
 const CARD = "#232323";
-const BORDER = "#2a3942";
-const TEXT = "#e9edef";
-const SUBTEXT = "#9fb0bb";
-const GOLD = "#ffd966";
+const SOFT = "#1e2326";
+const BORDER = "#2b2f33";
+const TEXT = "#f3f4f5";
+const SUBTEXT = "#9aa3ab";
+const GOLD = "#f7cb53";
 
 const APPT = "#30b46c";
 const NOTE = "#ffd966";
 const GOOGLE = "#4885ed";
+const BDAY = "#f7cb53";
+
+/* --- API base --- */
+const API_BASE =
+  (process.env.REACT_APP_API_BASE && process.env.REACT_APP_API_BASE.trim()) ||
+  (process.env.REACT_APP_API_URL && process.env.REACT_APP_API_URL.trim()) ||
+  window.location.origin.replace(/\/$/, "");
 
 /* --- Helpers --- */
 function getLocalISO(dateObj) {
@@ -20,16 +28,29 @@ function getLocalISO(dateObj) {
   const d = String(dateObj.getDate()).padStart(2, "0");
   return `${y}-${m}-${d}`;
 }
+
 function getCalendarGrid(year, month) {
   const first = new Date(year, month, 1);
   const daysIn = new Date(year, month + 1, 0).getDate();
   const start = first.getDay();
   const days = [];
+
   for (let i = 0; i < start; i++) days.push(null);
   for (let d = 1; d <= daysIn; d++) days.push(new Date(year, month, d));
   while (days.length % 7 !== 0) days.push(null);
   while (days.length < 42) days.push(null);
+
   return days;
+}
+
+function parseDateSafe(v) {
+  if (!v) return null;
+  try {
+    const d = new Date(v);
+    return Number.isNaN(d.getTime()) ? null : d;
+  } catch {
+    return null;
+  }
 }
 
 /* === Local storage keys (shared with Appointments) === */
@@ -37,8 +58,10 @@ const LS_KEYS = (email) => ({
   hidden: `appt_hidden_${email || "anon"}`,
   done: `appt_done_${email || "anon"}`,
   time: `appt_time_${email || "anon"}`,
-  slots: `appt_slots_${email || "anon"}`
+  slots: `appt_slots_${email || "anon"}`,
+  notes: `calendar_notes_${email || "anon"}`,
 });
+
 const loadJSON = (k, fallback = {}) => {
   try {
     const v = localStorage.getItem(k);
@@ -47,6 +70,7 @@ const loadJSON = (k, fallback = {}) => {
     return fallback;
   }
 };
+
 const saveJSON = (k, obj) => {
   try {
     localStorage.setItem(k, JSON.stringify(obj || {}));
@@ -65,22 +89,31 @@ const getRealIdField = (r) =>
   r?.aid ??
   r?.uuid ??
   null;
+
 const safe = (v) => (v == null ? "" : String(v));
+
 const sigOf = (r) =>
   [
     safe(r.lead_id ?? r.lead_email ?? r.lead_first_name ?? ""),
     safe(r.appointment_time ?? ""),
     safe(r.title ?? ""),
-    safe(r.notes ?? "")
+    safe(r.notes ?? ""),
   ].join("|");
+
 const stableKey = (r) =>
-  [sigOf(r), safe(r.created_at || r.updated_at || r.appointment_time || ""), safe(r.title || "")].join("~");
+  [
+    sigOf(r),
+    safe(r.created_at || r.updated_at || r.appointment_time || ""),
+    safe(r.title || ""),
+  ].join("~");
+
 const hasRealId = (r) => Boolean(getRealIdField(r));
 const getRID = (r) => String(r?._rid ?? r?._client_uid ?? getRealIdField(r) ?? "");
 
 /** Assign stable client RIDs using the same slot map as Appointments.jsx */
 function assignStableRIDs(rows, slotMap) {
-  const copy = rows.map((r) => ({ ...r }));
+  const copy = (rows || []).map((r) => ({ ...r }));
+
   copy.sort((a, b) => {
     const ka = stableKey(a);
     const kb = stableKey(b);
@@ -103,6 +136,8 @@ function assignStableRIDs(rows, slotMap) {
       return v.toString(16);
     });
 
+  const nextSlots = { ...(slotMap || {}) };
+
   bySig.forEach((groupRows, sig) => {
     if (sig.startsWith("REAL:")) {
       groupRows.forEach((r) => {
@@ -110,17 +145,20 @@ function assignStableRIDs(rows, slotMap) {
       });
       return;
     }
+
     const key = sig.slice(4);
-    const slots = Array.isArray(slotMap[key]) ? [...slotMap[key]] : [];
+    const slots = Array.isArray(nextSlots[key]) ? [...nextSlots[key]] : [];
     while (slots.length < groupRows.length) slots.push(uuid());
+
     groupRows.forEach((r, i) => {
       r._rid = slots[i];
       r._client_uid = slots[i];
     });
-    slotMap[key] = slots;
+
+    nextSlots[key] = slots;
   });
 
-  return copy;
+  return { rows: copy, nextSlots };
 }
 
 /** Apply overrides (hide, done flag, rescheduled time) */
@@ -134,6 +172,7 @@ function applyOverrides(rows = [], email) {
     .map((r) => {
       const id = getRID(r);
       if (!id) return r;
+
       let out = r;
       if (timeMap[id]) out = { ...out, appointment_time: timeMap[id] };
       if (typeof doneMap[id] === "boolean") out = { ...out, done: doneMap[id] };
@@ -144,9 +183,8 @@ function applyOverrides(rows = [], email) {
 
 // Normalize backend appointment using LOCAL time
 function normalizeAppt(appt) {
-  if (!appt?.appointment_time) return null;
-  const dt = new Date(appt.appointment_time);
-  if (isNaN(dt)) return null;
+  const dt = parseDateSafe(appt?.appointment_time);
+  if (!dt) return null;
 
   const y = dt.getFullYear();
   const m = String(dt.getMonth() + 1).padStart(2, "0");
@@ -160,51 +198,178 @@ function normalizeAppt(appt) {
     time: `${hh}:${mm}`,
     title: appt.title || appt.lead_first_name || appt.business_name || "Appointment",
     notes: appt.notes || "",
-    ...appt
+    ...appt,
   };
 }
 
-function getCellEvents(dateObj, events, leads, googleEvents, appointments) {
+/** Normalize external events prop from parent */
+function normalizeExternalEvent(ev) {
+  if (!ev) return null;
+
+  // Appointment-like item
+  if (ev.type === "appointment" || ev.appointment_time || ev.date) {
+    if (ev.appointment_time) {
+      const normalized = normalizeAppt(ev);
+      if (normalized) return normalized;
+    }
+
+    if (ev.date) {
+      return {
+        type: ev.type === "note" ? "note" : "appointment",
+        title: ev.title || "Appointment",
+        date: ev.date,
+        time: ev.time || "",
+        notes: ev.notes || "",
+        ...ev,
+      };
+    }
+  }
+
+  // Note-like item
+  if (ev.type === "note") {
+    return {
+      type: "note",
+      title: ev.title || "Note",
+      date: ev.date,
+      time: ev.time || "",
+      notes: ev.notes || "",
+      ...ev,
+    };
+  }
+
+  return null;
+}
+
+function formatGoogleEventTime(ev) {
+  if (!ev) return "";
+
+  if (ev.start?.date && !ev.start?.dateTime) {
+    return "All day";
+  }
+
+  if (ev.start?.dateTime) {
+    const s = new Date(ev.start.dateTime);
+    if (ev.end?.dateTime) {
+      const e = new Date(ev.end.dateTime);
+      return `${s.toLocaleTimeString([], {
+        hour: "2-digit",
+        minute: "2-digit",
+      })} - ${e.toLocaleTimeString([], {
+        hour: "2-digit",
+        minute: "2-digit",
+      })}`;
+    }
+
+    return s.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+  }
+
+  return "";
+}
+
+/* --- Birthday helpers (year-agnostic) --- */
+function parseBirthdayStr(s) {
+  if (!s) return null;
+  const t = String(s).trim();
+
+  if (/^\d{4}-\d{2}-\d{2}$/.test(t)) {
+    return { month: Number(t.slice(5, 7)), day: Number(t.slice(8, 10)) };
+  }
+
+  if (/^\d{2}\/\d{2}(\/\d{2,4})?$/.test(t)) {
+    const [m, d] = t.split("/");
+    return { month: Number(m), day: Number(d) };
+  }
+
+  return null;
+}
+
+function isLeadBirthdayOnDate(lead, dateObj) {
+  const bd = parseBirthdayStr(lead?.birthday);
+  if (!bd) return false;
+  return bd.month === dateObj.getMonth() + 1 && bd.day === dateObj.getDate();
+}
+
+function getBirthdayItems(leads, dateObj) {
+  return (leads || [])
+    .filter((lead) => isLeadBirthdayOnDate(lead, dateObj))
+    .map((lead) => ({
+      type: "birthday",
+      lead,
+      title: `${lead.name || lead.email || "Lead"} Birthday`,
+      date: getLocalISO(dateObj),
+      time: "",
+      notes: "",
+    }));
+}
+
+function dedupeItems(items = []) {
+  const seen = new Set();
+  const out = [];
+
+  items.forEach((item) => {
+    const key =
+      item.type === "google"
+        ? `google|${item.google?.id || item.google?.summary || ""}|${item.google?.start?.dateTime || item.google?.start?.date || ""}`
+        : item.type === "birthday"
+        ? `birthday|${item.lead?.email || item.lead?.name || ""}|${item.date || ""}`
+        : `${item.type}|${item.title || ""}|${item.date || ""}|${item.time || ""}|${item.notes || ""}|${item.id || item._rid || ""}`;
+
+    if (seen.has(key)) return;
+    seen.add(key);
+    out.push(item);
+  });
+
+  return out;
+}
+
+function getCellEvents(dateObj, externalEvents, leads, googleEvents, appointments, localNotes) {
   const dayISO = getLocalISO(dateObj);
   const cellEvents = [];
-
-  (leads || []).forEach((lead) =>
-    (lead.appointments || []).forEach((app) => {
-      if (app.date === dayISO) cellEvents.push({ type: "appointment", ...app });
-    })
-  );
-
-  (events || []).forEach((ev) => {
-    if (ev.date === dayISO) cellEvents.push({ type: "note", ...ev });
-  });
-
-  (googleEvents || []).forEach((ev) => {
-    const evStart = ev.start?.dateTime || ev.start?.date;
-    if (evStart && evStart.slice(0, 10) === dayISO)
-      cellEvents.push({ type: "google", google: ev });
-  });
 
   (appointments || []).forEach((a) => {
     const norm = normalizeAppt(a);
     if (norm && norm.date === dayISO) cellEvents.push(norm);
   });
 
-  return cellEvents;
+  (externalEvents || []).forEach((ev) => {
+    const norm = normalizeExternalEvent(ev);
+    if (norm && norm.date === dayISO) cellEvents.push(norm);
+  });
+
+  (localNotes || []).forEach((ev) => {
+    if (ev?.date === dayISO) cellEvents.push({ type: "note", ...ev });
+  });
+
+  (googleEvents || []).forEach((ev) => {
+    const evStart = ev.start?.dateTime || ev.start?.date;
+    if (evStart && evStart.slice(0, 10) === dayISO) {
+      cellEvents.push({ type: "google", google: ev });
+    }
+  });
+
+  getBirthdayItems(leads, dateObj).forEach((b) => cellEvents.push(b));
+
+  return dedupeItems(cellEvents);
 }
 
-function getPanelEvents(dateObj, events, leads, googleEvents, appointments) {
+function getPanelEvents(dateObj, externalEvents, leads, googleEvents, appointments, localNotes) {
   if (!dateObj) return [];
+
   const dayISO = getLocalISO(dateObj);
   const out = [];
 
-  (leads || []).forEach((lead) =>
-    (lead.appointments || []).forEach((app) => {
-      if (app.date === dayISO) out.push({ type: "appointment", ...app, lead });
-    })
-  );
+  (appointments || []).forEach((a) => {
+    const norm = normalizeAppt(a);
+    if (norm && norm.date === dayISO) out.push(norm);
+  });
 
-  (events || []).forEach((ev) => {
-    if (ev.date === dayISO) out.push({ type: "note", ...ev });
+  (externalEvents || []).forEach((ev) => {
+    const norm = normalizeExternalEvent(ev);
+    if (norm && norm.date === dayISO) out.push(norm);
+  });
+
+  (localNotes || []).forEach((ev) => {
+    if (ev?.date === dayISO) out.push({ type: "note", ...ev });
   });
 
   (googleEvents || []).forEach((ev) => {
@@ -212,56 +377,21 @@ function getPanelEvents(dateObj, events, leads, googleEvents, appointments) {
     if (s && s.slice(0, 10) === dayISO) out.push({ type: "google", google: ev });
   });
 
-  (appointments || []).forEach((a) => {
-    const norm = normalizeAppt(a);
-    if (norm && norm.date === dayISO) out.push(norm);
+  getBirthdayItems(leads, dateObj).forEach((b) => out.push(b));
+
+  const deduped = dedupeItems(out);
+
+  return deduped.sort((a, b) => {
+    const ta = a.type === "google" ? formatGoogleEventTime(a.google) : a.time || "";
+    const tb = b.type === "google" ? formatGoogleEventTime(b.google) : b.time || "";
+    return String(ta).localeCompare(String(tb));
   });
-
-  (leads || []).forEach((lead) => {
-    if (lead.birthday && lead.birthday.slice(5) === dayISO.slice(5))
-      out.push({ type: "birthday", lead });
-  });
-
-  return out;
 }
 
-function formatGoogleEventTime(ev) {
-  if (ev.start?.dateTime) {
-    const s = new Date(ev.start.dateTime);
-    if (ev.end?.dateTime) {
-      const e = new Date(ev.end.dateTime);
-      return `${s.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })} - ${e.toLocaleTimeString([], {
-        hour: "2-digit",
-        minute: "2-digit"
-      })}`;
-    }
-    return s.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
-  }
-  return ev.start?.date || "";
-}
-
-/* --- Birthday helpers (year-agnostic) --- */
-function parseBirthdayStr(s) {
-  if (!s) return null;
-  const t = String(s).trim();
-  if (/^\d{4}-\d{2}-\d{2}$/.test(t)) {
-    return { month: Number(t.slice(5, 7)), day: Number(t.slice(8, 10)) };
-  }
-  if (/^\d{2}\/\d{2}(\/\d{2,4})?$/.test(t)) {
-    const [m, d] = t.split("/");
-    return { month: Number(m), day: Number(d) };
-  }
-  return null;
-}
-function isLeadBirthdayOnDate(lead, dateObj) {
-  const bd = parseBirthdayStr(lead?.birthday);
-  if (!bd) return false;
-  return bd.month === (dateObj.getMonth() + 1) && bd.day === dateObj.getDate();
-}
-
-/* tiny count pill for day cells (supports icon) */
+/* tiny count pill for day cells */
 function CountPill({ color, count, title, icon }) {
   if (!count) return null;
+
   return (
     <span
       title={title}
@@ -278,7 +408,7 @@ function CountPill({ color, count, title, icon }) {
         fontWeight: 900,
         background: color,
         color: "#111",
-        lineHeight: 1
+        lineHeight: 1,
       }}
     >
       {icon ? <span style={{ fontSize: 12 }}>{icon}</span> : null}
@@ -290,86 +420,122 @@ function CountPill({ color, count, title, icon }) {
 export default function Calendar({
   user,
   leads = [],
+  events = [],
   googleEvents = [],
   selectedDate,
-  setSelectedDate
+  setSelectedDate,
+  onDayClick,
 }) {
-  const API_BASE = process.env.REACT_APP_API_URL || "";
   const today = new Date();
   const [month, setMonth] = useState(today.getMonth());
   const [year, setYear] = useState(today.getFullYear());
   const [showAddEvent, setShowAddEvent] = useState(false);
   const [addEventDate, setAddEventDate] = useState(null);
-  const [events, setEvents] = useState([]);
+
+  // local note events only
+  const [localNotes, setLocalNotes] = useState([]);
 
   // backend appointments
   const [appointments, setAppointments] = useState([]);
 
-  // share the same RID slot map with Appointments.jsx
+  // same RID slot map as Appointments.jsx
   const [slotMap, setSlotMap] = useState({});
+  const slotMapRef = useRef({});
 
-  // bump when overrides change (so we recompute without re-fetch)
+  // bump when overrides change
   const [overrideBump, setOverrideBump] = useState(0);
+
+  useEffect(() => {
+    const savedSlots = loadJSON(LS_KEYS(user?.email).slots, {});
+    slotMapRef.current = savedSlots;
+    setSlotMap(savedSlots);
+
+    const savedNotes = loadJSON(LS_KEYS(user?.email).notes, []);
+    setLocalNotes(Array.isArray(savedNotes) ? savedNotes : []);
+  }, [user?.email]);
 
   const fetchAppointments = async () => {
     if (!user?.email) return;
     try {
-      const r = await fetch(`${API_BASE}/api/appointments/${encodeURIComponent(user.email)}`);
-      const j = await r.json();
+      const r = await fetch(`${API_BASE}/api/appointments/${encodeURIComponent(user.email)}`, {
+        credentials: "include",
+        headers: { Accept: "application/json" },
+      });
+      const j = await r.json().catch(() => ({}));
       setAppointments(Array.isArray(j?.appointments) ? j.appointments : []);
     } catch {
-      /* ignore */
+      setAppointments([]);
     }
   };
 
   useEffect(() => {
-    // load slot map for this user
-    setSlotMap(loadJSON(LS_KEYS(user?.email).slots, {}));
-  }, [user?.email]);
-
-  useEffect(() => {
     fetchAppointments();
+
     const onChanged = () => fetchAppointments();
     const onOverrides = () => setOverrideBump((x) => x + 1);
+
     window.addEventListener("appointments:changed", onChanged);
     window.addEventListener("appointments:overrides-updated", onOverrides);
+
     return () => {
       window.removeEventListener("appointments:changed", onChanged);
       window.removeEventListener("appointments:overrides-updated", onOverrides);
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [API_BASE, user?.email]);
+  }, [user?.email]);
 
-  // assign the SAME stable RIDs as Appointments.jsx and persist if extended
-  const withStableRIDs = useMemo(() => {
-    const nextSlots = { ...slotMap };
-    const rows = assignStableRIDs(appointments || [], nextSlots);
-    if (JSON.stringify(nextSlots) !== JSON.stringify(slotMap)) {
-      setSlotMap(nextSlots);
-      saveJSON(LS_KEYS(user?.email).slots, nextSlots);
-    }
-    return rows;
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+  const assignedAppointments = useMemo(() => {
+    const result = assignStableRIDs(appointments || [], slotMapRef.current || {});
+    return result;
   }, [appointments]);
 
-  // apply overrides (hide/done/time) before rendering
+  useEffect(() => {
+    const oldStr = JSON.stringify(slotMapRef.current || {});
+    const newStr = JSON.stringify(assignedAppointments.nextSlots || {});
+
+    if (oldStr !== newStr) {
+      slotMapRef.current = assignedAppointments.nextSlots || {};
+      setSlotMap(assignedAppointments.nextSlots || {});
+      saveJSON(LS_KEYS(user?.email).slots, assignedAppointments.nextSlots || {});
+    }
+  }, [assignedAppointments.nextSlots, user?.email]);
+
   const effectiveAppointments = useMemo(
-    () => applyOverrides(withStableRIDs, user?.email),
-    [withStableRIDs, user?.email, overrideBump]
+    () => applyOverrides(assignedAppointments.rows, user?.email),
+    [assignedAppointments.rows, user?.email, overrideBump]
   );
 
   const calendarGrid = useMemo(() => getCalendarGrid(year, month), [year, month]);
-  const currMonthStr = new Date(year, month).toLocaleString("default", { month: "long", year: "numeric" });
+  const currMonthStr = new Date(year, month).toLocaleString("default", {
+    month: "long",
+    year: "numeric",
+  });
+
   const dayEvents = useMemo(
-    () => getPanelEvents(selectedDate, events, leads, googleEvents, effectiveAppointments),
-    [selectedDate, events, leads, googleEvents, effectiveAppointments]
+    () =>
+      getPanelEvents(
+        selectedDate,
+        events,
+        leads,
+        googleEvents,
+        effectiveAppointments,
+        localNotes
+      ),
+    [selectedDate, events, leads, googleEvents, effectiveAppointments, localNotes]
   );
 
   function changeMonth(delta) {
     let m = month + delta;
     let y = year;
-    if (m < 0) { m = 11; y--; }
-    if (m > 11) { m = 0; y++; }
+
+    if (m < 0) {
+      m = 11;
+      y -= 1;
+    }
+    if (m > 11) {
+      m = 0;
+      y += 1;
+    }
+
     setMonth(m);
     setYear(y);
     setSelectedDate && setSelectedDate(null);
@@ -380,20 +546,65 @@ export default function Calendar({
     setShowAddEvent(true);
     setSelectedDate && setSelectedDate(dateObj);
   }
+
   function handleAddEventSave(newEvent) {
-    setEvents((prev) => [
-      ...prev,
-      { title: newEvent.title, date: getLocalISO(addEventDate), time: newEvent.time, notes: newEvent.notes }
-    ]);
+    const next = [
+      ...localNotes,
+      {
+        id: `note_${Date.now()}_${Math.random().toString(16).slice(2)}`,
+        title: newEvent.title,
+        date: getLocalISO(addEventDate),
+        time: newEvent.time,
+        notes: newEvent.notes,
+        type: "note",
+      },
+    ];
+
+    setLocalNotes(next);
+    saveJSON(LS_KEYS(user?.email).notes, next);
     setShowAddEvent(false);
     setAddEventDate(null);
   }
+
   function handleCellClick(day) {
-    if (day) setSelectedDate && setSelectedDate(day);
+    if (!day) return;
+    setSelectedDate && setSelectedDate(day);
   }
 
+  function handleCellDoubleClick(day) {
+    if (!day) return;
+    if (typeof onDayClick === "function") {
+      onDayClick(day);
+    } else {
+      handleAddEventClick(day);
+    }
+  }
+
+  const googleCountThisMonth = useMemo(() => {
+    const currentMonth = `${year}-${String(month + 1).padStart(2, "0")}`;
+    return (googleEvents || []).filter((ev) => {
+      const s = ev?.start?.dateTime || ev?.start?.date;
+      return s && String(s).slice(0, 7) === currentMonth;
+    }).length;
+  }, [googleEvents, month, year]);
+
+  const apptCountThisMonth = useMemo(() => {
+    const currentMonth = `${year}-${String(month + 1).padStart(2, "0")}`;
+    return (effectiveAppointments || []).filter((a) => {
+      const dt = normalizeAppt(a);
+      return dt && dt.date.slice(0, 7) === currentMonth;
+    }).length;
+  }, [effectiveAppointments, month, year]);
+
   return (
-    <div style={{ padding: "28px", background: BG, minHeight: "100vh", boxSizing: "border-box" }}>
+    <div
+      style={{
+        padding: "28px",
+        background: BG,
+        minHeight: "100vh",
+        boxSizing: "border-box",
+      }}
+    >
       <div style={{ display: "flex", alignItems: "flex-start", gap: 18 }}>
         {/* Calendar card */}
         <div
@@ -404,17 +615,62 @@ export default function Calendar({
             minWidth: 630,
             flex: "0 0 650px",
             border: `1px solid ${BORDER}`,
-            boxShadow: "0 2px 28px rgba(0,0,0,0.35)"
+            boxShadow: "0 2px 28px rgba(0,0,0,0.35)",
           }}
         >
           {/* Header */}
-          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 10 }}>
-            <span style={{ fontWeight: 900, fontSize: 22, color: TEXT }}>Calendar</span>
+          <div
+            style={{
+              display: "flex",
+              alignItems: "flex-start",
+              justifyContent: "space-between",
+              marginBottom: 14,
+              gap: 18,
+            }}
+          >
             <div>
-              <button onClick={() => changeMonth(-1)} style={monthBtnStyle}>&lt;</button>
-              <span style={{ fontSize: 18, fontWeight: 900, color: GOLD, margin: "0 14px" }}>{currMonthStr}</span>
-              <button onClick={() => changeMonth(1)} style={monthBtnStyle}>&gt;</button>
+              <div style={{ fontWeight: 900, fontSize: 22, color: TEXT }}>Calendar</div>
+              <div style={{ color: SUBTEXT, fontSize: 13, marginTop: 4 }}>
+                View appointments, Google events, birthdays, and internal notes in one place.
+              </div>
             </div>
+
+            <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+              <button onClick={() => changeMonth(-1)} style={monthBtnStyle}>
+                &lt;
+              </button>
+              <span
+                style={{
+                  fontSize: 18,
+                  fontWeight: 900,
+                  color: GOLD,
+                  minWidth: 170,
+                  textAlign: "center",
+                }}
+              >
+                {currMonthStr}
+              </span>
+              <button onClick={() => changeMonth(1)} style={monthBtnStyle}>
+                &gt;
+              </button>
+            </div>
+          </div>
+
+          {/* Mini summary */}
+          <div
+            style={{
+              display: "grid",
+              gridTemplateColumns: "repeat(3, minmax(0, 1fr))",
+              gap: 10,
+              marginBottom: 16,
+            }}
+          >
+            <MiniMetric label="Backend appointments" value={apptCountThisMonth} />
+            <MiniMetric label="Google events" value={googleCountThisMonth} />
+            <MiniMetric
+              label="Birthdays"
+              value={(leads || []).filter((lead) => parseBirthdayStr(lead?.birthday)).length}
+            />
           </div>
 
           {/* DOW */}
@@ -424,11 +680,19 @@ export default function Calendar({
               gridTemplateColumns: "repeat(7, 1fr)",
               gap: 8,
               width: "100%",
-              marginBottom: 6
+              marginBottom: 6,
             }}
           >
             {["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"].map((d) => (
-              <div key={d} style={{ textAlign: "center", color: GOLD, fontWeight: 900, fontSize: 14 }}>
+              <div
+                key={d}
+                style={{
+                  textAlign: "center",
+                  color: GOLD,
+                  fontWeight: 900,
+                  fontSize: 14,
+                }}
+              >
                 {d}
               </div>
             ))}
@@ -441,34 +705,41 @@ export default function Calendar({
               gridTemplateColumns: "repeat(7, 1fr)",
               gap: 8,
               width: "100%",
-              minHeight: 420
+              minHeight: 420,
             }}
           >
             {calendarGrid.map((d, i) => {
               if (!d) return <div key={i} />;
+
               const isToday = d.toDateString() === today.toDateString();
               const isSelected = selectedDate && d.toDateString() === selectedDate.toDateString();
 
-              const evs = getCellEvents(d, events, leads, googleEvents, effectiveAppointments);
+              const evs = getCellEvents(
+                d,
+                events,
+                leads,
+                googleEvents,
+                effectiveAppointments,
+                localNotes
+              );
+
               const counts = evs.reduce(
                 (acc, e) => {
                   acc[e.type] = (acc[e.type] || 0) + 1;
                   return acc;
                 },
-                { appointment: 0, google: 0, note: 0 }
-              );
-
-              // Birthday count (year-agnostic)
-              const birthdayCount = (leads || []).reduce(
-                (n, lead) => n + (isLeadBirthdayOnDate(lead, d) ? 1 : 0),
-                0
+                { appointment: 0, google: 0, note: 0, birthday: 0 }
               );
 
               const tooltip = [
-                counts.appointment ? `${counts.appointment} appointment${counts.appointment > 1 ? "s" : ""}` : null,
-                counts.google ? `${counts.google} Google` : null,
+                counts.appointment
+                  ? `${counts.appointment} appointment${counts.appointment > 1 ? "s" : ""}`
+                  : null,
+                counts.google ? `${counts.google} Google event${counts.google > 1 ? "s" : ""}` : null,
                 counts.note ? `${counts.note} note${counts.note > 1 ? "s" : ""}` : null,
-                birthdayCount ? `${birthdayCount} birthday${birthdayCount > 1 ? "s" : ""}` : null
+                counts.birthday
+                  ? `${counts.birthday} birthday${counts.birthday > 1 ? "s" : ""}`
+                  : null,
               ]
                 .filter(Boolean)
                 .join(" • ");
@@ -477,28 +748,48 @@ export default function Calendar({
                 <div
                   key={`${d.getTime()}-${i}`}
                   onClick={() => handleCellClick(d)}
+                  onDoubleClick={() => handleCellDoubleClick(d)}
                   title={tooltip}
                   style={{
-                    minHeight: 56,
-                    borderRadius: 12,
-                    border: isSelected ? `2px solid ${GOLD}` : isToday ? `2px solid ${TEXT}` : `1px solid ${BORDER}`,
-                    background: isSelected ? "#1e2326" : BG,
+                    minHeight: 72,
+                    borderRadius: 14,
+                    border: isSelected
+                      ? `2px solid ${GOLD}`
+                      : isToday
+                      ? `2px solid ${TEXT}`
+                      : `1px solid ${BORDER}`,
+                    background: isSelected ? SOFT : BG,
                     textAlign: "center",
                     cursor: "pointer",
-                    paddingTop: 6,
-                    boxShadow: isSelected ? "0 2px 16px rgba(255,217,102,0.25)" : ""
+                    paddingTop: 8,
+                    boxShadow: isSelected ? "0 2px 16px rgba(247,203,83,0.22)" : "",
+                    transition: "all .12s ease",
                   }}
                 >
-                  <div style={{ color: isSelected ? GOLD : TEXT, fontWeight: 900, fontSize: 14, marginBottom: 6 }}>
+                  <div
+                    style={{
+                      color: isSelected ? GOLD : TEXT,
+                      fontWeight: 900,
+                      fontSize: 14,
+                      marginBottom: 8,
+                    }}
+                  >
                     {d.getDate()}
                   </div>
 
-                  {/* compact count pills row */}
-                  <div style={{ display: "flex", justifyContent: "center", gap: 6 }}>
+                  <div
+                    style={{
+                      display: "flex",
+                      justifyContent: "center",
+                      gap: 6,
+                      flexWrap: "wrap",
+                      padding: "0 4px",
+                    }}
+                  >
                     <CountPill color={APPT} count={counts.appointment} title="Appointments" />
                     <CountPill color={GOOGLE} count={counts.google} title="Google events" />
                     <CountPill color={NOTE} count={counts.note} title="Notes" />
-                    <CountPill color={GOLD} count={birthdayCount} title="Birthdays" icon="🎂" />
+                    <CountPill color={BDAY} count={counts.birthday} title="Birthdays" icon="🎂" />
                   </div>
                 </div>
               );
@@ -506,7 +797,17 @@ export default function Calendar({
           </div>
 
           {/* Legend */}
-          <div style={{ display: "flex", gap: 16, marginTop: 14, alignItems: "center", color: SUBTEXT, fontWeight: 800 }}>
+          <div
+            style={{
+              display: "flex",
+              gap: 16,
+              marginTop: 14,
+              alignItems: "center",
+              color: SUBTEXT,
+              fontWeight: 800,
+              flexWrap: "wrap",
+            }}
+          >
             <LegendDot color={APPT} label="Appointment" />
             <LegendDot color={NOTE} label="Note" />
             <LegendDot color={GOOGLE} label="Google" outlined />
@@ -514,6 +815,9 @@ export default function Calendar({
               <span>🎂</span>
               <span style={{ color: SUBTEXT, fontWeight: 800, fontSize: 12 }}>Birthday</span>
             </div>
+            <span style={{ color: SUBTEXT, fontSize: 12, marginLeft: "auto" }}>
+              Double-click a day to quick add
+            </span>
           </div>
         </div>
 
@@ -527,15 +831,42 @@ export default function Calendar({
             padding: "22px 20px",
             color: TEXT,
             border: `1px solid ${BORDER}`,
-            boxShadow: "0 2px 28px rgba(0,0,0,0.35)"
+            boxShadow: "0 2px 28px rgba(0,0,0,0.35)",
           }}
         >
-          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 10 }}>
-            <h3 style={{ fontWeight: 900, fontSize: 18, color: GOLD, margin: 0 }}>
-              {selectedDate
-                ? selectedDate.toLocaleDateString(undefined, { weekday: "long", month: "long", day: "numeric" })
-                : "Select a date"}
-            </h3>
+          <div
+            style={{
+              display: "flex",
+              alignItems: "flex-start",
+              justifyContent: "space-between",
+              marginBottom: 14,
+              gap: 12,
+            }}
+          >
+            <div>
+              <h3
+                style={{
+                  fontWeight: 900,
+                  fontSize: 18,
+                  color: GOLD,
+                  margin: 0,
+                }}
+              >
+                {selectedDate
+                  ? selectedDate.toLocaleDateString(undefined, {
+                      weekday: "long",
+                      month: "long",
+                      day: "numeric",
+                    })
+                  : "Select a date"}
+              </h3>
+              <div style={{ color: SUBTEXT, fontSize: 13, marginTop: 5 }}>
+                {selectedDate
+                  ? "Daily timeline for CRM activity and Google Calendar events."
+                  : "Choose a date to inspect activity."}
+              </div>
+            </div>
+
             {selectedDate && (
               <button
                 style={{
@@ -543,85 +874,145 @@ export default function Calendar({
                   color: "#191a1d",
                   fontWeight: 900,
                   border: "none",
-                  borderRadius: 8,
-                  padding: "8px 14px",
+                  borderRadius: 10,
+                  padding: "9px 14px",
                   cursor: "pointer",
-                  boxShadow: "0 1.5px 8px rgba(255,217,102,0.3)"
+                  boxShadow: "0 1.5px 8px rgba(247,203,83,0.3)",
                 }}
                 onClick={() => handleAddEventClick(selectedDate)}
               >
-                + Add Event
+                + Add Note
               </button>
             )}
           </div>
 
-          {(!dayEvents || dayEvents.length === 0) && (
-            <div
-              style={{
-                color: TEXT,
-                background: "#191919",
-                borderRadius: 10,
-                padding: 14,
-                marginBottom: 14,
-                fontWeight: 700,
-                border: `1px solid ${BORDER}`
-              }}
-            >
-              No events for this day.
-            </div>
+          {!selectedDate && (
+            <EmptyState
+              title="Nothing selected"
+              text="Pick a day on the calendar to review appointments, Google events, notes, and birthdays."
+            />
           )}
 
-          {dayEvents.map((ev, i) => (
-            <div
-              key={i}
-              style={{
-                background: "#191919",
-                borderRadius: 12,
-                marginBottom: 12,
-                padding: 14,
-                display: "flex",
-                alignItems: "center",
-                gap: 12,
-                borderLeft: `6px solid ${ev.type === "appointment" ? APPT : ev.type === "google" ? GOOGLE : NOTE}`,
-                border: `1px solid ${BORDER}`
-              }}
-            >
-              <span
-                style={{
-                  fontSize: 24,
-                  color: ev.type === "appointment" ? APPT : ev.type === "google" ? GOOGLE : NOTE
-                }}
-              >
-                {ev.type === "birthday"
+          {selectedDate && (!dayEvents || dayEvents.length === 0) && (
+            <EmptyState
+              title="No events for this day"
+              text="This date is currently clear. You can still add an internal note."
+            />
+          )}
+
+          {selectedDate &&
+            dayEvents.map((ev, i) => {
+              const eventType = ev.type;
+              const icon =
+                eventType === "birthday"
                   ? "🎂"
-                  : ev.type === "google"
+                  : eventType === "google"
                   ? "🗓️"
-                  : ev.type === "note"
+                  : eventType === "note"
                   ? "📝"
-                  : "📅"}
-              </span>
-              <div style={{ flex: 1 }}>
-                <div style={{ color: TEXT, fontWeight: 900 }}>
-                  {ev.title || ev.google?.summary || ev.lead?.name}
+                  : "📅";
+
+              const color =
+                eventType === "appointment"
+                  ? APPT
+                  : eventType === "google"
+                  ? GOOGLE
+                  : eventType === "birthday"
+                  ? GOLD
+                  : NOTE;
+
+              const title =
+                ev.title || ev.google?.summary || ev.lead?.name || "Calendar Item";
+
+              const subline =
+                eventType === "birthday"
+                  ? "Birthday"
+                  : eventType === "google"
+                  ? formatGoogleEventTime(ev.google)
+                  : ev.time
+                  ? ev.time
+                  : "No time set";
+
+              const detail =
+                eventType === "google"
+                  ? ev.google?.description || ev.google?.location || ""
+                  : ev.notes || "";
+
+              return (
+                <div
+                  key={`${eventType}-${i}-${title}`}
+                  style={{
+                    background: "#191919",
+                    borderRadius: 14,
+                    marginBottom: 12,
+                    padding: 14,
+                    display: "flex",
+                    alignItems: "flex-start",
+                    gap: 12,
+                    borderLeft: `6px solid ${color}`,
+                    border: `1px solid ${BORDER}`,
+                  }}
+                >
+                  <span
+                    style={{
+                      fontSize: 24,
+                      color,
+                      lineHeight: 1,
+                      marginTop: 2,
+                    }}
+                  >
+                    {icon}
+                  </span>
+
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <div
+                      style={{
+                        color: TEXT,
+                        fontWeight: 900,
+                        fontSize: 15,
+                        marginBottom: 4,
+                      }}
+                    >
+                      {title}
+                    </div>
+
+                    <div
+                      style={{
+                        color: color === GOLD ? GOLD : GOLD,
+                        fontWeight: 800,
+                        marginBottom: detail ? 4 : 0,
+                        fontSize: 13,
+                      }}
+                    >
+                      {subline}
+                    </div>
+
+                    {!!detail && (
+                      <div
+                        style={{
+                          color: SUBTEXT,
+                          fontSize: 13,
+                          lineHeight: 1.45,
+                          whiteSpace: "pre-wrap",
+                          wordBreak: "break-word",
+                        }}
+                      >
+                        {detail}
+                      </div>
+                    )}
+                  </div>
                 </div>
-                <div style={{ color: GOLD, fontWeight: 800, marginTop: 2 }}>
-                  {ev.type === "birthday"
-                    ? "Birthday"
-                    : ev.type === "google"
-                    ? formatGoogleEventTime(ev.google)
-                    : ev.time
-                    ? `${ev.date} ${ev.time}`
-                    : ev.date}
-                </div>
-                {ev.notes && <div style={{ color: SUBTEXT, fontSize: 14 }}>{ev.notes}</div>}
-              </div>
-            </div>
-          ))}
+              );
+            })}
         </div>
       </div>
 
       {showAddEvent && (
-        <AddEventModal onSave={handleAddEventSave} onClose={() => setShowAddEvent(false)} date={addEventDate} />
+        <AddEventModal
+          onSave={handleAddEventSave}
+          onClose={() => setShowAddEvent(false)}
+          date={addEventDate}
+        />
       )}
     </div>
   );
@@ -637,7 +1028,7 @@ function LegendDot({ color, label, outlined }) {
           height: 12,
           borderRadius: "50%",
           background: color,
-          outline: outlined ? `2px solid ${color}` : "none"
+          outline: outlined ? `2px solid ${color}` : "none",
         }}
       />
       <span style={{ color: SUBTEXT, fontWeight: 800, fontSize: 12 }}>{label}</span>
@@ -645,11 +1036,45 @@ function LegendDot({ color, label, outlined }) {
   );
 }
 
-/* Add Event Modal (notes only) */
+function MiniMetric({ label, value }) {
+  return (
+    <div
+      style={{
+        background: SOFT,
+        border: `1px solid ${BORDER}`,
+        borderRadius: 12,
+        padding: "10px 12px",
+      }}
+    >
+      <div style={{ color: SUBTEXT, fontSize: 12, fontWeight: 700 }}>{label}</div>
+      <div style={{ color: TEXT, fontWeight: 900, fontSize: 22, marginTop: 2 }}>{value}</div>
+    </div>
+  );
+}
+
+function EmptyState({ title, text }) {
+  return (
+    <div
+      style={{
+        color: TEXT,
+        background: "#191919",
+        borderRadius: 12,
+        padding: 16,
+        border: `1px solid ${BORDER}`,
+      }}
+    >
+      <div style={{ fontWeight: 900, marginBottom: 6 }}>{title}</div>
+      <div style={{ color: SUBTEXT, lineHeight: 1.5 }}>{text}</div>
+    </div>
+  );
+}
+
+/* Add Event Modal (local note only) */
 function AddEventModal({ onSave, onClose, date }) {
   const [title, setTitle] = useState("");
   const [time, setTime] = useState("");
   const [notes, setNotes] = useState("");
+
   return (
     <div
       style={{
@@ -659,7 +1084,7 @@ function AddEventModal({ onSave, onClose, date }) {
         zIndex: 99,
         display: "flex",
         alignItems: "center",
-        justifyContent: "center"
+        justifyContent: "center",
       }}
     >
       <div
@@ -671,12 +1096,13 @@ function AddEventModal({ onSave, onClose, date }) {
           maxWidth: 520,
           width: "92%",
           boxShadow: "0 2px 22px rgba(0,0,0,0.5)",
-          border: `2px solid ${GOLD}`
+          border: `2px solid ${GOLD}`,
         }}
       >
         <h3 style={{ color: GOLD, fontWeight: 900, marginBottom: 14 }}>
-          Add Event ({date?.toLocaleDateString()})
+          Add Calendar Note ({date?.toLocaleDateString()})
         </h3>
+
         <form
           onSubmit={(e) => {
             e.preventDefault();
@@ -688,22 +1114,30 @@ function AddEventModal({ onSave, onClose, date }) {
               value={title}
               onChange={(e) => setTitle(e.target.value)}
               style={inputStyle}
-              placeholder="Event Title"
+              placeholder="Event title"
               required
             />
           </Field>
+
           <Field label="Time">
-            <input type="time" value={time} onChange={(e) => setTime(e.target.value)} style={inputStyle} />
+            <input
+              type="time"
+              value={time}
+              onChange={(e) => setTime(e.target.value)}
+              style={inputStyle}
+            />
           </Field>
+
           <Field label="Notes">
             <textarea
               rows={3}
               value={notes}
               onChange={(e) => setNotes(e.target.value)}
               style={{ ...inputStyle, resize: "vertical" }}
-              placeholder="Event Notes"
+              placeholder="Notes"
             />
           </Field>
+
           <div style={{ display: "flex", gap: 10, marginTop: 10 }}>
             <button
               type="submit"
@@ -715,11 +1149,12 @@ function AddEventModal({ onSave, onClose, date }) {
                 borderRadius: 8,
                 padding: "11px 16px",
                 cursor: "pointer",
-                flex: 1
+                flex: 1,
               }}
             >
-              Add
+              Save
             </button>
+
             <button
               type="button"
               onClick={onClose}
@@ -731,7 +1166,7 @@ function AddEventModal({ onSave, onClose, date }) {
                 borderRadius: 8,
                 padding: "11px 16px",
                 cursor: "pointer",
-                flex: 1
+                flex: 1,
               }}
             >
               Cancel
@@ -747,7 +1182,17 @@ function AddEventModal({ onSave, onClose, date }) {
 function Field({ label, children }) {
   return (
     <div style={{ marginBottom: 12 }}>
-      <label style={{ color: TEXT, marginRight: 8, fontWeight: 900 }}>{label}:</label>
+      <label
+        style={{
+          color: TEXT,
+          marginRight: 8,
+          fontWeight: 900,
+          display: "block",
+          marginBottom: 6,
+        }}
+      >
+        {label}
+      </label>
       {children}
     </div>
   );
@@ -761,7 +1206,8 @@ const inputStyle = {
   background: BG,
   color: TEXT,
   border: `1.5px solid ${BORDER}`,
-  width: "100%"
+  width: "100%",
+  boxSizing: "border-box",
 };
 
 const monthBtnStyle = {
@@ -772,5 +1218,5 @@ const monthBtnStyle = {
   padding: "8px 14px",
   fontWeight: 900,
   fontSize: "1.02em",
-  cursor: "pointer"
+  cursor: "pointer",
 };
