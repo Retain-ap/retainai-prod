@@ -1,3 +1,4 @@
+// src/components/Appointments.jsx
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import {
   FaSearch,
@@ -29,6 +30,10 @@ const API_BASE =
   (process.env.REACT_APP_API_URL && process.env.REACT_APP_API_URL.trim()) ||
   window.location.origin.replace(/\/$/, "");
 
+/* === storage key for analytics/backend mirror === */
+const BACKEND_APPT_COUNTS_KEY = (email) =>
+  `retainai_backend_appt_counts_${String(email || "").trim().toLowerCase() || "anon"}`;
+
 /* ===== Helpers ===== */
 const pad2 = (n) => String(n).padStart(2, "0");
 
@@ -57,6 +62,10 @@ function parseDateSafe(v) {
 }
 
 function normText(v) {
+  return String(v || "").trim().toLowerCase();
+}
+
+function normEmail(v) {
   return String(v || "").trim().toLowerCase();
 }
 
@@ -190,7 +199,7 @@ function normalizeBackend(raw) {
     done: !!(raw.done ?? raw.completed ?? raw.is_done),
     notes: raw.notes || "",
     lead: {
-      id: raw.lead_id || `backend-${getRID(raw)}`,
+      id: raw.lead_id || "",
       name:
         raw.lead_full_name ||
         [raw.lead_first_name, raw.lead_last_name].filter(Boolean).join(" ") ||
@@ -330,6 +339,44 @@ export default function Appointments({ user, leads = [], setLeads }) {
     saveJSON(LS_KEYS(userEmail).slots, slotMap);
   }, [slotMap, userEmail]);
 
+  function syncBackendCountsToApp(rows) {
+    const byId = {};
+    const byEmail = {};
+
+    (rows || []).forEach((r) => {
+      const leadId = String(r?.lead_id || "").trim();
+      const leadEmail = normEmail(r?.lead_email || "");
+
+      if (leadId) byId[leadId] = (byId[leadId] || 0) + 1;
+      if (leadEmail) byEmail[leadEmail] = (byEmail[leadEmail] || 0) + 1;
+    });
+
+    saveJSON(BACKEND_APPT_COUNTS_KEY(userEmail), {
+      byId,
+      byEmail,
+      updatedAt: new Date().toISOString(),
+    });
+
+    if (typeof setLeads === "function") {
+      setLeads((prev) => {
+        const safePrev = Array.isArray(prev) ? prev : [];
+        return safePrev.map((lead) => {
+          const idCount = byId[String(lead?.id || "").trim()] || 0;
+          const emailCount = byEmail[normEmail(lead?.email || "")] || 0;
+          const backendCount = Math.max(idCount, emailCount);
+
+          return {
+            ...lead,
+            _backendAppointmentCount: backendCount,
+            _hasAnyAppointment: backendCount > 0 || (lead.appointments || []).length > 0,
+          };
+        });
+      });
+    }
+
+    ping("appointments:analytics-sync");
+  }
+
   const fetchBackend = async () => {
     if (!user?.email) return;
     try {
@@ -338,9 +385,12 @@ export default function Appointments({ user, leads = [], setLeads }) {
         headers: { Accept: "application/json" },
       });
       const j = await r.json().catch(() => ({}));
-      setBackendAppointments(Array.isArray(j?.appointments) ? j.appointments : []);
+      const rows = Array.isArray(j?.appointments) ? j.appointments : [];
+      setBackendAppointments(rows);
+      syncBackendCountsToApp(rows);
     } catch {
       setBackendAppointments([]);
+      syncBackendCountsToApp([]);
     }
   };
 
@@ -481,24 +531,24 @@ export default function Appointments({ user, leads = [], setLeads }) {
     const sid = serverIdOf(appt);
     if (!user?.email || !sid) return false;
 
-    try {
-      const body = {
-        ...updates,
-        done: updates.done,
-        is_done: updates.done,
-        completed: updates.done,
-        status:
-          updates.done === true
-            ? "completed"
-            : updates.done === false
-            ? "scheduled"
-            : undefined,
-        appointment_time: updates.appointment_time,
-        date: updates.appointment_time ? updates.appointment_time.slice(0, 10) : undefined,
-        time: updates.appointment_time ? updates.appointment_time.slice(11, 16) : undefined,
-      };
+    const body = {
+      ...updates,
+      done: updates.done,
+      is_done: updates.done,
+      completed: updates.done,
+      status:
+        updates.done === true
+          ? "completed"
+          : updates.done === false
+          ? "scheduled"
+          : undefined,
+      appointment_time: updates.appointment_time,
+      date: updates.appointment_time ? updates.appointment_time.slice(0, 10) : undefined,
+      time: updates.appointment_time ? updates.appointment_time.slice(11, 16) : undefined,
+    };
 
-      const res = await fetch(
+    try {
+      const putRes = await fetch(
         `${API_BASE}/api/appointments/${encodeURIComponent(user.email)}/${encodeURIComponent(
           String(sid)
         )}`,
@@ -509,7 +559,22 @@ export default function Appointments({ user, leads = [], setLeads }) {
           body: JSON.stringify(body),
         }
       );
-      return res.ok;
+      if (putRes.ok) return true;
+    } catch {}
+
+    try {
+      const patchRes = await fetch(
+        `${API_BASE}/api/appointments/${encodeURIComponent(user.email)}/${encodeURIComponent(
+          String(sid)
+        )}`,
+        {
+          method: "PATCH",
+          credentials: "include",
+          headers: { "Content-Type": "application/json", Accept: "application/json" },
+          body: JSON.stringify(body),
+        }
+      );
+      return patchRes.ok;
     } catch {
       return false;
     }
@@ -572,6 +637,7 @@ export default function Appointments({ user, leads = [], setLeads }) {
         rollbackDoneOverrides(appt, !newDone);
       }
 
+      await fetchBackend();
       ping("appointments:changed");
       return;
     }
@@ -605,11 +671,12 @@ export default function Appointments({ user, leads = [], setLeads }) {
 
       updateTimeOverrides(appt, iso);
 
-      const ok = await apiUpdateBackend(appt, { appointment_time: iso });
+      const ok = await apiUpdateBackend(appt, { appointment_time: iso, title: appt.title });
       if (serverIdOf(appt) && !ok) {
         removeTimeOverrides(appt);
       }
 
+      await fetchBackend();
       ping("appointments:changed");
       return;
     }
@@ -648,6 +715,7 @@ export default function Appointments({ user, leads = [], setLeads }) {
         unhideOverrides(appt);
       }
 
+      await fetchBackend();
       ping("appointments:changed");
       return;
     }
@@ -671,7 +739,7 @@ export default function Appointments({ user, leads = [], setLeads }) {
 
   function beginEdit(appt) {
     setForm({
-      leadId: String(appt.lead.id),
+      leadId: String(appt.lead.id || ""),
       title: appt.title,
       date: appt.date,
       time: appt.time || "",
@@ -702,6 +770,7 @@ export default function Appointments({ user, leads = [], setLeads }) {
           removeTimeOverrides(editing);
         }
 
+        await fetchBackend();
         ping("appointments:changed");
       } else if (editing) {
         updateLocalLeadAppointments((prev) => {
@@ -781,6 +850,7 @@ export default function Appointments({ user, leads = [], setLeads }) {
           throw new Error(err?.error || "Failed to create appointment.");
         }
 
+        await fetchBackend();
         ping("appointments:changed");
       }
     } catch (err) {
