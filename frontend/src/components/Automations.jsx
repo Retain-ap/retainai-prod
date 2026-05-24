@@ -12,11 +12,9 @@ const C = {
   text: "#eef1f3",
   muted: "#aab0b6",
   gold: "#f7cb53",
-  goldDark: "#d9ae3a",
   green: "#30b46c",
   redBg: "#3a1111",
   redTxt: "#ffbcbc",
-  blue: "#6ea8ff",
 };
 
 const shellCard = {
@@ -38,7 +36,6 @@ function Btn({ children, onClick, kind = "solid", disabled, type = "button", sty
     borderRadius: 12,
     padding: "10px 14px",
     fontWeight: 800,
-    border: "none",
     cursor: disabled ? "not-allowed" : "pointer",
     transition: "0.15s ease",
     opacity: disabled ? 0.6 : 1,
@@ -73,7 +70,7 @@ function Btn({ children, onClick, kind = "solid", disabled, type = "button", sty
           ...base,
           background: C.redBg,
           color: C.redTxt,
-          border: `1px solid #4a1515`,
+          border: "1px solid #4a1515",
         }}
       >
         {children}
@@ -108,6 +105,7 @@ function Btn({ children, onClick, kind = "solid", disabled, type = "button", sty
         ...base,
         background: C.gold,
         color: "#111",
+        border: "none",
       }}
     >
       {children}
@@ -128,6 +126,7 @@ const Input = React.forwardRef(function Input(props, ref) {
         borderRadius: 12,
         padding: "10px 12px",
         outline: "none",
+        boxSizing: "border-box",
         ...(props.style || {}),
       }}
     />
@@ -148,6 +147,7 @@ const TextArea = React.forwardRef(function TextArea(props, ref) {
         padding: "10px 12px",
         outline: "none",
         resize: "vertical",
+        boxSizing: "border-box",
         ...(props.style || {}),
       }}
     />
@@ -166,6 +166,7 @@ function Select({ children, ...props }) {
         borderRadius: 12,
         padding: "10px 12px",
         outline: "none",
+        boxSizing: "border-box",
         ...(props.style || {}),
       }}
     >
@@ -212,16 +213,7 @@ function Toggle({ checked, onChange }) {
   );
 }
 
-function Chip({ children, active, onClick, tone = "default" }) {
-  const tones = {
-    default: active
-      ? { background: C.gold, color: "#111", border: `1px solid ${C.gold}` }
-      : { background: "#242424", color: "#fff", border: `1px solid ${C.border}` },
-    green: active
-      ? { background: C.green, color: "#111", border: `1px solid ${C.green}` }
-      : { background: "#242424", color: "#fff", border: `1px solid ${C.border}` },
-  };
-
+function Chip({ children, active, onClick }) {
   return (
     <button
       type="button"
@@ -232,7 +224,9 @@ function Chip({ children, active, onClick, tone = "default" }) {
         fontSize: 12,
         fontWeight: 800,
         cursor: "pointer",
-        ...tones[tone],
+        background: active ? C.gold : "#242424",
+        color: active ? "#111" : "#fff",
+        border: `1px solid ${active ? C.gold : C.border}`,
       }}
     >
       {children}
@@ -254,9 +248,7 @@ function SectionTitle({ title, subtitle, right }) {
     >
       <div>
         <div style={{ fontSize: 20, fontWeight: 900, color: C.text }}>{title}</div>
-        {subtitle ? (
-          <div style={{ fontSize: 13, color: C.muted, marginTop: 4 }}>{subtitle}</div>
-        ) : null}
+        {subtitle ? <div style={{ fontSize: 13, color: C.muted, marginTop: 4 }}>{subtitle}</div> : null}
       </div>
       {right}
     </div>
@@ -399,6 +391,7 @@ function normalizeWATemplates(raw) {
 
 function humanStepLabel(step) {
   if (!step?.type) return "Step";
+
   if (step.type === "wait") {
     const d = Number(step.days || 0);
     const h = Number(step.hours || 0);
@@ -409,20 +402,23 @@ function humanStepLabel(step) {
     if (m) bits.push(`${m} min`);
     return `Wait ${bits.length ? bits.join(", ") : "for a bit"}`;
   }
+
   if (step.type === "ai_draft") return "Create an AI draft";
   if (step.type === "send_email") return "Send an email";
-  if (step.type === "send_whatsapp")
+  if (step.type === "send_whatsapp") {
     return step?.template?.name ? `Send WhatsApp template: ${step.template.name}` : "Send a WhatsApp message";
+  }
   if (step.type === "push_owner") return "Notify the owner";
   if (step.type === "add_tag") return `Add tag: ${step.tag || "Needs Attention"}`;
   if (step.type === "if_no_reply") return `If no reply in ${step.within_days || 2} day(s)`;
   if (step.type === "if_no_booking") return `If no booking in ${step.within_days || 2} day(s)`;
+
   return step.type.replaceAll("_", " ");
 }
 
 function flowSummary(flow) {
   const trig = flow?.trigger || {};
-  const triggerText = trig.type ? (PRETTY_TRIGGER[trig.type]?.(trig) || trig.type) : "Choose a trigger";
+  const triggerText = trig.type ? PRETTY_TRIGGER[trig.type]?.(trig) || trig.type : "Choose a trigger";
   const stepCount = Array.isArray(flow?.steps) ? flow.steps.length : 0;
   return `${triggerText}. ${stepCount} step${stepCount === 1 ? "" : "s"} in this flow.`;
 }
@@ -460,19 +456,17 @@ function cloneTemplateToFlow(template, userEmail) {
   delete f.id;
   f.enabled = false;
   f.owner = userEmail;
-
-  const strip = (html = "") =>
-    html
-      .replace(/<\/p>\s*<p>/g, "\n\n")
-      .replace(/<br\s*\/?>/g, "\n")
-      .replace(/<\/?[^>]+>/g, "")
-      .trim();
-
-  f.steps = (f.steps || []).map((s) =>
-    s.type === "send_email" && s.html && !s.body ? { ...s, body: strip(s.html) } : s
-  );
-
   return normalizeFlow(f, userEmail);
+}
+
+/* -------------------- FIELD -------------------- */
+function Field({ label, children }) {
+  return (
+    <div>
+      <div style={{ fontSize: 12, color: C.muted, marginBottom: 6, fontWeight: 800 }}>{label}</div>
+      {children}
+    </div>
+  );
 }
 
 /* -------------------- STEP EDITOR -------------------- */
@@ -529,11 +523,11 @@ function StepCard({ step, onChange, onRemove, waTemplates }) {
       <div style={{ display: "flex", justifyContent: "space-between", gap: 12, alignItems: "center", marginBottom: 12 }}>
         <div>
           <div style={{ color: C.text, fontSize: 16, fontWeight: 900 }}>{humanStepLabel(step)}</div>
-          <div style={{ color: C.muted, fontSize: 12, marginTop: 3 }}>
-            {step.type.replaceAll("_", " ")}
-          </div>
+          <div style={{ color: C.muted, fontSize: 12, marginTop: 3 }}>{step.type.replaceAll("_", " ")}</div>
         </div>
-        <Btn kind="danger" onClick={onRemove}>Remove</Btn>
+        <Btn kind="danger" onClick={onRemove}>
+          Remove
+        </Btn>
       </div>
 
       {step.type === "wait" && (
@@ -552,7 +546,8 @@ function StepCard({ step, onChange, onRemove, waTemplates }) {
 
       {step.type === "ai_draft" && (
         <div style={{ color: C.muted, fontSize: 13 }}>
-          RetainAI will draft the message first so the next message step can use <b>{{"{last_ai_text}"}}</b>.
+          RetainAI will draft the message first so the next message step can use{" "}
+          <b>{"{{last_ai_text}}"}</b>.
         </div>
       )}
 
@@ -696,7 +691,9 @@ function StepCard({ step, onChange, onRemove, waTemplates }) {
                       ))}
                     </div>
                     <div>
-                      <Btn kind="ghost" onClick={fillCommonParams}>Fill common tokens</Btn>
+                      <Btn kind="ghost" onClick={fillCommonParams}>
+                        Fill common tokens
+                      </Btn>
                     </div>
                   </>
                 ) : (
@@ -778,15 +775,6 @@ function StepCard({ step, onChange, onRemove, waTemplates }) {
           <Input value={step.tag || "Needs Attention"} onChange={(e) => set({ tag: e.target.value })} />
         </Field>
       )}
-    </div>
-  );
-}
-
-function Field({ label, children }) {
-  return (
-    <div>
-      <div style={{ fontSize: 12, color: C.muted, marginBottom: 6, fontWeight: 800 }}>{label}</div>
-      {children}
     </div>
   );
 }
@@ -996,7 +984,7 @@ function TemplateCard({ template, onUse }) {
           style={{
             background: "rgba(247,203,83,0.12)",
             color: C.gold,
-            border: `1px solid rgba(247,203,83,0.3)`,
+            border: "1px solid rgba(247,203,83,0.3)",
             borderRadius: 999,
             padding: "5px 10px",
             fontSize: 12,
@@ -1054,8 +1042,12 @@ function FlowCard({ flow, onEdit, onDelete, onToggle }) {
       </div>
 
       <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginTop: 16 }}>
-        <Btn kind="ghost" onClick={onEdit}>Edit</Btn>
-        <Btn kind="danger" onClick={onDelete}>Delete</Btn>
+        <Btn kind="ghost" onClick={onEdit}>
+          Edit
+        </Btn>
+        <Btn kind="danger" onClick={onDelete}>
+          Delete
+        </Btn>
       </div>
     </div>
   );
@@ -1191,9 +1183,8 @@ function GuardrailsCard({ editing, setEditing }) {
 
 function StepsBuilder({ editing, setEditing, waTemplates }) {
   const addStep = (type) => {
-    const flow = editing || {};
-    const next = [...(flow.steps || []), buildDefaultStep(type)];
-    setEditing({ ...flow, steps: next });
+    const next = [...(editing.steps || []), buildDefaultStep(type)];
+    setEditing({ ...editing, steps: next });
   };
 
   return (
@@ -1389,7 +1380,6 @@ export default function Automations({ user }) {
         color: C.text,
       }}
     >
-      {/* Header */}
       <div
         style={{
           padding: "22px 22px 16px 22px",
@@ -1414,8 +1404,12 @@ export default function Automations({ user }) {
           </div>
 
           <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-            <Chip active={tab === "templates"} onClick={() => setTab("templates")}>Templates</Chip>
-            <Chip active={tab === "flows"} onClick={() => setTab("flows")}>My Flows</Chip>
+            <Chip active={tab === "templates"} onClick={() => setTab("templates")}>
+              Templates
+            </Chip>
+            <Chip active={tab === "flows"} onClick={() => setTab("flows")}>
+              My Flows
+            </Chip>
             <Chip
               active={tab === "builder"}
               onClick={() => {
@@ -1446,7 +1440,6 @@ export default function Automations({ user }) {
           </div>
         ) : null}
 
-        {/* Top stats + reusable profile */}
         <div style={{ display: "grid", gridTemplateColumns: "1.3fr 1fr", gap: 16, marginBottom: 22 }}>
           <div style={{ display: "grid", gridTemplateColumns: "repeat(4, minmax(0,1fr))", gap: 12 }}>
             <StatCard label="Templates" value={stats.totalTemplates} />
@@ -1502,7 +1495,6 @@ export default function Automations({ user }) {
           </div>
         </div>
 
-        {/* CONTENT */}
         {loading ? (
           <div style={{ ...shellCard, padding: 22, color: C.muted }}>Loading automations...</div>
         ) : null}
@@ -1552,23 +1544,7 @@ export default function Automations({ user }) {
                     key={f.id}
                     flow={f}
                     onEdit={() => {
-                      const strip = (html = "") =>
-                        html
-                          .replace(/<\/p>\s*<p>/g, "\n\n")
-                          .replace(/<br\s*\/?>/g, "\n")
-                          .replace(/<\/?[^>]+>/g, "")
-                          .trim();
-
-                      const hydrated = {
-                        ...f,
-                        steps: (f.steps || []).map((s) =>
-                          s.type === "send_email" && s.html && !s.body
-                            ? { ...s, body: strip(s.html || "") }
-                            : s
-                        ),
-                      };
-
-                      setEditing(normalizeFlow(hydrated, userEmail));
+                      setEditing(normalizeFlow(f, userEmail));
                       setTab("builder");
                     }}
                     onDelete={async () => {
@@ -1586,9 +1562,7 @@ export default function Automations({ user }) {
                     onToggle={async () => {
                       const enabled = !f.enabled;
                       const prev = [...flows];
-                      setFlows((curr) =>
-                        curr.map((x) => (x.id === f.id ? { ...x, enabled } : x))
-                      );
+                      setFlows((curr) => curr.map((x) => (x.id === f.id ? { ...x, enabled } : x)));
                       try {
                         await api.updateFlow(userEmail, f.id, { ...f, enabled });
                         await refreshFlows();
@@ -1620,7 +1594,13 @@ export default function Automations({ user }) {
                       <Btn kind="ghost" onClick={() => setEditing(buildEmptyFlow(userEmail))}>
                         New
                       </Btn>
-                      <Btn kind="outline" onClick={() => { setEditing(null); setTab("flows"); }}>
+                      <Btn
+                        kind="outline"
+                        onClick={() => {
+                          setEditing(null);
+                          setTab("flows");
+                        }}
+                      >
                         Cancel
                       </Btn>
                       <Btn onClick={saveFlow} disabled={!editing || savingFlow}>
