@@ -1,7 +1,8 @@
 // src/components/AutomationsService.js
+
 const BASE =
-  process.env.REACT_APP_API_BASE ||
-  process.env.REACT_APP_API_URL ||
+  (process.env.REACT_APP_API_BASE && process.env.REACT_APP_API_BASE.trim()) ||
+  (process.env.REACT_APP_API_URL && process.env.REACT_APP_API_URL.trim()) ||
   "";
 
 const ROOT = `${BASE}/api/automations`;
@@ -32,7 +33,7 @@ async function jfetch(
       const text = await res.text();
       data = text ? { message: text } : {};
     }
-  } catch (_) {
+  } catch {
     data = {};
   }
 
@@ -62,7 +63,7 @@ function cryptoRandomId() {
       .map((b) => b.toString(16).padStart(2, "0"))
       .join("");
   } catch {
-    return String(Math.random()).slice(2);
+    return `${Date.now()}_${Math.random().toString(16).slice(2)}`;
   }
 }
 
@@ -170,6 +171,7 @@ async function dryRun(userEmail, flowOrId, opts = {}) {
       : { flow_id: String(flowOrId) }),
     ...(opts.profile ? { profile: opts.profile } : {}),
   };
+
   return jfetch(`${ROOT}/test`, {
     method: "POST",
     userEmail,
@@ -205,7 +207,10 @@ async function executeNow(userEmail, flowOrId, opts = {}) {
   if (executed.length) {
     const withTo = executed.map((x) => ({
       ...x,
-      info: { ...(x.info || {}), to: (x.info && x.info.to) || lead_email },
+      info: {
+        ...(x.info || {}),
+        to: (x.info && x.info.to) || lead_email,
+      },
     }));
     dispatchAutomationSent(withTo);
   }
@@ -242,6 +247,7 @@ async function getMsgWindowState({
   )}&language_code=${encodeURIComponent(languageCode || "en")}${
     force ? "&force=1" : ""
   }`;
+
   return jfetch(url);
 }
 

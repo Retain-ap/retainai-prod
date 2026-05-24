@@ -1,109 +1,316 @@
 // src/components/Automations.jsx
-import React, { useEffect, useRef, useState, useMemo } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import api from "./AutomationsService";
 
-/* ---- THEME ---- */
-const BG = "#171819";
-const PANEL = "#1f2022";
-const CARD = "#242628";
-const CARD_SOFT = "#202224";
-const BORDER = "#2e3134";
-const TEXT = "#eef1f3";
-const MUTED = "#aab0b6";
-const GOLD = "#f7cb53";
-const GOLD_DARK = "#d9ae3a";
-const DANGER_BG = "#3a1111";
-const DANGER_TXT = "#ffbcbc";
+/* -------------------- THEME -------------------- */
+const C = {
+  bg: "#171819",
+  panel: "#1f2022",
+  card: "#242628",
+  soft: "#202224",
+  border: "#2e3134",
+  text: "#eef1f3",
+  muted: "#aab0b6",
+  gold: "#f7cb53",
+  goldDark: "#d9ae3a",
+  green: "#30b46c",
+  redBg: "#3a1111",
+  redTxt: "#ffbcbc",
+  blue: "#6ea8ff",
+};
 
 const shellCard = {
-  background: CARD,
-  border: `1px solid ${BORDER}`,
+  background: C.card,
+  border: `1px solid ${C.border}`,
   borderRadius: 18,
   boxShadow: "0 8px 28px rgba(0,0,0,0.22)",
 };
 
-/* ---- PRIMITIVES ---- */
-const Btn = ({ children, onClick, kind = "solid", disabled, className, type = "button" }) => (
-  <button
-    type={type}
-    onClick={onClick}
-    disabled={disabled}
-    className={
-      "px-3 py-2 rounded-xl font-medium transition " +
-      (kind === "solid"
-        ? "bg-[#f7cb53] text-black hover:opacity-95 disabled:opacity-60"
-        : kind === "danger"
-        ? "bg-[#3a1111] text-[#ffbcbc] hover:bg-[#4a1515] disabled:opacity-60"
-        : "bg-[#2a2a2a] text-white hover:bg-[#323232] disabled:opacity-60") +
-      (className ? ` ${className}` : "")
-    }
-  >
-    {children}
-  </button>
-);
+const softCard = {
+  background: C.soft,
+  border: `1px solid ${C.border}`,
+  borderRadius: 16,
+};
 
-const Input = React.forwardRef((props, ref) => (
-  <input
-    ref={ref}
-    {...props}
-    className={
-      "w-full bg-[#232323] text-white border border-[#2a2a2a] rounded-xl px-3 py-2 focus:outline-none " +
-      (props.className || "")
-    }
-  />
-));
+/* -------------------- UI PRIMITIVES -------------------- */
+function Btn({ children, onClick, kind = "solid", disabled, type = "button", style = {} }) {
+  const base = {
+    borderRadius: 12,
+    padding: "10px 14px",
+    fontWeight: 800,
+    border: "none",
+    cursor: disabled ? "not-allowed" : "pointer",
+    transition: "0.15s ease",
+    opacity: disabled ? 0.6 : 1,
+    ...style,
+  };
 
-const TextArea = React.forwardRef((props, ref) => (
-  <textarea
-    ref={ref}
-    {...props}
-    className={
-      "w-full bg-[#232323] text-white border border-[#2a2a2a] rounded-xl px-3 py-2 focus:outline-none " +
-      (props.className || "")
-    }
-  />
-));
+  if (kind === "ghost") {
+    return (
+      <button
+        type={type}
+        onClick={onClick}
+        disabled={disabled}
+        style={{
+          ...base,
+          background: "#2a2a2a",
+          color: "#fff",
+          border: `1px solid ${C.border}`,
+        }}
+      >
+        {children}
+      </button>
+    );
+  }
 
-const Toggle = ({ checked, onChange }) => (
-  <label className="inline-flex items-center cursor-pointer select-none">
-    <span className="mr-2 text-sm">Off</span>
-    <div className="relative">
-      <input type="checkbox" className="sr-only" checked={!!checked} onChange={onChange} />
-      <div className="block w-12 h-7 rounded-full bg-[#2a2a2a]" />
-      <div
-        className={
-          "dot absolute left-1 top-1 w-5 h-5 rounded-full transition " +
-          (checked ? "translate-x-5 bg-white" : "bg-[#777]")
-        }
-      />
+  if (kind === "danger") {
+    return (
+      <button
+        type={type}
+        onClick={onClick}
+        disabled={disabled}
+        style={{
+          ...base,
+          background: C.redBg,
+          color: C.redTxt,
+          border: `1px solid #4a1515`,
+        }}
+      >
+        {children}
+      </button>
+    );
+  }
+
+  if (kind === "outline") {
+    return (
+      <button
+        type={type}
+        onClick={onClick}
+        disabled={disabled}
+        style={{
+          ...base,
+          background: "transparent",
+          color: C.gold,
+          border: `1px solid ${C.gold}`,
+        }}
+      >
+        {children}
+      </button>
+    );
+  }
+
+  return (
+    <button
+      type={type}
+      onClick={onClick}
+      disabled={disabled}
+      style={{
+        ...base,
+        background: C.gold,
+        color: "#111",
+      }}
+    >
+      {children}
+    </button>
+  );
+}
+
+const Input = React.forwardRef(function Input(props, ref) {
+  return (
+    <input
+      ref={ref}
+      {...props}
+      style={{
+        width: "100%",
+        background: "#232323",
+        color: "#fff",
+        border: `1px solid ${C.border}`,
+        borderRadius: 12,
+        padding: "10px 12px",
+        outline: "none",
+        ...(props.style || {}),
+      }}
+    />
+  );
+});
+
+const TextArea = React.forwardRef(function TextArea(props, ref) {
+  return (
+    <textarea
+      ref={ref}
+      {...props}
+      style={{
+        width: "100%",
+        background: "#232323",
+        color: "#fff",
+        border: `1px solid ${C.border}`,
+        borderRadius: 12,
+        padding: "10px 12px",
+        outline: "none",
+        resize: "vertical",
+        ...(props.style || {}),
+      }}
+    />
+  );
+});
+
+function Select({ children, ...props }) {
+  return (
+    <select
+      {...props}
+      style={{
+        width: "100%",
+        background: "#232323",
+        color: "#fff",
+        border: `1px solid ${C.border}`,
+        borderRadius: 12,
+        padding: "10px 12px",
+        outline: "none",
+        ...(props.style || {}),
+      }}
+    >
+      {children}
+    </select>
+  );
+}
+
+function Toggle({ checked, onChange }) {
+  return (
+    <label style={{ display: "inline-flex", alignItems: "center", gap: 10, cursor: "pointer" }}>
+      <span style={{ fontSize: 13, color: C.muted }}>Off</span>
+      <div style={{ position: "relative", width: 50, height: 28 }}>
+        <input
+          type="checkbox"
+          checked={!!checked}
+          onChange={onChange}
+          style={{ position: "absolute", opacity: 0, inset: 0, cursor: "pointer" }}
+        />
+        <div
+          style={{
+            width: 50,
+            height: 28,
+            borderRadius: 999,
+            background: "#2a2a2a",
+            border: `1px solid ${C.border}`,
+          }}
+        />
+        <div
+          style={{
+            position: "absolute",
+            top: 3,
+            left: checked ? 25 : 3,
+            width: 20,
+            height: 20,
+            borderRadius: 999,
+            background: checked ? "#fff" : "#777",
+            transition: "0.15s ease",
+          }}
+        />
+      </div>
+      <span style={{ fontSize: 13, color: C.muted }}>On</span>
+    </label>
+  );
+}
+
+function Chip({ children, active, onClick, tone = "default" }) {
+  const tones = {
+    default: active
+      ? { background: C.gold, color: "#111", border: `1px solid ${C.gold}` }
+      : { background: "#242424", color: "#fff", border: `1px solid ${C.border}` },
+    green: active
+      ? { background: C.green, color: "#111", border: `1px solid ${C.green}` }
+      : { background: "#242424", color: "#fff", border: `1px solid ${C.border}` },
+  };
+
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      style={{
+        borderRadius: 999,
+        padding: "7px 11px",
+        fontSize: 12,
+        fontWeight: 800,
+        cursor: "pointer",
+        ...tones[tone],
+      }}
+    >
+      {children}
+    </button>
+  );
+}
+
+function SectionTitle({ title, subtitle, right }) {
+  return (
+    <div
+      style={{
+        display: "flex",
+        alignItems: "flex-start",
+        justifyContent: "space-between",
+        gap: 16,
+        marginBottom: 14,
+        flexWrap: "wrap",
+      }}
+    >
+      <div>
+        <div style={{ fontSize: 20, fontWeight: 900, color: C.text }}>{title}</div>
+        {subtitle ? (
+          <div style={{ fontSize: 13, color: C.muted, marginTop: 4 }}>{subtitle}</div>
+        ) : null}
+      </div>
+      {right}
     </div>
-    <span className="ml-2 text-sm">On</span>
-  </label>
-);
+  );
+}
 
-/* ---- TOKENS ---- */
+function StatCard({ label, value, accent }) {
+  return (
+    <div
+      style={{
+        ...softCard,
+        padding: 14,
+        borderColor: accent ? C.gold : C.border,
+      }}
+    >
+      <div style={{ color: C.muted, fontSize: 12, fontWeight: 800 }}>{label}</div>
+      <div style={{ color: C.text, fontSize: 24, fontWeight: 900, marginTop: 6 }}>{value}</div>
+    </div>
+  );
+}
+
+/* -------------------- TOKENS -------------------- */
 const TOKENS = ["{{business_name}}", "{{booking_link}}", "{{lead.first_name}}", "{{last_ai_text}}"];
 
-const TokenRow = ({ onInsert }) => (
-  <div className="flex flex-wrap gap-2">
-    {TOKENS.map((t) => (
-      <button
-        key={t}
-        type="button"
-        onClick={() => onInsert?.(t)}
-        className="text-xs bg-[#242424] border border-[#2a2a2a] px-2 py-1 rounded hover:bg-[#2a2a2a]"
-      >
-        {t}
-      </button>
-    ))}
-  </div>
-);
+function TokenRow({ onInsert }) {
+  return (
+    <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
+      {TOKENS.map((t) => (
+        <button
+          key={t}
+          type="button"
+          onClick={() => onInsert?.(t)}
+          style={{
+            fontSize: 12,
+            background: "#242424",
+            border: `1px solid ${C.border}`,
+            color: "#fff",
+            padding: "6px 9px",
+            borderRadius: 10,
+            cursor: "pointer",
+          }}
+        >
+          {t}
+        </button>
+      ))}
+    </div>
+  );
+}
 
-/* ---- LABELS ---- */
-const PRETTY = {
-  no_reply: (t) => `No reply for ${t.days || 3} days`,
-  new_lead: (t) => `New lead (≤ ${t.within_hours || 24}h)`,
-  appointment_no_show: () => "Appointment no-show",
+/* -------------------- HELPERS -------------------- */
+const PRETTY_TRIGGER = {
+  no_reply: (t) => `When a lead hasn't replied for ${t.days || 3} day${Number(t.days || 3) === 1 ? "" : "s"}`,
+  new_lead: (t) => `When a new lead comes in (within ${t.within_hours || 24} hours)`,
+  appointment_no_show: () => "When a lead misses an appointment",
 };
 
 function normalizeFlow(flow, userEmail) {
@@ -122,92 +329,47 @@ function normalizeFlow(flow, userEmail) {
   };
 }
 
-/* ---- ARROW ---- */
-const ArrowRight = () => (
-  <svg width="36" height="16" viewBox="0 0 36 16" fill="none" xmlns="http://www.w3.org/2000/svg">
-    <path d="M0 8H30" stroke="#3a3a3a" strokeWidth="2" />
-    <path d="M25 3L30 8L25 13" stroke="#3a3a3a" strokeWidth="2" />
-  </svg>
-);
-
-/* ---- FLOW NODES ---- */
-const HNode = ({ title, subtitle }) => (
-  <div
-    style={{
-      background: CARD_SOFT,
-      border: `1px solid ${BORDER}`,
-      borderRadius: 14,
-      padding: 12,
-      minWidth: 210,
-      boxShadow: "0 2px 18px rgba(0,0,0,0.18)",
-    }}
-  >
-    <div className="text-xs" style={{ color: MUTED }}>
-      {subtitle}
-    </div>
-    <div className="text-white font-semibold">{title}</div>
-  </div>
-);
-
-const StepPreview = ({ step }) => {
-  const t = step.type;
-  if (t === "wait") {
-    const dur = step.days ? `${step.days}d` : step.hours ? `${step.hours}h` : step.minutes ? `${step.minutes}m` : "";
-    return <HNode subtitle="Delay" title={`Wait ${dur}`} />;
-  }
-  if (t === "ai_draft") return <HNode subtitle="Content" title="AI Draft" />;
-  if (t === "send_email") return <HNode subtitle="Action" title="Send Email" />;
-  if (t === "send_whatsapp") {
-    const label =
-      step.template?.name
-        ? `Send WhatsApp · tpl: ${step.template.name}`
-        : "Send WhatsApp";
-    return <HNode subtitle="Action" title={label} />;
-  }
-  if (t === "push_owner") return <HNode subtitle="Action" title="Push Owner" />;
-  if (t === "add_tag") return <HNode subtitle="Action" title={`Add Tag: ${step.tag || "…"}`} />;
-  if (t === "if_no_reply") return <HNode subtitle="Branch" title={`If No Reply ≤ ${step.within_days || 2}d`} />;
-  if (t === "if_no_booking") return <HNode subtitle="Branch" title={`If No Booking ≤ ${step.within_days || 2}d`} />;
-  return <HNode subtitle="Step" title={t} />;
-};
-
-const FlowDiagram = ({ flow }) => {
-  const trig = flow?.trigger || {};
-  const title =
-    trig.type === "no_reply"
-      ? `no_reply (${trig.days || 3}d)`
-      : trig.type === "new_lead"
-      ? `new_lead (≤ ${trig.within_hours || 24}h)`
-      : trig.type || "Trigger";
-
-  const steps = flow?.steps || [];
-
-  return (
-    <div className="overflow-x-auto">
-      <div className="flex items-center gap-3 min-w-[680px]">
-        <HNode subtitle="Trigger" title={title} />
-        {steps.map((s, i) => (
-          <React.Fragment key={i}>
-            <ArrowRight />
-            <StepPreview step={s} />
-          </React.Fragment>
-        ))}
-      </div>
-    </div>
+function buildEmptyFlow(userEmail) {
+  return normalizeFlow(
+    {
+      id: undefined,
+      owner: userEmail,
+      name: "Untitled Flow",
+      enabled: false,
+      trigger: { type: "" },
+      steps: [],
+      caps: { per_lead_per_day: 1, respect_quiet_hours: true },
+      auto_stop_on_reply: true,
+    },
+    userEmail
   );
-};
+}
 
-/* ---- WA helpers ---- */
+function splitParams(str) {
+  if (!str) return [];
+  return String(str)
+    .split(",")
+    .map((s) => s.trim())
+    .filter((s) => s.length || s === "");
+}
+
+function joinParams(arr) {
+  return (arr || []).map((s) => (s == null ? "" : String(s))).join(", ");
+}
+
 function normalizeWATemplates(raw) {
   if (!Array.isArray(raw)) return [];
   const byName = {};
+
   raw.forEach((item) => {
     if (typeof item === "string") {
       byName[item] = byName[item] || { name: item, languages: [] };
       return;
     }
+
     const name = item?.name || "";
     if (!name) return;
+
     byName[name] = byName[name] || { name, languages: [] };
 
     if (Array.isArray(item.languages)) {
@@ -235,50 +397,112 @@ function normalizeWATemplates(raw) {
   return Object.values(byName).sort((a, b) => a.name.localeCompare(b.name));
 }
 
-function splitParams(str) {
-  if (!str) return [];
-  return String(str)
-    .split(",")
-    .map((s) => s.trim())
-    .filter((s) => s.length || s === "");
+function humanStepLabel(step) {
+  if (!step?.type) return "Step";
+  if (step.type === "wait") {
+    const d = Number(step.days || 0);
+    const h = Number(step.hours || 0);
+    const m = Number(step.minutes || 0);
+    const bits = [];
+    if (d) bits.push(`${d} day${d === 1 ? "" : "s"}`);
+    if (h) bits.push(`${h} hour${h === 1 ? "" : "s"}`);
+    if (m) bits.push(`${m} min`);
+    return `Wait ${bits.length ? bits.join(", ") : "for a bit"}`;
+  }
+  if (step.type === "ai_draft") return "Create an AI draft";
+  if (step.type === "send_email") return "Send an email";
+  if (step.type === "send_whatsapp")
+    return step?.template?.name ? `Send WhatsApp template: ${step.template.name}` : "Send a WhatsApp message";
+  if (step.type === "push_owner") return "Notify the owner";
+  if (step.type === "add_tag") return `Add tag: ${step.tag || "Needs Attention"}`;
+  if (step.type === "if_no_reply") return `If no reply in ${step.within_days || 2} day(s)`;
+  if (step.type === "if_no_booking") return `If no booking in ${step.within_days || 2} day(s)`;
+  return step.type.replaceAll("_", " ");
 }
 
-function joinParams(arr) {
-  return (arr || []).map((s) => (s == null ? "" : String(s))).join(", ");
+function flowSummary(flow) {
+  const trig = flow?.trigger || {};
+  const triggerText = trig.type ? (PRETTY_TRIGGER[trig.type]?.(trig) || trig.type) : "Choose a trigger";
+  const stepCount = Array.isArray(flow?.steps) ? flow.steps.length : 0;
+  return `${triggerText}. ${stepCount} step${stepCount === 1 ? "" : "s"} in this flow.`;
 }
 
-/* ---- STEP CARD ---- */
+function buildDefaultStep(type) {
+  switch (type) {
+    case "ai_draft":
+      return { type: "ai_draft" };
+    case "send_whatsapp":
+      return { type: "send_whatsapp", text: "{{last_ai_text}}" };
+    case "send_email":
+      return {
+        type: "send_email",
+        subject: "Quick check-in from {{business_name}}",
+        body:
+          "Hi {{lead.first_name}},\n\nJust checking in. Book here: {{booking_link}}\n\nThanks,\n{{business_name}}",
+      };
+    case "wait":
+      return { type: "wait", hours: 24 };
+    case "if_no_reply":
+      return { type: "if_no_reply", within_days: 2, then: [] };
+    case "if_no_booking":
+      return { type: "if_no_booking", within_days: 2, then: [] };
+    case "push_owner":
+      return { type: "push_owner", title: "Give them a quick call", message: "Lead may need a call" };
+    case "add_tag":
+      return { type: "add_tag", tag: "Needs Attention" };
+    default:
+      return { type };
+  }
+}
+
+function cloneTemplateToFlow(template, userEmail) {
+  const f = JSON.parse(JSON.stringify(template || {}));
+  delete f.id;
+  f.enabled = false;
+  f.owner = userEmail;
+
+  const strip = (html = "") =>
+    html
+      .replace(/<\/p>\s*<p>/g, "\n\n")
+      .replace(/<br\s*\/?>/g, "\n")
+      .replace(/<\/?[^>]+>/g, "")
+      .trim();
+
+  f.steps = (f.steps || []).map((s) =>
+    s.type === "send_email" && s.html && !s.body ? { ...s, body: strip(s.html) } : s
+  );
+
+  return normalizeFlow(f, userEmail);
+}
+
+/* -------------------- STEP EDITOR -------------------- */
 function StepCard({ step, onChange, onRemove, waTemplates }) {
   const set = (patch) => onChange({ ...step, ...patch });
-  const bodyRef = useRef(null);
-  const waRef = useRef(null);
+  const emailBodyRef = useRef(null);
+  const waBodyRef = useRef(null);
 
-  const insertToken = (ref, tok) => {
+  const insertToken = (ref, tok, key) => {
     const el = ref.current;
     if (!el) return;
-    const s = el.selectionStart || 0;
-    const e = el.selectionEnd || 0;
-    const next = el.value.slice(0, s) + tok + el.value.slice(e);
+    const start = el.selectionStart || 0;
+    const end = el.selectionEnd || 0;
+    const next = el.value.slice(0, start) + tok + el.value.slice(end);
     el.value = next;
-    el.selectionStart = el.selectionEnd = s + tok.length;
+    el.selectionStart = el.selectionEnd = start + tok.length;
     el.focus();
-    if (ref === bodyRef) set({ body: next });
-    if (ref === waRef) set({ text: next });
+    set({ [key]: next });
   };
+
+  const normalizedTemplates = useMemo(() => normalizeWATemplates(waTemplates || []), [waTemplates]);
 
   const waTpl = step.template || {};
   const setTpl = (patch) => set({ template: { ...(step.template || {}), ...patch } });
 
-  const normalized = useMemo(() => normalizeWATemplates(waTemplates || []), [waTemplates]);
-  const templateNames = useMemo(() => normalized.map((t) => t.name), [normalized]);
   const selectedTpl = useMemo(
-    () => normalized.find((t) => t.name === waTpl.name) || null,
-    [normalized, waTpl.name]
+    () => normalizedTemplates.find((t) => t.name === waTpl.name) || null,
+    [normalizedTemplates, waTpl.name]
   );
-  const languages = useMemo(
-    () => (selectedTpl?.languages || []).map((l) => l.code),
-    [selectedTpl]
-  );
+
   const selectedLangMeta = useMemo(() => {
     if (!selectedTpl) return null;
     const code = waTpl.language || selectedTpl.languages[0]?.code;
@@ -301,68 +525,97 @@ function StepCard({ step, onChange, onRemove, waTemplates }) {
   };
 
   return (
-    <div style={{ background: CARD_SOFT, border: `1px solid ${BORDER}`, borderRadius: 14, padding: 14 }}>
-      <div className="flex items-center justify-between">
-        <div className="font-semibold capitalize">{step.type.replaceAll("_", " ")}</div>
-        {onRemove && (
-          <button className="text-sm opacity-80 hover:opacity-100" onClick={onRemove}>
-            Remove
-          </button>
-        )}
+    <div style={{ ...softCard, padding: 14 }}>
+      <div style={{ display: "flex", justifyContent: "space-between", gap: 12, alignItems: "center", marginBottom: 12 }}>
+        <div>
+          <div style={{ color: C.text, fontSize: 16, fontWeight: 900 }}>{humanStepLabel(step)}</div>
+          <div style={{ color: C.muted, fontSize: 12, marginTop: 3 }}>
+            {step.type.replaceAll("_", " ")}
+          </div>
+        </div>
+        <Btn kind="danger" onClick={onRemove}>Remove</Btn>
       </div>
 
       {step.type === "wait" && (
-        <div className="grid grid-cols-3 gap-2 mt-3">
-          <div>
-            <div className="text-xs mb-1">Days</div>
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(3, minmax(0,1fr))", gap: 10 }}>
+          <Field label="Days">
             <Input type="number" value={step.days || 0} onChange={(e) => set({ days: +e.target.value })} />
-          </div>
-          <div>
-            <div className="text-xs mb-1">Hours</div>
+          </Field>
+          <Field label="Hours">
             <Input type="number" value={step.hours || 0} onChange={(e) => set({ hours: +e.target.value })} />
-          </div>
-          <div>
-            <div className="text-xs mb-1">Minutes</div>
+          </Field>
+          <Field label="Minutes">
             <Input type="number" value={step.minutes || 0} onChange={(e) => set({ minutes: +e.target.value })} />
-          </div>
+          </Field>
+        </div>
+      )}
+
+      {step.type === "ai_draft" && (
+        <div style={{ color: C.muted, fontSize: 13 }}>
+          RetainAI will draft the message first so the next message step can use <b>{{"{last_ai_text}"}}</b>.
+        </div>
+      )}
+
+      {step.type === "send_email" && (
+        <div style={{ display: "grid", gap: 12 }}>
+          <Field label="Email subject">
+            <Input
+              value={step.subject || ""}
+              onChange={(e) => set({ subject: e.target.value })}
+              placeholder="Quick check-in from {{business_name}}"
+            />
+          </Field>
+
+          <Field label="Email body">
+            <TextArea
+              ref={emailBodyRef}
+              rows={5}
+              value={step.body || ""}
+              onChange={(e) => set({ body: e.target.value })}
+              placeholder={"Hi {{lead.first_name}},\n\nJust checking in. Book here: {{booking_link}}\n\nThanks,\n{{business_name}}"}
+            />
+          </Field>
+
+          <TokenRow onInsert={(t) => insertToken(emailBodyRef, t, "body")} />
         </div>
       )}
 
       {step.type === "send_whatsapp" && (
-        <div className="mt-3">
-          <div className="text-xs mb-1">Message</div>
-          <TextArea
-            ref={waRef}
-            rows={3}
-            value={step.text || ""}
-            onChange={(e) => set({ text: e.target.value })}
-            placeholder="Use {{last_ai_text}} or include {{booking_link}} / {{business_name}}"
-          />
-          <div className="mt-2">
-            <TokenRow onInsert={(t) => insertToken(waRef, t)} />
-          </div>
+        <div style={{ display: "grid", gap: 12 }}>
+          <Field label="WhatsApp message">
+            <TextArea
+              ref={waBodyRef}
+              rows={4}
+              value={step.text || ""}
+              onChange={(e) => set({ text: e.target.value })}
+              placeholder="Use {{last_ai_text}} or include {{booking_link}} / {{business_name}}"
+            />
+          </Field>
 
-          <div className="mt-3 rounded-xl p-3" style={{ border: `1px dashed ${BORDER}` }}>
-            <div className="flex items-center justify-between">
-              <div className="text-sm font-semibold">Template fallback (outside 24h)</div>
-              <label className="text-xs flex items-center gap-2">
+          <TokenRow onInsert={(t) => insertToken(waBodyRef, t, "text")} />
+
+          <div style={{ ...softCard, padding: 12, background: "#1d1f20" }}>
+            <div style={{ display: "flex", justifyContent: "space-between", gap: 12, alignItems: "center", marginBottom: 10 }}>
+              <div>
+                <div style={{ color: C.text, fontWeight: 800 }}>Template fallback</div>
+                <div style={{ color: C.muted, fontSize: 12, marginTop: 2 }}>
+                  Used outside the 24-hour WhatsApp window
+                </div>
+              </div>
+              <label style={{ display: "inline-flex", alignItems: "center", gap: 8, fontSize: 12, color: C.muted }}>
                 <input
                   type="checkbox"
                   checked={!!(waTpl.name || waTpl.language || waTpl.params)}
                   onChange={(e) => {
                     if (e.target.checked) {
-                      const first = normalizeWATemplates(waTemplates || [])[0];
+                      const first = normalizedTemplates[0];
                       setTpl({
                         name: waTpl.name || first?.name || "",
                         language: waTpl.language || first?.languages?.[0]?.code || "en_US",
                         params: waTpl.params || "",
                       });
                     } else {
-                      const clone = { ...(step.template || {}) };
-                      delete clone.name;
-                      delete clone.language;
-                      delete clone.params;
-                      set({ template: Object.keys(clone).length ? clone : undefined });
+                      set({ template: undefined });
                     }
                   }}
                 />
@@ -370,81 +623,57 @@ function StepCard({ step, onChange, onRemove, waTemplates }) {
               </label>
             </div>
 
-            {(waTpl.name || waTpl.language || waTpl.params) && (
-              <div className="grid gap-2 mt-3">
-                <div className="grid md:grid-cols-3 gap-2">
-                  <div>
-                    <div className="text-xs mb-1">Template</div>
-                    {templateNames.length ? (
-                      <select
-                        className="w-full bg-[#232323] text-white border border-[#2a2a2a] rounded-xl p-2"
-                        value={waTpl.name || ""}
-                        onChange={(e) => {
-                          const name = e.target.value;
-                          const tpl = normalized.find((t) => t.name === name);
-                          const lang = tpl?.languages?.[0]?.code || "en_US";
-                          const nextPatch = { name, language: lang };
+            {waTpl.name || waTpl.language || waTpl.params ? (
+              <div style={{ display: "grid", gap: 10 }}>
+                <div style={{ display: "grid", gridTemplateColumns: "1.4fr 1fr 0.7fr", gap: 10 }}>
+                  <Field label="Template">
+                    <Select
+                      value={waTpl.name || ""}
+                      onChange={(e) => {
+                        const name = e.target.value;
+                        const tpl = normalizedTemplates.find((t) => t.name === name);
+                        const lang = tpl?.languages?.[0]?.code || "en_US";
+                        const patch = { name, language: lang };
 
-                          if ((tpl?.languages?.[0]?.body_params || 0) > 0) {
-                            const commons = ["{{lead.first_name}}", "{{business_name}}", "{{booking_link}}", "{{last_ai_text}}"];
-                            const n = tpl.languages[0].body_params;
-                            nextPatch.params = joinParams(commons.slice(0, n));
-                          }
+                        if ((tpl?.languages?.[0]?.body_params || 0) > 0) {
+                          const commons = ["{{lead.first_name}}", "{{business_name}}", "{{booking_link}}", "{{last_ai_text}}"];
+                          patch.params = joinParams(commons.slice(0, tpl.languages[0].body_params));
+                        }
 
-                          setTpl(nextPatch);
-                        }}
-                      >
-                        <option value="">Select…</option>
-                        {templateNames.map((n) => (
-                          <option key={n} value={n}>
-                            {n}
-                          </option>
-                        ))}
-                      </select>
-                    ) : (
-                      <Input
-                        value={waTpl.name || ""}
-                        onChange={(e) => setTpl({ name: e.target.value })}
-                        placeholder="your_template"
-                      />
-                    )}
-                  </div>
+                        setTpl(patch);
+                      }}
+                    >
+                      <option value="">Select…</option>
+                      {normalizedTemplates.map((n) => (
+                        <option key={n.name} value={n.name}>
+                          {n.name}
+                        </option>
+                      ))}
+                    </Select>
+                  </Field>
 
-                  <div>
-                    <div className="text-xs mb-1">Language</div>
-                    {languages.length ? (
-                      <select
-                        className="w-full bg-[#232323] text-white border border-[#2a2a2a] rounded-xl p-2"
-                        value={waTpl.language || languages[0]}
-                        onChange={(e) => setTpl({ language: e.target.value })}
-                      >
-                        {languages.map((c) => (
-                          <option key={c} value={c}>
-                            {c}
-                          </option>
-                        ))}
-                      </select>
-                    ) : (
-                      <Input
-                        value={waTpl.language || "en_US"}
-                        onChange={(e) => setTpl({ language: e.target.value })}
-                        placeholder="en_US"
-                      />
-                    )}
-                  </div>
+                  <Field label="Language">
+                    <Select
+                      value={waTpl.language || selectedTpl?.languages?.[0]?.code || "en_US"}
+                      onChange={(e) => setTpl({ language: e.target.value })}
+                    >
+                      {(selectedTpl?.languages || []).map((l) => (
+                        <option key={l.code} value={l.code}>
+                          {l.code}
+                        </option>
+                      ))}
+                      {!selectedTpl?.languages?.length && <option value="en_US">en_US</option>}
+                    </Select>
+                  </Field>
 
-                  <div>
-                    <div className="text-xs mb-1">Required params</div>
-                    <div className="text-sm bg-[#232323] border border-[#2a2a2a] rounded-xl px-3 py-2">
-                      {paramCount}
-                    </div>
-                  </div>
+                  <Field label="Params">
+                    <Input readOnly value={paramCount} />
+                  </Field>
                 </div>
 
                 {paramCount > 0 ? (
-                  <div className="mt-1">
-                    <div className="text-xs mb-1">Body parameters</div>
-                    <div className="grid md:grid-cols-2 gap-2">
+                  <>
+                    <div style={{ display: "grid", gridTemplateColumns: "repeat(2, minmax(0,1fr))", gap: 10 }}>
                       {paramsArray.map((val, i) => (
                         <Input
                           key={i}
@@ -466,143 +695,159 @@ function StepCard({ step, onChange, onRemove, waTemplates }) {
                         />
                       ))}
                     </div>
-                    <div className="flex items-center gap-2 mt-2">
-                      <Btn kind="ghost" onClick={fillCommonParams}>
-                        Fill common tokens
-                      </Btn>
-                      <div className="text-xs opacity-70">Tip: start with common tokens, then tweak.</div>
+                    <div>
+                      <Btn kind="ghost" onClick={fillCommonParams}>Fill common tokens</Btn>
                     </div>
-                  </div>
+                  </>
                 ) : (
-                  <div>
-                    <div className="text-xs mb-1">Params (comma-separated)</div>
+                  <Field label="Template params (comma-separated)">
                     <Input
                       value={waTpl.params || ""}
                       onChange={(e) => setTpl({ params: e.target.value })}
                       placeholder="{{lead.first_name}}, {{business_name}}, {{booking_link}}"
                     />
-                  </div>
+                  </Field>
                 )}
               </div>
-            )}
+            ) : null}
           </div>
-        </div>
-      )}
-
-      {step.type === "send_email" && (
-        <div className="mt-3">
-          <div className="text-xs mb-1">Subject</div>
-          <Input
-            value={step.subject || ""}
-            onChange={(e) => set({ subject: e.target.value })}
-            placeholder="Quick check-in from {{business_name}}"
-          />
-          <div className="text-xs mb-1 mt-3">Body</div>
-          <TextArea
-            ref={bodyRef}
-            rows={5}
-            value={step.body || ""}
-            onChange={(e) => set({ body: e.target.value })}
-            placeholder={`Hi {{lead.first_name}},\n\nJust checking in. Book here: {{booking_link}}\n\nThanks,\n{{business_name}}`}
-          />
-          <div className="mt-2">
-            <TokenRow onInsert={(t) => insertToken(bodyRef, t)} />
-          </div>
-          <div className="text-xs text-[#9a9a9a] mt-2">This will be formatted as a clean email automatically.</div>
         </div>
       )}
 
       {(step.type === "if_no_reply" || step.type === "if_no_booking") && (
-        <div className="mt-3">
-          <div className="text-xs mb-1">Within days</div>
-          <Input
-            type="number"
-            value={step.within_days || 2}
-            onChange={(e) => set({ within_days: +e.target.value })}
-            style={{ maxWidth: 120 }}
-          />
-          <div className="text-xs text-[#bdbdbd] mt-3">Then do:</div>
-          <div className="flex flex-col gap-2 mt-2">
-            {(step.then || []).map((s, i) => (
-              <StepCard
-                key={i}
-                step={s}
-                onChange={(patch) => {
-                  const arr = [...(step.then || [])];
-                  arr[i] = patch;
-                  set({ then: arr });
-                }}
-                onRemove={() => {
-                  const arr = [...(step.then || [])];
-                  arr.splice(i, 1);
-                  set({ then: arr });
-                }}
-                waTemplates={waTemplates}
-              />
-            ))}
-            <div className="flex flex-wrap gap-2">
-              <Btn
-                kind="ghost"
-                onClick={() =>
-                  set({
-                    then: [
-                      ...(step.then || []),
-                      {
-                        type: "send_email",
-                        subject: "We still here?",
-                        body: "Quick check-in — want to grab a spot with {{business_name}}?\n\nBook here: {{booking_link}}",
-                      },
-                    ],
-                  })
-                }
-              >
-                + Email
-              </Btn>
-              <Btn
-                kind="ghost"
-                onClick={() =>
-                  set({
-                    then: [...(step.then || []), { type: "send_whatsapp", text: "Just checking in — {{booking_link}}" }],
-                  })
-                }
-              >
-                + WhatsApp
-              </Btn>
-              <Btn
-                kind="ghost"
-                onClick={() => set({ then: [...(step.then || []), { type: "wait", hours: 24 }] })}
-              >
-                + Wait
-              </Btn>
+        <div style={{ display: "grid", gap: 12 }}>
+          <Field label="Check after how many days?">
+            <Input
+              type="number"
+              value={step.within_days || 2}
+              onChange={(e) => set({ within_days: +e.target.value })}
+              style={{ maxWidth: 160 }}
+            />
+          </Field>
+
+          <div>
+            <div style={{ color: C.text, fontWeight: 800, marginBottom: 8 }}>Then do this</div>
+            <div style={{ display: "grid", gap: 10 }}>
+              {(step.then || []).map((s, i) => (
+                <StepCard
+                  key={i}
+                  step={s}
+                  waTemplates={waTemplates}
+                  onChange={(patch) => {
+                    const arr = [...(step.then || [])];
+                    arr[i] = patch;
+                    set({ then: arr });
+                  }}
+                  onRemove={() => {
+                    const arr = [...(step.then || [])];
+                    arr.splice(i, 1);
+                    set({ then: arr });
+                  }}
+                />
+              ))}
+            </div>
+
+            <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginTop: 10 }}>
+              {["send_email", "send_whatsapp", "wait"].map((t) => (
+                <Btn
+                  key={t}
+                  kind="ghost"
+                  onClick={() => set({ then: [...(step.then || []), buildDefaultStep(t)] })}
+                >
+                  + {t.replaceAll("_", " ")}
+                </Btn>
+              ))}
             </div>
           </div>
         </div>
       )}
 
       {step.type === "push_owner" && (
-        <div className="grid md:grid-cols-2 gap-2 mt-3">
-          <div>
-            <div className="text-xs mb-1">Title</div>
-            <Input value={step.title || "Lead to call"} onChange={(e) => set({ title: e.target.value })} />
-          </div>
-          <div>
-            <div className="text-xs mb-1">Message</div>
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(2, minmax(0,1fr))", gap: 10 }}>
+          <Field label="Notification title">
+            <Input value={step.title || "Give them a quick call"} onChange={(e) => set({ title: e.target.value })} />
+          </Field>
+          <Field label="Notification message">
             <Input value={step.message || "Lead may need a call"} onChange={(e) => set({ message: e.target.value })} />
-          </div>
+          </Field>
         </div>
       )}
 
       {step.type === "add_tag" && (
-        <div className="mt-3">
-          <div className="text-xs mb-1">Tag</div>
+        <Field label="Tag to add">
           <Input value={step.tag || "Needs Attention"} onChange={(e) => set({ tag: e.target.value })} />
-        </div>
+        </Field>
       )}
     </div>
   );
 }
 
-/* ---- PREVIEW ---- */
+function Field({ label, children }) {
+  return (
+    <div>
+      <div style={{ fontSize: 12, color: C.muted, marginBottom: 6, fontWeight: 800 }}>{label}</div>
+      {children}
+    </div>
+  );
+}
+
+/* -------------------- FLOW VISUALS -------------------- */
+function FlowNode({ title, subtitle }) {
+  return (
+    <div
+      style={{
+        background: C.soft,
+        border: `1px solid ${C.border}`,
+        borderRadius: 14,
+        padding: 12,
+        minWidth: 220,
+        boxShadow: "0 2px 18px rgba(0,0,0,0.18)",
+      }}
+    >
+      <div style={{ color: C.muted, fontSize: 12 }}>{subtitle}</div>
+      <div style={{ color: "#fff", fontWeight: 900, marginTop: 4 }}>{title}</div>
+    </div>
+  );
+}
+
+function ArrowRight() {
+  return (
+    <svg width="36" height="16" viewBox="0 0 36 16" fill="none" xmlns="http://www.w3.org/2000/svg">
+      <path d="M0 8H30" stroke="#3a3a3a" strokeWidth="2" />
+      <path d="M25 3L30 8L25 13" stroke="#3a3a3a" strokeWidth="2" />
+    </svg>
+  );
+}
+
+function FlowDiagram({ flow }) {
+  const trig = flow?.trigger || {};
+  const title =
+    trig.type === "no_reply"
+      ? `No reply (${trig.days || 3}d)`
+      : trig.type === "new_lead"
+      ? `New lead (≤ ${trig.within_hours || 24}h)`
+      : trig.type === "appointment_no_show"
+      ? "Appointment no-show"
+      : "Trigger";
+
+  const steps = flow?.steps || [];
+
+  return (
+    <div style={{ overflowX: "auto" }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 12, minWidth: 720 }}>
+        <FlowNode subtitle="Trigger" title={title} />
+        {steps.map((s, i) => (
+          <React.Fragment key={i}>
+            <ArrowRight />
+            <FlowNode subtitle="Step" title={humanStepLabel(s)} />
+          </React.Fragment>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+/* -------------------- TEST / PREVIEW -------------------- */
 function Preview({ userEmail, flow }) {
   const [leadEmail, setLeadEmail] = useState("");
   const [list, setList] = useState(null);
@@ -617,7 +862,7 @@ function Preview({ userEmail, flow }) {
     setDid(null);
     try {
       const data = await api.dryRun(userEmail, flow, { lead_email: leadEmail });
-      setList(Array.isArray(data.would) ? data.would : []);
+      setList(Array.isArray(data?.would) ? data.would : []);
     } catch (e) {
       setErr(String(e.message || e));
     } finally {
@@ -636,7 +881,7 @@ function Preview({ userEmail, flow }) {
         ignore_quiet_hours: true,
         bypass_rate_limits: true,
       });
-      setDid(Array.isArray(data.did) ? data.did : []);
+      setDid(Array.isArray(data?.did) ? data.did : []);
     } catch (e) {
       setErr(String(e.message || e));
     } finally {
@@ -651,63 +896,371 @@ function Preview({ userEmail, flow }) {
     if (a.info?.template?.name) bits.push(`[tpl:${a.info.template.name}${a.info.template.language ? "/" + a.info.template.language : ""}]`);
     if (a.info?.used_lang) bits.push(`lang=${a.info.used_lang}`);
     if (a.info?.mode) bits.push(`mode=${a.info.mode}`);
-    return bits.length ? <span className="opacity-70"> — {bits.join(" · ")}</span> : null;
+    return bits.length ? <span style={{ opacity: 0.75 }}> — {bits.join(" · ")}</span> : null;
   };
 
   return (
-    <div>
-      <div className="text-sm mb-1">Test with lead email</div>
-      <div className="flex gap-2">
-        <Input placeholder="lead@example.com" value={leadEmail} onChange={(e) => setLeadEmail(e.target.value)} />
+    <div style={{ ...softCard, padding: 16 }}>
+      <SectionTitle
+        title="Test this flow"
+        subtitle="See what would happen for a real lead before you turn it on."
+      />
+
+      <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
+        <Input
+          placeholder="lead@example.com"
+          value={leadEmail}
+          onChange={(e) => setLeadEmail(e.target.value)}
+          style={{ flex: 1, minWidth: 240 }}
+        />
         <Btn kind="ghost" onClick={run} disabled={!leadEmail || loading}>
-          {loading ? "Running…" : "Run"}
+          {loading ? "Running..." : "Preview"}
         </Btn>
         <Btn onClick={runNow} disabled={!leadEmail || loading}>
-          {loading ? "Sending…" : "Run Now"}
+          {loading ? "Sending..." : "Run Now"}
         </Btn>
       </div>
-      {err && <div className="text-xs text-[#ffbcbc] mt-2">{err}</div>}
 
-      <div className="mt-3 rounded-xl border" style={{ borderColor: BORDER, padding: 12 }}>
-        <div className="font-semibold mb-2">Would run now</div>
-        {list === null ? (
-          <div className="text-sm text-[#9a9a9a]">No run yet.</div>
-        ) : list.length === 0 ? (
-          <div className="text-sm text-[#9a9a9a]">No actions would run.</div>
-        ) : (
-          <ul className="list-disc ml-5">
-            {list.map((a, i) => (
-              <li key={i} className="mb-1">
-                {a.type}
-                {renderInfoBits(a)}
-              </li>
-            ))}
-          </ul>
-        )}
+      {err ? (
+        <div
+          style={{
+            marginTop: 12,
+            background: C.redBg,
+            color: C.redTxt,
+            border: "1px solid #4a1515",
+            borderRadius: 12,
+            padding: "10px 12px",
+            fontSize: 13,
+          }}
+        >
+          {err}
+        </div>
+      ) : null}
 
-        {Array.isArray(did) && (
-          <>
-            <div className="font-semibold mt-4 mb-2">Executed actions</div>
-            {did.length === 0 ? (
-              <div className="text-sm text-[#9a9a9a]">Nothing executed.</div>
-            ) : (
-              <ul className="list-disc ml-5">
-                {did.map((a, i) => (
-                  <li key={i} className="mb-1">
-                    {a.type} — {a.status}
-                    {renderInfoBits(a)}
-                  </li>
-                ))}
-              </ul>
-            )}
-          </>
-        )}
+      <div style={{ marginTop: 14, display: "grid", gap: 14 }}>
+        <div style={{ ...softCard, padding: 14 }}>
+          <div style={{ color: C.text, fontWeight: 900, marginBottom: 8 }}>Would run now</div>
+          {list === null ? (
+            <div style={{ color: C.muted, fontSize: 13 }}>No preview run yet.</div>
+          ) : !list.length ? (
+            <div style={{ color: C.muted, fontSize: 13 }}>No actions would run.</div>
+          ) : (
+            <ul style={{ margin: 0, paddingLeft: 18 }}>
+              {list.map((a, i) => (
+                <li key={i} style={{ marginBottom: 6 }}>
+                  {a.type}
+                  {renderInfoBits(a)}
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
+
+        <div style={{ ...softCard, padding: 14 }}>
+          <div style={{ color: C.text, fontWeight: 900, marginBottom: 8 }}>Executed actions</div>
+          {!Array.isArray(did) ? (
+            <div style={{ color: C.muted, fontSize: 13 }}>Nothing executed yet.</div>
+          ) : !did.length ? (
+            <div style={{ color: C.muted, fontSize: 13 }}>Nothing executed.</div>
+          ) : (
+            <ul style={{ margin: 0, paddingLeft: 18 }}>
+              {did.map((a, i) => (
+                <li key={i} style={{ marginBottom: 6 }}>
+                  {a.type} — {a.status}
+                  {renderInfoBits(a)}
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
       </div>
     </div>
   );
 }
 
-/* ---- MAIN ---- */
+/* -------------------- TEMPLATE CARDS -------------------- */
+function TemplateCard({ template, onUse }) {
+  const previewTrigger = PRETTY_TRIGGER[template?.trigger?.type]?.(template.trigger || {}) || "Ready-to-use automation";
+  const stepCount = Array.isArray(template?.steps) ? template.steps.length : 0;
+
+  return (
+    <div style={{ ...shellCard, padding: 18 }}>
+      <div style={{ display: "flex", justifyContent: "space-between", gap: 12, alignItems: "flex-start" }}>
+        <div>
+          <div style={{ color: C.text, fontWeight: 900, fontSize: 18 }}>
+            {template?.name || "Automation Template"}
+          </div>
+          <div style={{ color: C.muted, fontSize: 13, marginTop: 6 }}>{previewTrigger}</div>
+        </div>
+        <div
+          style={{
+            background: "rgba(247,203,83,0.12)",
+            color: C.gold,
+            border: `1px solid rgba(247,203,83,0.3)`,
+            borderRadius: 999,
+            padding: "5px 10px",
+            fontSize: 12,
+            fontWeight: 900,
+          }}
+        >
+          {stepCount} step{stepCount === 1 ? "" : "s"}
+        </div>
+      </div>
+
+      <div style={{ marginTop: 14, color: C.text, fontSize: 14, lineHeight: 1.55 }}>
+        {flowSummary(template)}
+      </div>
+
+      <div style={{ marginTop: 16 }}>
+        <Btn onClick={onUse}>Use Template</Btn>
+      </div>
+    </div>
+  );
+}
+
+/* -------------------- FLOWS LIST -------------------- */
+function FlowCard({ flow, onEdit, onDelete, onToggle }) {
+  return (
+    <div style={{ ...shellCard, padding: 18 }}>
+      <div style={{ display: "flex", justifyContent: "space-between", gap: 16, flexWrap: "wrap" }}>
+        <div style={{ minWidth: 0 }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+            <div style={{ color: C.text, fontWeight: 900, fontSize: 18 }}>{flow.name}</div>
+            <span
+              style={{
+                background: flow.enabled ? "rgba(48,180,108,0.13)" : "rgba(170,176,182,0.12)",
+                color: flow.enabled ? C.green : C.muted,
+                border: `1px solid ${flow.enabled ? "rgba(48,180,108,0.3)" : "rgba(170,176,182,0.25)"}`,
+                borderRadius: 999,
+                padding: "4px 10px",
+                fontSize: 12,
+                fontWeight: 900,
+              }}
+            >
+              {flow.enabled ? "Active" : "Draft"}
+            </span>
+          </div>
+
+          <div style={{ color: C.muted, fontSize: 13, marginTop: 8 }}>
+            {flowSummary(flow)}
+          </div>
+        </div>
+
+        <Toggle checked={flow.enabled} onChange={onToggle} />
+      </div>
+
+      <div style={{ marginTop: 14 }}>
+        <FlowDiagram flow={flow} />
+      </div>
+
+      <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginTop: 16 }}>
+        <Btn kind="ghost" onClick={onEdit}>Edit</Btn>
+        <Btn kind="danger" onClick={onDelete}>Delete</Btn>
+      </div>
+    </div>
+  );
+}
+
+/* -------------------- BUILDER -------------------- */
+function TriggerChooser({ editing, setEditing }) {
+  const trig = editing?.trigger || { type: "" };
+
+  const setTriggerType = (type) => {
+    setEditing({
+      ...editing,
+      trigger:
+        type === "no_reply"
+          ? { type, days: trig.days || 3 }
+          : type === "new_lead"
+          ? { type, within_hours: trig.within_hours || 24 }
+          : { type },
+    });
+  };
+
+  return (
+    <div style={{ ...shellCard, padding: 18 }}>
+      <SectionTitle
+        title="1. Choose when this should run"
+        subtitle="Start with the event that should kick off the automation."
+      />
+
+      <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 14 }}>
+        <Chip active={trig.type === "no_reply"} onClick={() => setTriggerType("no_reply")}>
+          No reply
+        </Chip>
+        <Chip active={trig.type === "new_lead"} onClick={() => setTriggerType("new_lead")}>
+          New lead
+        </Chip>
+        <Chip active={trig.type === "appointment_no_show"} onClick={() => setTriggerType("appointment_no_show")}>
+          Appointment no-show
+        </Chip>
+      </div>
+
+      {trig.type === "no_reply" && (
+        <Field label="How many days with no reply?">
+          <Input
+            type="number"
+            value={trig.days || 3}
+            onChange={(e) =>
+              setEditing({
+                ...editing,
+                trigger: { ...trig, days: +e.target.value },
+              })
+            }
+            style={{ maxWidth: 180 }}
+          />
+        </Field>
+      )}
+
+      {trig.type === "new_lead" && (
+        <Field label="Treat as new lead for how many hours?">
+          <Input
+            type="number"
+            value={trig.within_hours || 24}
+            onChange={(e) =>
+              setEditing({
+                ...editing,
+                trigger: { ...trig, within_hours: +e.target.value },
+              })
+            }
+            style={{ maxWidth: 180 }}
+          />
+        </Field>
+      )}
+    </div>
+  );
+}
+
+function GuardrailsCard({ editing, setEditing }) {
+  return (
+    <div style={{ ...shellCard, padding: 18 }}>
+      <SectionTitle
+        title="2. Guardrails"
+        subtitle="Keep automations calm and customer-friendly."
+      />
+
+      <div style={{ display: "grid", gap: 14 }}>
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 16, flexWrap: "wrap" }}>
+          <div>
+            <div style={{ color: C.text, fontWeight: 800 }}>Stop if the lead replies</div>
+            <div style={{ color: C.muted, fontSize: 12, marginTop: 4 }}>
+              Prevents follow-ups after the conversation becomes active again.
+            </div>
+          </div>
+          <Toggle
+            checked={editing.auto_stop_on_reply}
+            onChange={(e) => setEditing({ ...editing, auto_stop_on_reply: e.target.checked })}
+          />
+        </div>
+
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 16, flexWrap: "wrap" }}>
+          <div>
+            <div style={{ color: C.text, fontWeight: 800 }}>Respect quiet hours</div>
+            <div style={{ color: C.muted, fontSize: 12, marginTop: 4 }}>
+              Delays sends if the message would go out too late or too early.
+            </div>
+          </div>
+          <Toggle
+            checked={editing.caps?.respect_quiet_hours !== false}
+            onChange={(e) =>
+              setEditing({
+                ...editing,
+                caps: { ...(editing.caps || {}), respect_quiet_hours: e.target.checked },
+              })
+            }
+          />
+        </div>
+
+        <Field label="Max sends per lead per day">
+          <Input
+            type="number"
+            value={editing.caps?.per_lead_per_day ?? 1}
+            onChange={(e) =>
+              setEditing({
+                ...editing,
+                caps: { ...(editing.caps || {}), per_lead_per_day: +e.target.value },
+              })
+            }
+            style={{ maxWidth: 180 }}
+          />
+        </Field>
+      </div>
+    </div>
+  );
+}
+
+function StepsBuilder({ editing, setEditing, waTemplates }) {
+  const addStep = (type) => {
+    const flow = editing || {};
+    const next = [...(flow.steps || []), buildDefaultStep(type)];
+    setEditing({ ...flow, steps: next });
+  };
+
+  return (
+    <div style={{ ...shellCard, padding: 18 }}>
+      <SectionTitle
+        title="3. What should happen next?"
+        subtitle="Add only the steps you need. Keep it simple."
+        right={
+          <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+            {["wait", "ai_draft", "send_email", "send_whatsapp", "if_no_reply", "if_no_booking", "push_owner", "add_tag"].map((k) => (
+              <Btn key={k} kind="ghost" onClick={() => addStep(k)} style={{ padding: "8px 10px", fontSize: 12 }}>
+                + {k.replaceAll("_", " ")}
+              </Btn>
+            ))}
+          </div>
+        }
+      />
+
+      {(editing.steps || []).length ? (
+        <div style={{ display: "grid", gap: 12 }}>
+          {(editing.steps || []).map((s, i) => (
+            <StepCard
+              key={i}
+              step={s}
+              waTemplates={waTemplates}
+              onChange={(patch) => {
+                const arr = [...(editing.steps || [])];
+                arr[i] = patch;
+                setEditing({ ...editing, steps: arr });
+              }}
+              onRemove={() => {
+                const arr = [...(editing.steps || [])];
+                arr.splice(i, 1);
+                setEditing({ ...editing, steps: arr });
+              }}
+            />
+          ))}
+        </div>
+      ) : (
+        <div style={{ color: C.muted, fontSize: 13 }}>
+          No steps yet. Add a message, a wait, or a reminder to get started.
+        </div>
+      )}
+    </div>
+  );
+}
+
+function BuilderSummary({ editing }) {
+  return (
+    <div style={{ ...shellCard, padding: 18 }}>
+      <SectionTitle
+        title="Flow Summary"
+        subtitle="This is how the automation will feel to the user."
+      />
+
+      <div style={{ color: C.text, fontSize: 15, lineHeight: 1.6 }}>
+        {flowSummary(editing)}
+      </div>
+
+      <div style={{ marginTop: 16 }}>
+        <FlowDiagram flow={editing} />
+      </div>
+    </div>
+  );
+}
+
+/* -------------------- MAIN -------------------- */
 export default function Automations({ user }) {
   const userEmail = (user?.email || "demo@retainai.ca").toLowerCase();
 
@@ -732,27 +1285,6 @@ export default function Automations({ user }) {
     const d = await api.listFlows(userEmail);
     const items = Array.isArray(d?.flows) ? d.flows : [];
     setFlows(items.map((f) => normalizeFlow(f, userEmail)));
-  }
-
-  function buildEmptyFlow() {
-    return normalizeFlow(
-      {
-        id: undefined,
-        owner: userEmail,
-        name: "Untitled Flow",
-        enabled: false,
-        trigger: { type: "" },
-        steps: [],
-        caps: { per_lead_per_day: 1, respect_quiet_hours: true },
-        auto_stop_on_reply: true,
-      },
-      userEmail
-    );
-  }
-
-  function ensureEditingFlow() {
-    if (editing) return;
-    setEditing(buildEmptyFlow());
   }
 
   useEffect(() => {
@@ -795,28 +1327,12 @@ export default function Automations({ user }) {
     };
   }, [userEmail]);
 
-  function applyTemplate(t) {
-    const f = JSON.parse(JSON.stringify(t));
-    delete f.id;
-    f.enabled = false;
-    f.owner = userEmail;
-
-    const strip = (html = "") =>
-      html
-        .replace(/<\/p>\s*<p>/g, "\n\n")
-        .replace(/<br\s*\/?>/g, "\n")
-        .replace(/<\/?[^>]+>/g, "")
-        .trim();
-
-    f.steps = (f.steps || []).map((s) =>
-      s.type === "send_email" && s.html && !s.body ? { ...s, body: strip(s.html) } : s
-    );
-
-    setEditing(normalizeFlow(f, userEmail));
+  const applyTemplate = (t) => {
+    setEditing(cloneTemplateToFlow(t, userEmail));
     setTab("builder");
-  }
+  };
 
-  async function saveFlow() {
+  const saveFlow = async () => {
     if (!editing) return;
 
     try {
@@ -844,9 +1360,9 @@ export default function Automations({ user }) {
     } finally {
       setSavingFlow(false);
     }
-  }
+  };
 
-  async function saveProf() {
+  const saveProf = async () => {
     setSavingProfile(true);
     try {
       await api.saveProfile(userEmail, profile);
@@ -855,462 +1371,290 @@ export default function Automations({ user }) {
     } finally {
       setSavingProfile(false);
     }
-  }
+  };
 
-  const buildDefaultStep = (k) => {
-    switch (k) {
-      case "ai_draft":
-        return { type: "ai_draft" };
-      case "send_whatsapp":
-        return { type: "send_whatsapp", text: "{{last_ai_text}}" };
-      case "send_email":
-        return {
-          type: "send_email",
-          subject: "Quick check-in from {{business_name}}",
-          body:
-            "Hi {{lead.first_name}},\n\nJust checking in. Book here: {{booking_link}}\n\nThanks,\n{{business_name}}",
-        };
-      case "wait":
-        return { type: "wait", hours: 24 };
-      case "if_no_reply":
-        return { type: "if_no_reply", within_days: 2, then: [] };
-      case "if_no_booking":
-        return { type: "if_no_booking", within_days: 2, then: [] };
-      case "push_owner":
-        return { type: "push_owner", title: "Give them a quick call", message: "Lead may need a call" };
-      case "add_tag":
-        return { type: "add_tag", tag: "Needs Attention" };
-      default:
-        return { type: k };
-    }
+  const stats = {
+    totalTemplates: templates.length,
+    totalFlows: flows.length,
+    activeFlows: flows.filter((f) => f.enabled).length,
+    draftFlows: flows.filter((f) => !f.enabled).length,
   };
 
   return (
     <div
-      className="w-full min-h-[100vh]"
       style={{
-        background: BG,
-        color: TEXT,
-        display: "grid",
-        gridTemplateRows: "auto auto 1fr",
+        width: "100%",
+        minHeight: "100vh",
+        background: C.bg,
+        color: C.text,
       }}
     >
-      <div className="px-5 py-4 border-b" style={{ borderColor: BORDER, background: PANEL }}>
-        <div className="flex items-center justify-between gap-4 flex-wrap">
+      {/* Header */}
+      <div
+        style={{
+          padding: "22px 22px 16px 22px",
+          borderBottom: `1px solid ${C.border}`,
+          background: C.panel,
+        }}
+      >
+        <div
+          style={{
+            display: "flex",
+            alignItems: "flex-start",
+            justifyContent: "space-between",
+            gap: 16,
+            flexWrap: "wrap",
+          }}
+        >
           <div>
-            <h2 className="text-2xl font-bold">Automations</h2>
-            <div className="text-sm" style={{ color: MUTED }}>
-              Build simple, calm follow-up flows that your team can actually manage.
+            <div style={{ fontSize: 30, fontWeight: 900, letterSpacing: -0.5 }}>Automations</div>
+            <div style={{ color: C.muted, marginTop: 6, fontSize: 14 }}>
+              Build simple follow-up flows that are easy to launch, easy to understand, and easy to manage.
             </div>
           </div>
 
-          <div className="flex gap-2 flex-wrap">
-            <Btn kind={tab === "templates" ? "solid" : "ghost"} onClick={() => setTab("templates")}>
-              Templates
-            </Btn>
-            <Btn kind={tab === "flows" ? "solid" : "ghost"} onClick={() => setTab("flows")}>
-              My Flows
-            </Btn>
-            <Btn
-              kind={tab === "builder" ? "solid" : "ghost"}
+          <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+            <Chip active={tab === "templates"} onClick={() => setTab("templates")}>Templates</Chip>
+            <Chip active={tab === "flows"} onClick={() => setTab("flows")}>My Flows</Chip>
+            <Chip
+              active={tab === "builder"}
               onClick={() => {
-                ensureEditingFlow();
+                if (!editing) setEditing(buildEmptyFlow(userEmail));
                 setTab("builder");
               }}
             >
               Builder
-            </Btn>
+            </Chip>
           </div>
         </div>
       </div>
 
-      <div className="px-5 py-4 border-b" style={{ borderColor: BORDER, background: "#1c1d1f" }}>
-        {error && (
+      <div style={{ padding: 22 }}>
+        {error ? (
           <div
-            className="mb-3 text-sm rounded-xl px-3 py-2"
-            style={{ background: DANGER_BG, color: DANGER_TXT, border: "1px solid #4a1515" }}
+            style={{
+              marginBottom: 16,
+              background: C.redBg,
+              color: C.redTxt,
+              border: "1px solid #4a1515",
+              borderRadius: 14,
+              padding: "12px 14px",
+              fontSize: 14,
+            }}
           >
             {error}
           </div>
-        )}
+        ) : null}
 
-        <div style={{ ...shellCard, padding: 16 }}>
-          <div className="flex items-center justify-between gap-3 flex-wrap mb-3">
-            <div>
-              <div className="text-base font-semibold">Automation Settings</div>
-              <div className="text-xs" style={{ color: MUTED }}>
-                These values get reused across your messages and flows.
-              </div>
-            </div>
-            <Btn onClick={saveProf} disabled={savingProfile}>
-              {savingProfile ? "Saving…" : "Save Profile"}
-            </Btn>
+        {/* Top stats + reusable profile */}
+        <div style={{ display: "grid", gridTemplateColumns: "1.3fr 1fr", gap: 16, marginBottom: 22 }}>
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(4, minmax(0,1fr))", gap: 12 }}>
+            <StatCard label="Templates" value={stats.totalTemplates} />
+            <StatCard label="Flows" value={stats.totalFlows} />
+            <StatCard label="Active" value={stats.activeFlows} accent />
+            <StatCard label="Drafts" value={stats.draftFlows} />
           </div>
 
-          <div className="grid lg:grid-cols-5 gap-3 items-end">
-            <div>
-              <div className="text-xs mb-1">Business</div>
-              <Input
-                value={profile.business_name}
-                onChange={(e) => setProfile({ ...profile, business_name: e.target.value })}
-                placeholder="RetainAI Clinic"
-              />
-            </div>
-            <div className="lg:col-span-2">
-              <div className="text-xs mb-1">Booking link</div>
-              <Input
-                value={profile.booking_link}
-                onChange={(e) => setProfile({ ...profile, booking_link: e.target.value })}
-                placeholder="https://calendly.com/you/30min"
-              />
-            </div>
-            <div>
-              <div className="text-xs mb-1">Quiet start (0–23)</div>
-              <Input
-                type="number"
-                value={profile.quiet_hours_start ?? ""}
-                onChange={(e) =>
-                  setProfile({ ...profile, quiet_hours_start: e.target.value === "" ? "" : +e.target.value })
-                }
-              />
-            </div>
-            <div>
-              <div className="text-xs mb-1">Quiet end (0–23)</div>
-              <Input
-                type="number"
-                value={profile.quiet_hours_end ?? ""}
-                onChange={(e) =>
-                  setProfile({ ...profile, quiet_hours_end: e.target.value === "" ? "" : +e.target.value })
-                }
-              />
-            </div>
-          </div>
+          <div style={{ ...shellCard, padding: 16 }}>
+            <SectionTitle
+              title="Automation Settings"
+              subtitle="These values can be reused across flows."
+              right={
+                <Btn onClick={saveProf} disabled={savingProfile}>
+                  {savingProfile ? "Saving..." : "Save"}
+                </Btn>
+              }
+            />
 
-          <div className="mt-3 text-xs flex items-center gap-2 flex-wrap" style={{ color: MUTED }}>
-            Tokens:
-            {TOKENS.map((tok) => (
-              <code key={tok} className="bg-[#242424] px-2 py-1 rounded text-xs">
-                {tok}
-              </code>
-            ))}
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1.2fr 1fr 1fr", gap: 10 }}>
+              <Field label="Business name">
+                <Input
+                  value={profile.business_name}
+                  onChange={(e) => setProfile({ ...profile, business_name: e.target.value })}
+                  placeholder="RetainAI"
+                />
+              </Field>
+
+              <Field label="Booking link">
+                <Input
+                  value={profile.booking_link}
+                  onChange={(e) => setProfile({ ...profile, booking_link: e.target.value })}
+                  placeholder="https://..."
+                />
+              </Field>
+
+              <Field label="Quiet hours start">
+                <Input
+                  value={profile.quiet_hours_start}
+                  onChange={(e) => setProfile({ ...profile, quiet_hours_start: e.target.value })}
+                  placeholder="21:00"
+                />
+              </Field>
+
+              <Field label="Quiet hours end">
+                <Input
+                  value={profile.quiet_hours_end}
+                  onChange={(e) => setProfile({ ...profile, quiet_hours_end: e.target.value })}
+                  placeholder="08:00"
+                />
+              </Field>
+            </div>
           </div>
         </div>
-      </div>
 
-      <div className="p-5 overflow-auto">
-        {tab === "templates" && (
-          <div className="grid md:grid-cols-3 gap-4">
-            {templates.map((t) => (
-              <div key={t.id} className="rounded-2xl p-4 flex flex-col" style={shellCard}>
-                <div className="text-lg font-semibold mb-1">{t.name}</div>
-                <div className="text-sm mb-3" style={{ color: MUTED }}>
-                  {PRETTY[t.trigger?.type]?.(t.trigger) || t.trigger?.type}
-                </div>
-                <FlowDiagram flow={t} />
-                <Btn onClick={() => applyTemplate(t)} className="mt-3">
-                  Use Template
-                </Btn>
+        {/* CONTENT */}
+        {loading ? (
+          <div style={{ ...shellCard, padding: 22, color: C.muted }}>Loading automations...</div>
+        ) : null}
+
+        {!loading && tab === "templates" && (
+          <div style={{ display: "grid", gap: 18 }}>
+            <SectionTitle
+              title="Start with a goal"
+              subtitle="Pick a ready-made automation and customize it in a minute."
+            />
+
+            {templates.length ? (
+              <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(320px, 1fr))", gap: 16 }}>
+                {templates.map((t, i) => (
+                  <TemplateCard key={t.id || i} template={t} onUse={() => applyTemplate(t)} />
+                ))}
               </div>
-            ))}
-            {!templates.length && <div className="text-sm" style={{ color: MUTED }}>No templates available.</div>}
-          </div>
-        )}
-
-        {tab === "flows" && (
-          <div className="grid md:grid-cols-2 gap-4">
-            {loading && <div className="text-sm" style={{ color: MUTED }}>Loading your flows…</div>}
-
-            {!loading &&
-              flows.map((f) => (
-                <div key={f.id} className="rounded-2xl p-4" style={shellCard}>
-                  <div className="flex items-center justify-between mb-3 gap-3">
-                    <div>
-                      <div className="text-lg font-semibold">{f.name}</div>
-                      <div className="text-sm" style={{ color: MUTED }}>
-                        {PRETTY[f.trigger?.type]?.(f.trigger) || f.trigger?.type}
-                      </div>
-                    </div>
-
-                    <Toggle
-                      checked={!!f.enabled}
-                      onChange={async (e) => {
-                        const enabled = e.target.checked;
-                        setFlows((prev) => prev.map((x) => (x.id === f.id ? { ...x, enabled } : x)));
-                        try {
-                          await api.enableFlow(userEmail, f.id, enabled);
-                          await refreshFlows();
-                        } catch (err) {
-                          setFlows((prev) => prev.map((x) => (x.id === f.id ? { ...x, enabled: !enabled } : x)));
-                          setError(String(err.message || err));
-                        }
-                      }}
-                    />
-                  </div>
-
-                  <FlowDiagram flow={f} />
-
-                  <div className="mt-4 flex gap-2">
-                    <Btn
-                      kind="ghost"
-                      onClick={() => {
-                        const strip = (html = "") =>
-                          html
-                            .replace(/<\/p>\s*<p>/g, "\n\n")
-                            .replace(/<br\s*\/?>/g, "\n")
-                            .replace(/<\/?[^>]+>/g, "")
-                            .trim();
-
-                        const hydrated = {
-                          ...f,
-                          steps: (f.steps || []).map((s) =>
-                            s.type === "send_email" && s.html && !s.body
-                              ? { ...s, body: strip(s.html || "") }
-                              : s
-                          ),
-                        };
-
-                        setEditing(normalizeFlow(hydrated, userEmail));
-                        setTab("builder");
-                      }}
-                    >
-                      Edit
-                    </Btn>
-
-                    <Btn
-                      kind="danger"
-                      onClick={async () => {
-                        if (!window.confirm("Delete this flow?")) return;
-                        const prev = [...flows];
-                        setFlows((curr) => curr.filter((x) => x.id !== f.id));
-                        try {
-                          await api.deleteFlow(userEmail, f.id);
-                          await refreshFlows();
-                        } catch (err) {
-                          setFlows(prev);
-                          setError(String(err.message || err));
-                        }
-                      }}
-                    >
-                      Delete
-                    </Btn>
-                  </div>
-                </div>
-              ))}
-
-            {!loading && !flows.length && (
-              <div className="text-sm" style={{ color: MUTED }}>
-                No flows yet — start from a template or open Builder.
+            ) : (
+              <div style={{ ...shellCard, padding: 18, color: C.muted }}>
+                No automation templates were returned by the API right now.
               </div>
             )}
           </div>
         )}
 
-        {tab === "builder" && (
-          <div className="grid xl:grid-cols-3 gap-6">
-            <div className="rounded-2xl p-4" style={shellCard}>
-              <div className="flex items-center justify-between gap-3 mb-3">
-                <div>
-                  <div className="text-lg font-semibold">Builder</div>
-                  <div className="text-xs" style={{ color: MUTED }}>
-                    Start with a trigger, then add only the steps you need.
-                  </div>
-                </div>
+        {!loading && tab === "flows" && (
+          <div style={{ display: "grid", gap: 18 }}>
+            <SectionTitle
+              title="My Flows"
+              subtitle="Your live and draft automations in one place."
+              right={
                 <Btn
-                  kind="ghost"
-                  onClick={() => setEditing(buildEmptyFlow())}
+                  onClick={() => {
+                    setEditing(buildEmptyFlow(userEmail));
+                    setTab("builder");
+                  }}
                 >
                   New Flow
                 </Btn>
+              }
+            />
+
+            {flows.length ? (
+              <div style={{ display: "grid", gap: 16 }}>
+                {flows.map((f) => (
+                  <FlowCard
+                    key={f.id}
+                    flow={f}
+                    onEdit={() => {
+                      const strip = (html = "") =>
+                        html
+                          .replace(/<\/p>\s*<p>/g, "\n\n")
+                          .replace(/<br\s*\/?>/g, "\n")
+                          .replace(/<\/?[^>]+>/g, "")
+                          .trim();
+
+                      const hydrated = {
+                        ...f,
+                        steps: (f.steps || []).map((s) =>
+                          s.type === "send_email" && s.html && !s.body
+                            ? { ...s, body: strip(s.html || "") }
+                            : s
+                        ),
+                      };
+
+                      setEditing(normalizeFlow(hydrated, userEmail));
+                      setTab("builder");
+                    }}
+                    onDelete={async () => {
+                      if (!window.confirm("Delete this flow?")) return;
+                      const prev = [...flows];
+                      setFlows((curr) => curr.filter((x) => x.id !== f.id));
+                      try {
+                        await api.deleteFlow(userEmail, f.id);
+                        await refreshFlows();
+                      } catch (err) {
+                        setFlows(prev);
+                        setError(String(err.message || err));
+                      }
+                    }}
+                    onToggle={async () => {
+                      const enabled = !f.enabled;
+                      const prev = [...flows];
+                      setFlows((curr) =>
+                        curr.map((x) => (x.id === f.id ? { ...x, enabled } : x))
+                      );
+                      try {
+                        await api.updateFlow(userEmail, f.id, { ...f, enabled });
+                        await refreshFlows();
+                      } catch (err) {
+                        setFlows(prev);
+                        setError(String(err.message || err));
+                      }
+                    }}
+                  />
+                ))}
               </div>
+            ) : (
+              <div style={{ ...shellCard, padding: 18, color: C.muted }}>
+                No flows yet — start from a template or create a new one.
+              </div>
+            )}
+          </div>
+        )}
 
-              {!editing ? (
-                <div className="text-sm" style={{ color: MUTED }}>
-                  Open a flow or click New Flow to begin.
-                </div>
-              ) : (
-                <>
-                  <div className="mb-3">
-                    <div className="text-sm mb-1">Name</div>
-                    <Input value={editing.name || ""} onChange={(e) => setEditing({ ...editing, name: e.target.value })} />
-                  </div>
-
-                  <div className="text-sm mb-1">Trigger</div>
-                  <select
-                    className="w-full bg-[#232323] text-white border border-[#2a2a2a] rounded-xl p-2 mb-2"
-                    value={editing.trigger?.type || ""}
-                    onChange={(e) =>
-                      setEditing({
-                        ...editing,
-                        trigger: { ...(editing.trigger || {}), type: e.target.value },
-                      })
-                    }
-                  >
-                    <option value="">Select…</option>
-                    <option value="no_reply">No reply</option>
-                    <option value="new_lead">New lead</option>
-                    <option value="appointment_no_show">Appointment no-show</option>
-                  </select>
-
-                  {editing.trigger?.type === "no_reply" && (
-                    <div className="flex items-center gap-2 mb-2">
-                      <span className="text-sm">Days:</span>
-                      <Input
-                        type="number"
-                        value={editing.trigger?.days || 3}
-                        onChange={(e) =>
-                          setEditing({
-                            ...editing,
-                            trigger: { ...(editing.trigger || {}), days: +e.target.value },
-                          })
-                        }
-                        style={{ maxWidth: 100 }}
-                      />
+        {!loading && tab === "builder" && (
+          <div style={{ display: "grid", gridTemplateColumns: "1.3fr 0.9fr", gap: 18 }}>
+            <div style={{ display: "grid", gap: 16 }}>
+              <div style={{ ...shellCard, padding: 18 }}>
+                <SectionTitle
+                  title="Flow Setup"
+                  subtitle="Name your automation and turn it into something your team can understand at a glance."
+                  right={
+                    <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+                      <Btn kind="ghost" onClick={() => setEditing(buildEmptyFlow(userEmail))}>
+                        New
+                      </Btn>
+                      <Btn kind="outline" onClick={() => { setEditing(null); setTab("flows"); }}>
+                        Cancel
+                      </Btn>
+                      <Btn onClick={saveFlow} disabled={!editing || savingFlow}>
+                        {savingFlow ? "Saving..." : "Save Flow"}
+                      </Btn>
                     </div>
-                  )}
+                  }
+                />
 
-                  {editing.trigger?.type === "new_lead" && (
-                    <div className="flex items-center gap-2 mb-2">
-                      <span className="text-sm">Within hours:</span>
+                {!editing ? (
+                  <div style={{ color: C.muted, fontSize: 14 }}>
+                    Open a flow or create a new one to begin.
+                  </div>
+                ) : (
+                  <div style={{ display: "grid", gap: 14 }}>
+                    <Field label="Flow name">
                       <Input
-                        type="number"
-                        value={editing.trigger?.within_hours || 24}
-                        onChange={(e) =>
-                          setEditing({
-                            ...editing,
-                            trigger: { ...(editing.trigger || {}), within_hours: +e.target.value },
-                          })
-                        }
-                        style={{ maxWidth: 120 }}
+                        value={editing.name || ""}
+                        onChange={(e) => setEditing({ ...editing, name: e.target.value })}
+                        placeholder="Re-engage cold leads"
                       />
-                    </div>
-                  )}
+                    </Field>
 
-                  <div className="mt-4 text-sm font-semibold">Guardrails</div>
-                  <div className="flex items-center gap-2 mt-2">
-                    <input
-                      type="checkbox"
-                      checked={editing.caps?.respect_quiet_hours ?? true}
-                      onChange={(e) =>
-                        setEditing({
-                          ...editing,
-                          caps: { ...(editing.caps || {}), respect_quiet_hours: e.target.checked },
-                        })
-                      }
-                    />
-                    <span className="text-sm">Respect quiet hours</span>
+                    <TriggerChooser editing={editing} setEditing={setEditing} />
+                    <GuardrailsCard editing={editing} setEditing={setEditing} />
+                    <StepsBuilder editing={editing} setEditing={setEditing} waTemplates={waTemplates} />
                   </div>
-
-                  <div className="flex items-center gap-2 mt-2">
-                    <span className="text-sm">Max sends / day / lead:</span>
-                    <Input
-                      type="number"
-                      value={editing.caps?.per_lead_per_day ?? 1}
-                      onChange={(e) =>
-                        setEditing({
-                          ...editing,
-                          caps: { ...(editing.caps || {}), per_lead_per_day: +e.target.value },
-                        })
-                      }
-                      style={{ maxWidth: 120 }}
-                    />
-                  </div>
-
-                  <div className="mt-4 flex flex-wrap gap-2">
-                    <Btn onClick={saveFlow} disabled={savingFlow}>
-                      {savingFlow ? "Saving…" : "Save Flow"}
-                    </Btn>
-                    <Btn kind="ghost" onClick={() => setTab("flows")}>
-                      Back to Flows
-                    </Btn>
-                  </div>
-                </>
-              )}
+                )}
+              </div>
             </div>
 
-            <div className="rounded-2xl p-4" style={shellCard}>
-              <div className="flex items-center justify-between mb-3 gap-3 flex-wrap">
-                <div>
-                  <div className="text-lg font-semibold">Steps</div>
-                  <div className="text-xs" style={{ color: MUTED }}>
-                    Add actions one at a time so the flow stays easy to follow.
-                  </div>
-                </div>
-
-                <div className="flex flex-wrap gap-2">
-                  {[
-                    "ai_draft",
-                    "send_whatsapp",
-                    "send_email",
-                    "wait",
-                    "if_no_reply",
-                    "if_no_booking",
-                    "push_owner",
-                    "add_tag",
-                  ].map((k) => (
-                    <Btn
-                      key={k}
-                      kind="ghost"
-                      onClick={() => {
-                        const flow = editing || buildEmptyFlow();
-                        const def = buildDefaultStep(k);
-                        setEditing({ ...flow, steps: [...(flow.steps || []), def] });
-                      }}
-                    >
-                      + {k.replaceAll("_", " ")}
-                    </Btn>
-                  ))}
-                </div>
-              </div>
-
-              {editing ? (
-                <div className="flex flex-col gap-3">
-                  {(editing.steps || []).map((s, i) => (
-                    <StepCard
-                      key={i}
-                      step={s}
-                      onChange={(patch) => {
-                        const arr = [...(editing.steps || [])];
-                        arr[i] = patch;
-                        setEditing({ ...editing, steps: arr });
-                      }}
-                      onRemove={() => {
-                        const arr = [...(editing.steps || [])];
-                        arr.splice(i, 1);
-                        setEditing({ ...editing, steps: arr });
-                      }}
-                      waTemplates={waTemplates}
-                    />
-                  ))}
-                  {!(editing.steps || []).length && (
-                    <div className="text-sm" style={{ color: MUTED }}>
-                      No steps yet — add one from the toolbar above.
-                    </div>
-                  )}
-                </div>
-              ) : (
-                <div className="text-sm" style={{ color: MUTED }}>
-                  Open or create a flow to edit steps.
-                </div>
-              )}
-            </div>
-
-            <div className="rounded-2xl p-4" style={shellCard}>
-              <div className="text-lg font-semibold mb-3">Live Flow View</div>
-              {editing ? (
-                <FlowDiagram flow={editing} />
-              ) : (
-                <div className="text-sm" style={{ color: MUTED }}>
-                  No flow selected.
-                </div>
-              )}
-
-              <div className="h-4" />
-              {editing && (
-                <>
-                  <div className="text-lg font-semibold mb-2">Preview</div>
-                  <Preview userEmail={userEmail} flow={editing} />
-                </>
-              )}
+            <div style={{ display: "grid", gap: 16, alignSelf: "start" }}>
+              <BuilderSummary editing={editing || buildEmptyFlow(userEmail)} />
+              {editing ? <Preview userEmail={userEmail} flow={editing} /> : null}
             </div>
           </div>
         )}
