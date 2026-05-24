@@ -459,6 +459,88 @@ function cloneTemplateToFlow(template, userEmail) {
   return normalizeFlow(f, userEmail);
 }
 
+function ArrowRight() {
+  return (
+    <svg width="36" height="16" viewBox="0 0 36 16" fill="none" xmlns="http://www.w3.org/2000/svg">
+      <path d="M0 8H30" stroke="#3a3a3a" strokeWidth="2" />
+      <path d="M25 3L30 8L25 13" stroke="#3a3a3a" strokeWidth="2" />
+    </svg>
+  );
+}
+
+function FlowNode({ title, subtitle }) {
+  return (
+    <div
+      style={{
+        background: C.soft,
+        border: `1px solid ${C.border}`,
+        borderRadius: 14,
+        padding: 12,
+        minWidth: 180,
+        maxWidth: 240,
+        boxShadow: "0 2px 18px rgba(0,0,0,0.18)",
+        flex: "0 0 auto",
+      }}
+    >
+      <div style={{ color: C.muted, fontSize: 12 }}>{subtitle}</div>
+      <div
+        style={{
+          color: "#fff",
+          fontWeight: 900,
+          marginTop: 4,
+          lineHeight: 1.3,
+          wordBreak: "break-word",
+        }}
+      >
+        {title}
+      </div>
+    </div>
+  );
+}
+
+function FlowDiagram({ flow }) {
+  const trig = flow?.trigger || {};
+  const title =
+    trig.type === "no_reply"
+      ? `No reply (${trig.days || 3}d)`
+      : trig.type === "new_lead"
+      ? `New lead (≤ ${trig.within_hours || 24}h)`
+      : trig.type === "appointment_no_show"
+      ? "Appointment no-show"
+      : "Trigger";
+
+  const steps = flow?.steps || [];
+
+  return (
+    <div
+      style={{
+        overflowX: "auto",
+        overflowY: "hidden",
+        maxWidth: "100%",
+      }}
+    >
+      <div
+        style={{
+          display: "flex",
+          alignItems: "center",
+          gap: 12,
+          width: "max-content",
+          minWidth: "100%",
+          paddingBottom: 4,
+        }}
+      >
+        <FlowNode subtitle="Trigger" title={title} />
+        {steps.map((s, i) => (
+          <React.Fragment key={i}>
+            <ArrowRight />
+            <FlowNode subtitle="Step" title={humanStepLabel(s)} />
+          </React.Fragment>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 /* -------------------- FIELD -------------------- */
 function Field({ label, children }) {
   return (
@@ -546,8 +628,7 @@ function StepCard({ step, onChange, onRemove, waTemplates }) {
 
       {step.type === "ai_draft" && (
         <div style={{ color: C.muted, fontSize: 13 }}>
-          RetainAI will draft the message first so the next message step can use{" "}
-          <b>{"{{last_ai_text}}"}</b>.
+          RetainAI will draft the message first so the next message step can use <b>{"{{last_ai_text}}"}</b>.
         </div>
       )}
 
@@ -620,7 +701,13 @@ function StepCard({ step, onChange, onRemove, waTemplates }) {
 
             {waTpl.name || waTpl.language || waTpl.params ? (
               <div style={{ display: "grid", gap: 10 }}>
-                <div style={{ display: "grid", gridTemplateColumns: "1.4fr 1fr 0.7fr", gap: 10 }}>
+                <div
+                  style={{
+                    display: "grid",
+                    gridTemplateColumns: "minmax(0,1.4fr) minmax(0,1fr) minmax(120px,0.7fr)",
+                    gap: 10,
+                  }}
+                >
                   <Field label="Template">
                     <Select
                       value={waTpl.name || ""}
@@ -779,194 +866,6 @@ function StepCard({ step, onChange, onRemove, waTemplates }) {
   );
 }
 
-/* -------------------- FLOW VISUALS -------------------- */
-function FlowNode({ title, subtitle }) {
-  return (
-    <div
-      style={{
-        background: C.soft,
-        border: `1px solid ${C.border}`,
-        borderRadius: 14,
-        padding: 12,
-        minWidth: 220,
-        boxShadow: "0 2px 18px rgba(0,0,0,0.18)",
-      }}
-    >
-      <div style={{ color: C.muted, fontSize: 12 }}>{subtitle}</div>
-      <div style={{ color: "#fff", fontWeight: 900, marginTop: 4 }}>{title}</div>
-    </div>
-  );
-}
-
-function ArrowRight() {
-  return (
-    <svg width="36" height="16" viewBox="0 0 36 16" fill="none" xmlns="http://www.w3.org/2000/svg">
-      <path d="M0 8H30" stroke="#3a3a3a" strokeWidth="2" />
-      <path d="M25 3L30 8L25 13" stroke="#3a3a3a" strokeWidth="2" />
-    </svg>
-  );
-}
-
-function FlowDiagram({ flow }) {
-  const trig = flow?.trigger || {};
-  const title =
-    trig.type === "no_reply"
-      ? `No reply (${trig.days || 3}d)`
-      : trig.type === "new_lead"
-      ? `New lead (≤ ${trig.within_hours || 24}h)`
-      : trig.type === "appointment_no_show"
-      ? "Appointment no-show"
-      : "Trigger";
-
-  const steps = flow?.steps || [];
-
-  return (
-    <div style={{ overflowX: "auto" }}>
-      <div style={{ display: "flex", alignItems: "center", gap: 12, minWidth: 720 }}>
-        <FlowNode subtitle="Trigger" title={title} />
-        {steps.map((s, i) => (
-          <React.Fragment key={i}>
-            <ArrowRight />
-            <FlowNode subtitle="Step" title={humanStepLabel(s)} />
-          </React.Fragment>
-        ))}
-      </div>
-    </div>
-  );
-}
-
-/* -------------------- TEST / PREVIEW -------------------- */
-function Preview({ userEmail, flow }) {
-  const [leadEmail, setLeadEmail] = useState("");
-  const [list, setList] = useState(null);
-  const [did, setDid] = useState(null);
-  const [loading, setLoading] = useState(false);
-  const [err, setErr] = useState("");
-
-  const run = async () => {
-    setLoading(true);
-    setErr("");
-    setList(null);
-    setDid(null);
-    try {
-      const data = await api.dryRun(userEmail, flow, { lead_email: leadEmail });
-      setList(Array.isArray(data?.would) ? data.would : []);
-    } catch (e) {
-      setErr(String(e.message || e));
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  const runNow = async () => {
-    setLoading(true);
-    setErr("");
-    setDid(null);
-    try {
-      const data = await api.executeNow(userEmail, flow, {
-        lead_email: leadEmail,
-        ignore_waits: true,
-        ignore_quiet_hours: true,
-        bypass_rate_limits: true,
-      });
-      setDid(Array.isArray(data?.did) ? data.did : []);
-    } catch (e) {
-      setErr(String(e.message || e));
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  const renderInfoBits = (a) => {
-    const bits = [];
-    if (a.info?.subject) bits.push(a.info.subject);
-    if (a.info?.text) bits.push(a.info.text);
-    if (a.info?.template?.name) bits.push(`[tpl:${a.info.template.name}${a.info.template.language ? "/" + a.info.template.language : ""}]`);
-    if (a.info?.used_lang) bits.push(`lang=${a.info.used_lang}`);
-    if (a.info?.mode) bits.push(`mode=${a.info.mode}`);
-    return bits.length ? <span style={{ opacity: 0.75 }}> — {bits.join(" · ")}</span> : null;
-  };
-
-  return (
-    <div style={{ ...softCard, padding: 16 }}>
-      <SectionTitle
-        title="Test this flow"
-        subtitle="See what would happen for a real lead before you turn it on."
-      />
-
-      <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
-        <Input
-          placeholder="lead@example.com"
-          value={leadEmail}
-          onChange={(e) => setLeadEmail(e.target.value)}
-          style={{ flex: 1, minWidth: 240 }}
-        />
-        <Btn kind="ghost" onClick={run} disabled={!leadEmail || loading}>
-          {loading ? "Running..." : "Preview"}
-        </Btn>
-        <Btn onClick={runNow} disabled={!leadEmail || loading}>
-          {loading ? "Sending..." : "Run Now"}
-        </Btn>
-      </div>
-
-      {err ? (
-        <div
-          style={{
-            marginTop: 12,
-            background: C.redBg,
-            color: C.redTxt,
-            border: "1px solid #4a1515",
-            borderRadius: 12,
-            padding: "10px 12px",
-            fontSize: 13,
-          }}
-        >
-          {err}
-        </div>
-      ) : null}
-
-      <div style={{ marginTop: 14, display: "grid", gap: 14 }}>
-        <div style={{ ...softCard, padding: 14 }}>
-          <div style={{ color: C.text, fontWeight: 900, marginBottom: 8 }}>Would run now</div>
-          {list === null ? (
-            <div style={{ color: C.muted, fontSize: 13 }}>No preview run yet.</div>
-          ) : !list.length ? (
-            <div style={{ color: C.muted, fontSize: 13 }}>No actions would run.</div>
-          ) : (
-            <ul style={{ margin: 0, paddingLeft: 18 }}>
-              {list.map((a, i) => (
-                <li key={i} style={{ marginBottom: 6 }}>
-                  {a.type}
-                  {renderInfoBits(a)}
-                </li>
-              ))}
-            </ul>
-          )}
-        </div>
-
-        <div style={{ ...softCard, padding: 14 }}>
-          <div style={{ color: C.text, fontWeight: 900, marginBottom: 8 }}>Executed actions</div>
-          {!Array.isArray(did) ? (
-            <div style={{ color: C.muted, fontSize: 13 }}>Nothing executed yet.</div>
-          ) : !did.length ? (
-            <div style={{ color: C.muted, fontSize: 13 }}>Nothing executed.</div>
-          ) : (
-            <ul style={{ margin: 0, paddingLeft: 18 }}>
-              {did.map((a, i) => (
-                <li key={i} style={{ marginBottom: 6 }}>
-                  {a.type} — {a.status}
-                  {renderInfoBits(a)}
-                </li>
-              ))}
-            </ul>
-          )}
-        </div>
-      </div>
-    </div>
-  );
-}
-
-/* -------------------- TEMPLATE CARDS -------------------- */
 function TemplateCard({ template, onUse }) {
   const previewTrigger = PRETTY_TRIGGER[template?.trigger?.type]?.(template.trigger || {}) || "Ready-to-use automation";
   const stepCount = Array.isArray(template?.steps) ? template.steps.length : 0;
@@ -1006,7 +905,6 @@ function TemplateCard({ template, onUse }) {
   );
 }
 
-/* -------------------- FLOWS LIST -------------------- */
 function FlowCard({ flow, onEdit, onDelete, onToggle }) {
   return (
     <div style={{ ...shellCard, padding: 18 }}>
@@ -1053,7 +951,6 @@ function FlowCard({ flow, onEdit, onDelete, onToggle }) {
   );
 }
 
-/* -------------------- BUILDER -------------------- */
 function TriggerChooser({ editing, setEditing }) {
   const trig = editing?.trigger || { type: "" };
 
@@ -1251,6 +1148,138 @@ function BuilderSummary({ editing }) {
   );
 }
 
+function Preview({ userEmail, flow }) {
+  const [leadEmail, setLeadEmail] = useState("");
+  const [list, setList] = useState(null);
+  const [did, setDid] = useState(null);
+  const [loading, setLoading] = useState(false);
+  const [err, setErr] = useState("");
+
+  const run = async () => {
+    setLoading(true);
+    setErr("");
+    setList(null);
+    setDid(null);
+    try {
+      const data = await api.dryRun(userEmail, flow, { lead_email: leadEmail });
+      setList(Array.isArray(data?.would) ? data.would : []);
+    } catch (e) {
+      setErr(String(e.message || e));
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const runNow = async () => {
+    setLoading(true);
+    setErr("");
+    setDid(null);
+    try {
+      const data = await api.executeNow(userEmail, flow, {
+        lead_email: leadEmail,
+        ignore_waits: true,
+        ignore_quiet_hours: true,
+        bypass_rate_limits: true,
+      });
+      setDid(Array.isArray(data?.did) ? data.did : []);
+    } catch (e) {
+      setErr(String(e.message || e));
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const renderInfoBits = (a) => {
+    const bits = [];
+    if (a.info?.subject) bits.push(a.info.subject);
+    if (a.info?.text) bits.push(a.info.text);
+    if (a.info?.template?.name) bits.push(`[tpl:${a.info.template.name}${a.info.template.language ? "/" + a.info.template.language : ""}]`);
+    if (a.info?.used_lang) bits.push(`lang=${a.info.used_lang}`);
+    if (a.info?.mode) bits.push(`mode=${a.info.mode}`);
+    return bits.length ? <span style={{ opacity: 0.75 }}> — {bits.join(" · ")}</span> : null;
+  };
+
+  return (
+    <div style={{ ...softCard, padding: 16 }}>
+      <SectionTitle
+        title="Test this flow"
+        subtitle="Preview first, or run it live to actually send emails, WhatsApp, tags, and owner actions."
+      />
+
+      <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
+        <Input
+          placeholder="lead@example.com"
+          value={leadEmail}
+          onChange={(e) => setLeadEmail(e.target.value)}
+          style={{ flex: 1, minWidth: 240 }}
+        />
+        <Btn kind="ghost" onClick={run} disabled={!leadEmail || loading}>
+          {loading ? "Running..." : "Preview"}
+        </Btn>
+        <Btn onClick={runNow} disabled={!leadEmail || loading}>
+          {loading ? "Executing..." : "Run Live"}
+        </Btn>
+      </div>
+
+      {err ? (
+        <div
+          style={{
+            marginTop: 12,
+            background: C.redBg,
+            color: C.redTxt,
+            border: "1px solid #4a1515",
+            borderRadius: 12,
+            padding: "10px 12px",
+            fontSize: 13,
+          }}
+        >
+          {err}
+        </div>
+      ) : null}
+
+      <div style={{ marginTop: 14, display: "grid", gap: 14 }}>
+        <div style={{ ...softCard, padding: 14 }}>
+          <div style={{ color: C.text, fontWeight: 900, marginBottom: 8 }}>Would run now</div>
+          {list === null ? (
+            <div style={{ color: C.muted, fontSize: 13 }}>No preview run yet.</div>
+          ) : !list.length ? (
+            <div style={{ color: C.muted, fontSize: 13 }}>No actions would run.</div>
+          ) : (
+            <ul style={{ margin: 0, paddingLeft: 18 }}>
+              {list.map((a, i) => (
+                <li key={i} style={{ marginBottom: 6 }}>
+                  {a.type}
+                  {renderInfoBits(a)}
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
+
+        <div style={{ ...softCard, padding: 14 }}>
+          <div style={{ color: C.text, fontWeight: 900, marginBottom: 8 }}>Executed actions</div>
+          {!Array.isArray(did) ? (
+            <div style={{ color: C.muted, fontSize: 13 }}>
+              Nothing executed yet. Use <b>Run Live</b> to actually send the email / WhatsApp and perform the flow.
+            </div>
+          ) : !did.length ? (
+            <div style={{ color: C.muted, fontSize: 13 }}>Nothing executed.</div>
+          ) : (
+            <ul style={{ margin: 0, paddingLeft: 18 }}>
+              {did.map((a, i) => (
+                <li key={i} style={{ marginBottom: 6 }}>
+                  {a.type} — {a.status}
+                  {renderInfoBits(a)}
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 /* -------------------- MAIN -------------------- */
 export default function Automations({ user }) {
   const userEmail = (user?.email || "demo@retainai.ca").toLowerCase();
@@ -1440,7 +1469,15 @@ export default function Automations({ user }) {
           </div>
         ) : null}
 
-        <div style={{ display: "grid", gridTemplateColumns: "1.3fr 1fr", gap: 16, marginBottom: 22 }}>
+        <div
+          style={{
+            display: "grid",
+            gridTemplateColumns: "minmax(0,1.3fr) minmax(340px,1fr)",
+            gap: 16,
+            marginBottom: 22,
+            alignItems: "stretch",
+          }}
+        >
           <div style={{ display: "grid", gridTemplateColumns: "repeat(4, minmax(0,1fr))", gap: 12 }}>
             <StatCard label="Templates" value={stats.totalTemplates} />
             <StatCard label="Flows" value={stats.totalFlows} />
@@ -1459,7 +1496,13 @@ export default function Automations({ user }) {
               }
             />
 
-            <div style={{ display: "grid", gridTemplateColumns: "1fr 1.2fr 1fr 1fr", gap: 10 }}>
+            <div
+              style={{
+                display: "grid",
+                gridTemplateColumns: "repeat(4, minmax(0,1fr))",
+                gap: 10,
+              }}
+            >
               <Field label="Business name">
                 <Input
                   value={profile.business_name}
@@ -1583,8 +1626,15 @@ export default function Automations({ user }) {
         )}
 
         {!loading && tab === "builder" && (
-          <div style={{ display: "grid", gridTemplateColumns: "1.3fr 0.9fr", gap: 18 }}>
-            <div style={{ display: "grid", gap: 16 }}>
+          <div
+            style={{
+              display: "grid",
+              gridTemplateColumns: "minmax(420px, 560px) minmax(0, 1fr)",
+              gap: 18,
+              alignItems: "start",
+            }}
+          >
+            <div style={{ display: "grid", gap: 16, alignSelf: "start" }}>
               <div style={{ ...shellCard, padding: 18 }}>
                 <SectionTitle
                   title="Flow Setup"
@@ -1632,7 +1682,14 @@ export default function Automations({ user }) {
               </div>
             </div>
 
-            <div style={{ display: "grid", gap: 16, alignSelf: "start" }}>
+            <div
+              style={{
+                display: "grid",
+                gap: 16,
+                alignSelf: "start",
+                minWidth: 0,
+              }}
+            >
               <BuilderSummary editing={editing || buildEmptyFlow(userEmail)} />
               {editing ? <Preview userEmail={userEmail} flow={editing} /> : null}
             </div>
