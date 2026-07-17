@@ -10,6 +10,13 @@ import {
   FaUsers,
   FaSearch,
   FaTrash,
+  FaUserPlus,
+  FaSyncAlt,
+  FaCopy,
+  FaTimes,
+  FaClock,
+  FaCrown,
+  FaCheckCircle,
 } from "react-icons/fa";
 import { SiInstagram } from "react-icons/si";
 import "./settings.css";
@@ -611,6 +618,8 @@ export default function Settings({
             ownerEmail={profile.orgOwnerEmail || profile.email}
             userEmail={profile.email}
             maxWidth={MAX_W}
+            canManageTeam={profile.canInviteTeam}
+            currentRole={profile.role}
           />
         )}
 
@@ -688,300 +697,579 @@ export default function Settings({
    Team tab
 ------------------------------------------------------------ */
 
-function TeamTab({ ownerEmail, userEmail, maxWidth }) {
+function TeamTab({ ownerEmail, userEmail, maxWidth, canManageTeam, currentRole }) {
   const [members, setMembers] = useState([]);
+  const [invites, setInvites] = useState([]);
   const [search, setSearch] = useState("");
   const [loading, setLoading] = useState(true);
-  const [busyEmail, setBusyEmail] = useState("");
+  const [busyKey, setBusyKey] = useState("");
   const [error, setError] = useState("");
+  const [notice, setNotice] = useState("");
+  const [serverCanManage, setServerCanManage] = useState(Boolean(canManageTeam));
 
-  const roles = ["owner", "manager", "member"];
+  const [inviteOpen, setInviteOpen] = useState(false);
+  const [inviteEmail, setInviteEmail] = useState("");
+  const [inviteRole, setInviteRole] = useState("member");
+  const [inviteResult, setInviteResult] = useState(null);
 
-  const loadMembers = useCallback(async () => {
-    if (!ownerEmail) return;
+  const canManage = Boolean(serverCanManage || canManageTeam || currentRole === "owner");
+
+  const teamRequest = useCallback(
+    async (path, opts = {}) =>
+      fetchJson(apiUrl(path), {
+        ...opts,
+        headers: {
+          ...(opts.body ? { "Content-Type": "application/json" } : {}),
+          Accept: "application/json",
+          "X-User-Email": userEmail || "",
+          ...(opts.headers || {}),
+        },
+      }),
+    [userEmail]
+  );
+
+  const friendlyError = useCallback((err) => {
+    let code = "";
+    try {
+      code = JSON.parse(err?.raw || "{}")?.error || "";
+    } catch {}
+
+    const messages = {
+      auth_required: "Your session could not be verified. Log out and back in.",
+      forbidden: "Only the workspace owner can manage team members.",
+      already_member: "That person is already on this team.",
+      email_in_use: "That email already belongs to another RetainAI workspace.",
+      valid_email_required: "Enter a valid email address.",
+      invalid_role: "Choose Manager or Member.",
+      member_not_found: "That team member could not be found.",
+      owner_role_locked: "The owner role cannot be changed.",
+      cannot_remove_owner: "The workspace owner cannot be removed.",
+      invite_not_found: "That invitation is no longer available.",
+      invite_inactive: "That invitation is no longer active.",
+    };
+
+    return messages[code] || "Something went wrong. Please try again.";
+  }, []);
+
+  const loadTeam = useCallback(async () => {
+    if (!userEmail) return;
     setLoading(true);
     setError("");
 
-    const url = apiUrl(
-      `team/members?ownerEmail=${encodeURIComponent(ownerEmail)}`
-    );
-
     try {
-      const res = await fetch(url, {
-        credentials: "include",
-        headers: {
-          Accept: "application/json",
-          "X-User-Email": userEmail || "",
-          "X-Owner-Email": ownerEmail || "",
-        },
-      });
+      const memberData = await teamRequest("team/members");
+      const nextMembers = Array.isArray(memberData?.members)
+        ? memberData.members
+        : [];
+      const allowed = Boolean(memberData?.can_manage);
 
-      const ct = (res.headers.get("content-type") || "").toLowerCase();
-      const raw = await res.text();
+      setMembers(nextMembers);
+      setServerCanManage(allowed);
 
-      if (!res.ok) {
-        throw new Error(`HTTP ${res.status} @ ${url}\n${raw.slice(0, 300)}`);
+      if (allowed) {
+        const inviteData = await teamRequest("team/invites");
+        setInvites(Array.isArray(inviteData?.invites) ? inviteData.invites : []);
+      } else {
+        setInvites([]);
       }
-      if (!ct.includes("application/json")) {
-        throw new Error(
-          `Expected JSON @ ${url} but got ${ct || "unknown"}\n${raw.slice(
-            0,
-            200
-          )}`
-        );
-      }
-
-      const data = JSON.parse(raw);
-      if (Array.isArray(data?.members)) setMembers(data.members);
-      else if (Array.isArray(data)) setMembers(data);
-      else setMembers([]);
-    } catch (e) {
-      setError(String(e).slice(0, 900));
+    } catch (err) {
       setMembers([]);
+      setInvites([]);
+      setError(friendlyError(err));
     } finally {
       setLoading(false);
     }
-  }, [ownerEmail, userEmail]);
+  }, [friendlyError, teamRequest, userEmail]);
 
   useEffect(() => {
-    loadMembers();
-  }, [loadMembers]);
+    loadTeam();
+  }, [loadTeam]);
 
   const filtered = useMemo(() => {
     const q = search.trim().toLowerCase();
     if (!q) return members;
-    return members.filter(
-      (m) =>
-        (m.name || "").toLowerCase().includes(q) ||
-        (m.email || "").toLowerCase().includes(q) ||
-        (m.role || "").toLowerCase().includes(q)
+    return members.filter((member) =>
+      [member.name, member.email, member.role, member.status]
+        .filter(Boolean)
+        .some((value) => String(value).toLowerCase().includes(q))
     );
   }, [members, search]);
 
-  const changeRole = async (email, role) => {
-    setBusyEmail(email);
-    setMembers((ms) => ms.map((m) => (m.email === email ? { ...m, role } : m)));
+  const activeCount = members.filter(
+    (member) => String(member.status || "active").toLowerCase() === "active"
+  ).length;
 
+  const formatDate = (value) => {
+    if (!value) return "Never";
+    const date = new Date(value);
+    if (Number.isNaN(date.getTime())) return "Never";
+
+    const today = new Date();
+    if (date.toDateString() === today.toDateString()) {
+      return `Today, ${date.toLocaleTimeString([], {
+        hour: "numeric",
+        minute: "2-digit",
+      })}`;
+    }
+
+    return date.toLocaleDateString([], {
+      month: "short",
+      day: "numeric",
+      year: date.getFullYear() !== today.getFullYear() ? "numeric" : undefined,
+    });
+  };
+
+  const copyText = async (text) => {
     try {
-      await fetch(apiUrl("team/role"), {
-        method: "POST",
-        credentials: "include",
-        headers: {
-          "Content-Type": "application/json",
-          Accept: "application/json",
-          "X-User-Email": userEmail || "",
-          "X-Owner-Email": ownerEmail || "",
-        },
-        body: JSON.stringify({ email, role, ownerEmail }),
-      });
+      await navigator.clipboard.writeText(text);
+      setNotice("Invitation link copied.");
     } catch {
-      alert("Could not change role. Backend route /api/team/role may be missing.");
-      loadMembers();
-    } finally {
-      setBusyEmail("");
+      window.prompt("Copy this invitation link:", text);
     }
   };
 
-  const removeMember = async (email) => {
-    if (!window.confirm("Remove this member?")) return;
-    setBusyEmail(email);
+  const openInvite = () => {
+    setInviteEmail("");
+    setInviteRole("member");
+    setInviteResult(null);
+    setError("");
+    setInviteOpen(true);
+  };
 
-    const prev = members;
-    setMembers((ms) => ms.filter((m) => m.email !== email));
+  const submitInvite = async (event) => {
+    event.preventDefault();
+    setBusyKey("invite");
+    setError("");
+    setNotice("");
 
     try {
-      await fetch(apiUrl("team/remove"), {
+      const data = await teamRequest("team/invite", {
         method: "POST",
-        credentials: "include",
-        headers: {
-          "Content-Type": "application/json",
-          Accept: "application/json",
-          "X-User-Email": userEmail || "",
-          "X-Owner-Email": ownerEmail || "",
-        },
-        body: JSON.stringify({ email, ownerEmail }),
+        body: JSON.stringify({ email: inviteEmail, role: inviteRole }),
       });
-    } catch {
-      alert("Could not remove. Backend route /api/team/remove may be missing.");
-      setMembers(prev);
+      setInviteResult(data?.invite || null);
+      setNotice(
+        data?.invite?.email_sent
+          ? "Invitation email sent."
+          : "Invitation created. Copy the link below to send it manually."
+      );
+      await loadTeam();
+    } catch (err) {
+      setError(friendlyError(err));
     } finally {
-      setBusyEmail("");
+      setBusyKey("");
+    }
+  };
+
+  const changeRole = async (email, role) => {
+    setBusyKey(`role:${email}`);
+    setError("");
+    setNotice("");
+
+    try {
+      const data = await teamRequest("team/role", {
+        method: "POST",
+        body: JSON.stringify({ email, role }),
+      });
+      setMembers((current) =>
+        current.map((member) =>
+          member.email === email ? data?.member || { ...member, role } : member
+        )
+      );
+      setNotice("Member role updated.");
+    } catch (err) {
+      setError(friendlyError(err));
+      await loadTeam();
+    } finally {
+      setBusyKey("");
+    }
+  };
+
+  const removeMember = async (member) => {
+    const label = member.name || member.email;
+    if (!window.confirm(`Remove ${label} from this workspace?`)) return;
+
+    setBusyKey(`remove:${member.email}`);
+    setError("");
+    setNotice("");
+
+    try {
+      await teamRequest("team/remove", {
+        method: "POST",
+        body: JSON.stringify({ email: member.email }),
+      });
+      setMembers((current) =>
+        current.filter((item) => item.email !== member.email)
+      );
+      setNotice(`${label} was removed from the workspace.`);
+    } catch (err) {
+      setError(friendlyError(err));
+    } finally {
+      setBusyKey("");
+    }
+  };
+
+  const resendInvite = async (invite) => {
+    setBusyKey(`resend:${invite.token}`);
+    setError("");
+    setNotice("");
+
+    try {
+      const data = await teamRequest("team/invite/resend", {
+        method: "POST",
+        body: JSON.stringify({ token: invite.token }),
+      });
+      setNotice(
+        data?.invite?.email_sent
+          ? `Invitation resent to ${invite.email}.`
+          : "Invitation renewed. Copy its link to send it manually."
+      );
+      await loadTeam();
+    } catch (err) {
+      setError(friendlyError(err));
+    } finally {
+      setBusyKey("");
+    }
+  };
+
+  const cancelInvite = async (invite) => {
+    if (!window.confirm(`Cancel the invitation for ${invite.email}?`)) return;
+    setBusyKey(`cancel:${invite.token}`);
+    setError("");
+    setNotice("");
+
+    try {
+      await teamRequest("team/invite/cancel", {
+        method: "POST",
+        body: JSON.stringify({ token: invite.token }),
+      });
+      setInvites((current) =>
+        current.filter((item) => item.token !== invite.token)
+      );
+      setNotice("Invitation cancelled.");
+    } catch (err) {
+      setError(friendlyError(err));
+    } finally {
+      setBusyKey("");
     }
   };
 
   return (
-    <div>
-      <h2 style={{ maxWidth: maxWidth, margin: "0 auto 14px" }}>Team</h2>
-
-      <div
-        style={{
-          display: "flex",
-          alignItems: "center",
-          gap: 12,
-          margin: "0 auto 14px",
-          maxWidth: maxWidth,
-          width: "100%",
-        }}
-      >
-        <div
-          style={{
-            display: "flex",
-            alignItems: "center",
-            gap: 8,
-            background: "#232325",
-            borderRadius: 10,
-            padding: "10px 12px",
-            border: "1px solid #2c2c2f",
-            flex: 1,
-          }}
-        >
-          <FaSearch style={{ color: "#aaa" }} />
-          <input
-            placeholder="Search by name, email, or role…"
-            value={search}
-            onChange={(e) => setSearch(e.target.value)}
-            style={{
-              background: "transparent",
-              border: "none",
-              outline: "none",
-              color: "#fff",
-              width: "100%",
-            }}
-          />
+    <div className="team-tab" style={{ maxWidth, margin: "0 auto" }}>
+      <div className="team-heading-row">
+        <div>
+          <h2>Team</h2>
+          <p>Manage who can access your RetainAI workspace.</p>
         </div>
 
+        {canManage && (
+          <button className="team-primary-btn" onClick={openInvite}>
+            <FaUserPlus />
+            Invite member
+          </button>
+        )}
+      </div>
+
+      <div className="team-stats">
+        <div className="team-stat-card">
+          <span>Active members</span>
+          <strong>{activeCount}</strong>
+        </div>
+        <div className="team-stat-card">
+          <span>Pending invitations</span>
+          <strong>{invites.length}</strong>
+        </div>
+        <div className="team-stat-card">
+          <span>Your access</span>
+          <strong className="team-role-text">
+            {String(currentRole || (canManage ? "owner" : "member"))}
+          </strong>
+        </div>
+      </div>
+
+      {(notice || error) && (
+        <div className={`team-message ${error ? "error" : "success"}`}>
+          {error || notice}
+        </div>
+      )}
+
+      <div className="team-toolbar">
+        <label className="team-search">
+          <FaSearch />
+          <input
+            placeholder="Search by name, email, role, or status"
+            value={search}
+            onChange={(event) => setSearch(event.target.value)}
+          />
+        </label>
+
         <button
-          className="btn"
-          onClick={loadMembers}
-          style={{
-            background: "#232323",
-            color: "#fff",
-            border: "1px solid #444",
-          }}
+          className="team-secondary-btn"
+          onClick={loadTeam}
+          disabled={loading}
         >
+          <FaSyncAlt className={loading ? "team-spin" : ""} />
           Refresh
         </button>
       </div>
 
-      {error && (
-        <pre
-          style={{
-            maxWidth,
-            margin: "0 auto 14px",
-            padding: 12,
-            background: "#2a2a2e",
-            border: "1px solid #3a3a3f",
-            borderRadius: 10,
-            color: "#ddd",
-            whiteSpace: "pre-wrap",
-            wordBreak: "break-word",
-          }}
-        >
-          {error}
-        </pre>
-      )}
+      <section className="team-panel">
+        <div className="team-panel-title">
+          <div>
+            <h3>Workspace members</h3>
+            <span>{members.length} total</span>
+          </div>
+        </div>
 
-      <div
-        style={{
-          background: "#232325",
-          borderRadius: 12,
-          padding: 0,
-          overflow: "hidden",
-          boxShadow: "0 2px 12px #0002",
-          maxWidth: maxWidth,
-          width: "100%",
-          margin: "0 auto",
-        }}
-      >
-        <div
-          style={{
-            display: "grid",
-            gridTemplateColumns: "2fr 2fr 1.2fr 1.2fr 0.8fr",
-            gap: 8,
-            padding: "14px 16px",
-            background: "#1f1f23",
-            color: "#bbb",
-            fontWeight: 800,
-          }}
-        >
-          <div>Name</div>
-          <div>Email</div>
+        <div className="team-table team-table-header">
+          <div>Member</div>
           <div>Role</div>
-          <div>Last login</div>
-          <div style={{ textAlign: "right" }}>Actions</div>
+          <div>Status</div>
+          <div>Last active</div>
+          <div aria-label="Actions" />
         </div>
 
         {loading ? (
-          <div style={{ padding: 18, color: "#ddd" }}>Loading members…</div>
+          <div className="team-empty">Loading your team…</div>
         ) : filtered.length === 0 ? (
-          <div style={{ padding: 18, color: "#bbb" }}>
-            No members found (or backend team routes missing).
+          <div className="team-empty">
+            {search ? "No members match that search." : "No team members found."}
           </div>
         ) : (
-          filtered.map((m) => (
-            <div
-              key={m.email}
-              style={{
-                display: "grid",
-                gridTemplateColumns: "2fr 2fr 1.2fr 1.2fr 0.8fr",
-                gap: 8,
-                padding: "14px 16px",
-                borderTop: "1px solid #2b2b2f",
-                alignItems: "center",
-              }}
+          filtered.map((member) => {
+            const isOwner =
+              member.role === "owner" || member.email === ownerEmail;
+            const rowBusy = busyKey.includes(member.email);
+            const initial = (member.name || member.email || "?")
+              .trim()
+              .charAt(0)
+              .toUpperCase();
+
+            return (
+              <div className="team-table team-member-row" key={member.email}>
+                <div className="team-member-cell" data-label="Member">
+                  <div className="team-avatar">
+                    {member.avatar ? (
+                      <img src={member.avatar} alt="" />
+                    ) : (
+                      initial
+                    )}
+                  </div>
+                  <div className="team-member-copy">
+                    <strong>{member.name || "Unnamed member"}</strong>
+                    <span>{member.email}</span>
+                  </div>
+                </div>
+
+                <div data-label="Role">
+                  {isOwner ? (
+                    <span className="team-badge owner">
+                      <FaCrown /> Owner
+                    </span>
+                  ) : canManage ? (
+                    <select
+                      className="team-role-select"
+                      value={member.role || "member"}
+                      disabled={rowBusy}
+                      onChange={(event) =>
+                        changeRole(member.email, event.target.value)
+                      }
+                    >
+                      <option value="manager">Manager</option>
+                      <option value="member">Member</option>
+                    </select>
+                  ) : (
+                    <span className="team-badge neutral">
+                      {member.role || "member"}
+                    </span>
+                  )}
+                </div>
+
+                <div data-label="Status">
+                  <span className="team-badge active">
+                    <span className="team-status-dot" />
+                    {member.status || "active"}
+                  </span>
+                </div>
+
+                <div className="team-last-active" data-label="Last active">
+                  {formatDate(member.last_login)}
+                </div>
+
+                <div className="team-actions" data-label="Actions">
+                  {!isOwner && canManage ? (
+                    <button
+                      className="team-icon-btn danger"
+                      title={`Remove ${member.name || member.email}`}
+                      disabled={rowBusy}
+                      onClick={() => removeMember(member)}
+                    >
+                      <FaTrash />
+                      <span>Remove</span>
+                    </button>
+                  ) : (
+                    <span className="team-locked-copy">
+                      {isOwner ? "Protected" : ""}
+                    </span>
+                  )}
+                </div>
+              </div>
+            );
+          })
+        )}
+      </section>
+
+      {canManage && (
+        <section className="team-panel team-invites-panel">
+          <div className="team-panel-title">
+            <div>
+              <h3>Pending invitations</h3>
+              <span>Invitation links expire after 7 days.</span>
+            </div>
+          </div>
+
+          {invites.length === 0 ? (
+            <div className="team-empty compact">No pending invitations.</div>
+          ) : (
+            invites.map((invite) => (
+              <div className="team-invite-row" key={invite.token}>
+                <div className="team-invite-main">
+                  <div className="team-invite-icon">
+                    <FaClock />
+                  </div>
+                  <div>
+                    <strong>{invite.email}</strong>
+                    <span>
+                      {invite.role === "manager" ? "Manager" : "Member"} · Expires {" "}
+                      {new Date(invite.expires_at * 1000).toLocaleDateString()}
+                    </span>
+                  </div>
+                </div>
+
+                <div className="team-invite-actions">
+                  <button
+                    className="team-text-btn"
+                    onClick={() => copyText(invite.accept_url)}
+                  >
+                    <FaCopy /> Copy link
+                  </button>
+                  <button
+                    className="team-text-btn"
+                    disabled={busyKey === `resend:${invite.token}`}
+                    onClick={() => resendInvite(invite)}
+                  >
+                    <FaSyncAlt /> Resend
+                  </button>
+                  <button
+                    className="team-text-btn danger"
+                    disabled={busyKey === `cancel:${invite.token}`}
+                    onClick={() => cancelInvite(invite)}
+                  >
+                    <FaTimes /> Cancel
+                  </button>
+                </div>
+              </div>
+            ))
+          )}
+        </section>
+      )}
+
+      {inviteOpen && (
+        <div
+          className="team-modal-backdrop"
+          role="presentation"
+          onMouseDown={(event) => {
+            if (event.target === event.currentTarget) setInviteOpen(false);
+          }}
+        >
+          <div className="team-modal" role="dialog" aria-modal="true">
+            <button
+              className="team-modal-close"
+              onClick={() => setInviteOpen(false)}
+              aria-label="Close invitation dialog"
             >
-              <div style={{ color: "#fff", fontWeight: 700 }}>
-                {m.name || "—"}
-              </div>
-              <div style={{ color: "#ddd" }}>{m.email}</div>
-              <div>
-                <select
-                  disabled={busyEmail === m.email || m.email === ownerEmail}
-                  value={m.role || "member"}
-                  onChange={(e) => changeRole(m.email, e.target.value)}
-                  style={{
-                    background: "#18181b",
-                    color: "#fff",
-                    border: "1px solid #333",
-                    borderRadius: 8,
-                    padding: "8px 10px",
-                    fontWeight: 700,
-                    minWidth: 120,
-                  }}
-                >
-                  {roles.map((r) => (
-                    <option key={r} value={r}>
-                      {r}
-                    </option>
-                  ))}
-                </select>
-              </div>
-              <div style={{ color: "#bbb" }}>
-                {m.last_login ? new Date(m.last_login).toLocaleString() : "—"}
-              </div>
-              <div style={{ display: "flex", justifyContent: "flex-end" }}>
+              <FaTimes />
+            </button>
+
+            <div className="team-modal-icon">
+              <FaUserPlus />
+            </div>
+            <h3>Invite a team member</h3>
+            <p>
+              They will receive access to this workspace based on the role you
+              choose.
+            </p>
+
+            {!inviteResult ? (
+              <form onSubmit={submitInvite}>
+                <label className="team-field">
+                  <span>Email address</span>
+                  <input
+                    type="email"
+                    required
+                    autoFocus
+                    value={inviteEmail}
+                    onChange={(event) => setInviteEmail(event.target.value)}
+                    placeholder="teammate@example.com"
+                  />
+                </label>
+
+                <label className="team-field">
+                  <span>Role</span>
+                  <select
+                    value={inviteRole}
+                    onChange={(event) => setInviteRole(event.target.value)}
+                  >
+                    <option value="member">Member — everyday CRM access</option>
+                    <option value="manager">Manager — broader workspace access</option>
+                  </select>
+                </label>
+
+                <div className="team-role-help">
+                  <strong>
+                    {inviteRole === "manager" ? "Manager" : "Member"}
+                  </strong>
+                  <span>
+                    {inviteRole === "manager"
+                      ? "Can work with leads, messages, calendar, analytics, and automations."
+                      : "Can work with leads, messages, calendar, and notifications."}
+                  </span>
+                </div>
+
                 <button
-                  className="btn"
-                  title="Remove"
-                  disabled={busyEmail === m.email || m.email === ownerEmail}
-                  onClick={() => removeMember(m.email)}
-                  style={{
-                    background: "#2a2a2a",
-                    color: "#fff",
-                    border: "1px solid #3a3a3a",
-                    display: "flex",
-                    alignItems: "center",
-                    gap: 8,
-                  }}
+                  className="team-primary-btn team-modal-submit"
+                  type="submit"
+                  disabled={busyKey === "invite"}
                 >
-                  <FaTrash />
-                  Remove
+                  {busyKey === "invite" ? "Creating invitation…" : "Send invitation"}
+                </button>
+              </form>
+            ) : (
+              <div className="team-invite-success">
+                <FaCheckCircle />
+                <h4>Invitation ready</h4>
+                <p>
+                  {inviteResult.email_sent
+                    ? `An email was sent to ${inviteResult.email}.`
+                    : "Email delivery is not configured, so send this secure link manually."}
+                </p>
+                <button
+                  className="team-secondary-btn"
+                  onClick={() => copyText(inviteResult.accept_url)}
+                >
+                  <FaCopy /> Copy invitation link
+                </button>
+                <button
+                  className="team-text-btn"
+                  onClick={() => setInviteOpen(false)}
+                >
+                  Done
                 </button>
               </div>
-            </div>
-          ))
-        )}
-      </div>
+            )}
+          </div>
+        </div>
+      )}
     </div>
   );
 }

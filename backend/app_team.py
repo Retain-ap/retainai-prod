@@ -1,290 +1,593 @@
 # backend/app_team.py
-import os, json, time, secrets, datetime
+import os
+import re
+import json
+import time
+import secrets
+import datetime
+from typing import Any, Dict, Optional, Tuple
+
 from flask import Blueprint, request, jsonify
-from urllib.parse import urljoin
+from sendgrid import SendGridAPIClient
+from sendgrid.helpers.mail import Mail
+
+from storage import load_users, save_users, DATA_ROOT
 
 team_bp = Blueprint("team_bp", __name__)
 
-USERS_FILE    = "users.json"
-INVITES_FILE  = "invites.json"
-FRONTEND_BASE = os.getenv("FRONTEND_BASE", "http://localhost:3000")
+INVITES_FILE = os.path.join(DATA_ROOT, "invites.json")
+FRONTEND_BASE = (
+    os.getenv("FRONTEND_URL")
+    or os.getenv("FRONTEND_BASE")
+    or "http://localhost:3000"
+).rstrip("/")
+SENDGRID_API_KEY = (os.getenv("SENDGRID_API_KEY") or "").strip()
+SENDER_EMAIL = (os.getenv("SENDER_EMAIL") or "noreply@retainai.ca").strip()
+INVITE_TTL_SECONDS = 7 * 24 * 60 * 60
+VALID_ROLES = {"manager", "member"}
+EMAIL_RE = re.compile(r"^[^\s@]+@[^\s@]+\.[^\s@]+$")
 
-# ───────────────── helpers ─────────────────
 
-def _load_json(path, default):
-    try:
-        with open(path, "r", encoding="utf-8") as f:
-            return json.load(f)
-    except Exception:
-        return default
-
-def _save_json(path, data):
-    with open(path, "w", encoding="utf-8") as f:
-        json.dump(data, f, ensure_ascii=False, indent=2)
+# ───────────────── storage/helpers ─────────────────
 
 def _norm(email: str) -> str:
     return (email or "").strip().lower()
 
+
 def _user_key(email: str) -> str:
     return f"user::{_norm(email)}"
 
+
+def _utc_iso() -> str:
+    return datetime.datetime.now(datetime.timezone.utc).isoformat().replace("+00:00", "Z")
+
+
+def _load_invites() -> Dict[str, Dict[str, Any]]:
+    try:
+        with open(INVITES_FILE, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        return data if isinstance(data, dict) else {}
+    except FileNotFoundError:
+        return {}
+    except Exception:
+        return {}
+
+
+def _save_invites(data: Dict[str, Dict[str, Any]]) -> None:
+    os.makedirs(DATA_ROOT, exist_ok=True)
+    tmp = INVITES_FILE + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as f:
+        json.dump(data, f, ensure_ascii=False, indent=2)
+    os.replace(tmp, INVITES_FILE)
+
+
 def _current_user_email() -> str:
-    return _norm(request.headers.get("X-User-Email", ""))
+    # This matches the authentication convention already used throughout RetainAI.
+    # Do not use ownerEmail from the request body/query as authorization.
+    return _norm(
+        request.headers.get("X-User-Email")
+        or request.headers.get("X-Auth-Email")
+        or ""
+    )
 
-def _users():
-    return _load_json(USERS_FILE, {})
 
-def _save_users(data):
-    _save_json(USERS_FILE, data)
+def _resolve_actor(users: dict, email: str) -> Tuple[Optional[str], Optional[str], Optional[dict], Optional[dict]]:
+    """Return (role, org_owner_email, owner_record, subject_record)."""
+    email = _norm(email)
+    if not email or not isinstance(users, dict):
+        return None, None, None, None
 
-def _invites():
-    return _load_json(INVITES_FILE, {})
+    team_rec = users.get(_user_key(email))
+    if isinstance(team_rec, dict):
+        role = (team_rec.get("role") or "member").strip().lower()
+        org_email = _norm(team_rec.get("org_id") or email)
 
-def _save_invites(data):
-    _save_json(INVITES_FILE, data)
+        # Some older installs created a user::<owner> mirror record.
+        if role == "owner" or org_email == email:
+            owner = users.get(org_email) or users.get(email)
+            if isinstance(owner, dict):
+                return "owner", org_email, owner, team_rec
+        else:
+            owner = users.get(org_email)
+            if isinstance(owner, dict):
+                return role if role in VALID_ROLES else "member", org_email, owner, team_rec
 
-def _get_any_user_view(users_dict: dict, email: str):
-    """Prefer team record 'user::<email>' else legacy top-level '<email>'."""
-    key = _user_key(email)
-    return users_dict.get(key) or users_dict.get(email)
+    top_level = users.get(email)
+    if isinstance(top_level, dict):
+        top_role = (top_level.get("role") or "").strip().lower()
+        top_org = _norm(top_level.get("org_id") or "")
+        if top_org and top_org != email and top_role in VALID_ROLES:
+            owner = users.get(top_org)
+            if isinstance(owner, dict):
+                return top_role, top_org, owner, top_level
+        return "owner", email, top_level, top_level
 
-def _bootstrap_owner_if_missing(users_dict: dict, email: str) -> dict:
-    """
-    Ensure there's a 'user::<owner>' team record. Seed from legacy owner if needed.
-    """
-    key = _user_key(email)
-    if key in users_dict:
-        return users_dict
+    return None, None, None, None
 
-    legacy = users_dict.get(email) or {}
-    users_dict[key] = {
+
+def _require_actor(owner_only: bool = False):
+    me = _current_user_email()
+    if not me:
+        return None, (jsonify({"error": "auth_required"}), 401)
+
+    users = load_users() or {}
+    if not isinstance(users, dict):
+        return None, (jsonify({"error": "storage_not_ready"}), 500)
+
+    role, org_email, owner, subject = _resolve_actor(users, me)
+    if not role or not org_email or not owner:
+        return None, (jsonify({"error": "user_not_found"}), 404)
+    if owner_only and role != "owner":
+        return None, (jsonify({"error": "forbidden"}), 403)
+
+    return {
+        "email": me,
+        "role": role,
+        "org_email": org_email,
+        "owner": owner,
+        "subject": subject or {},
+        "users": users,
+    }, None
+
+
+def _member_payload(email: str, rec: dict, *, owner_email: str = "") -> dict:
+    email = _norm(email or rec.get("email"))
+    role = (rec.get("role") or ("owner" if email == owner_email else "member")).lower()
+    if email == owner_email:
+        role = "owner"
+
+    return {
         "email": email,
-        "name": legacy.get("name") or legacy.get("business") or "",
-        "role": "owner",
-        "org_id": legacy.get("org_id") or email,  # single-tenant org by default
-        "last_login": legacy.get("last_login"),
-    }
-    _save_users(users_dict)
-    return users_dict
-
-def _iter_team_members(users_dict: dict, org_id: str):
-    """
-    Yield team members from 'user::' namespace. If none, fall back to owner-only.
-    """
-    had_any = False
-    for k, v in users_dict.items():
-        if isinstance(k, str) and k.startswith("user::"):
-            if (v.get("org_id") or v.get("email")) == org_id:
-                had_any = True
-                yield {
-                    "email": v.get("email"),
-                    "name": v.get("name") or "",
-                    "role": v.get("role", "member"),
-                    "last_login": v.get("last_login"),
-                }
-    if not had_any:
-        owner = users_dict.get(_user_key(org_id)) or users_dict.get(org_id) or {"email": org_id}
-        yield {
-            "email": owner.get("email", org_id),
-            "name": owner.get("name") or "",
-            "role": owner.get("role", "owner"),
-            "last_login": owner.get("last_login"),
-        }
-
-def _clone_owner_login_to_member(users: dict, owner_email: str, member_email: str, name: str, role: str):
-    """
-    Create/overwrite a TOP-LEVEL users[member_email] record that mirrors the owner's
-    login fields so /api/login works for the teammate with the SAME PASSWORD.
-
-    We copy: password, business fields, logo, and mark status=active.
-    """
-    owner_email = _norm(owner_email)
-    member_email = _norm(member_email)
-    owner_legacy = users.get(owner_email) or {}
-
-    owner_pw = owner_legacy.get("password")
-    if not owner_pw:
-        # If owner has no legacy record with password, we cannot mirror credentials.
-        raise ValueError("owner_password_missing")
-
-    base = {
-        "password": owner_pw,
-        "businessType": owner_legacy.get("businessType", ""),
-        "business": owner_legacy.get("business", ""),
-        "teamSize": owner_legacy.get("teamSize", ""),
-        "logo": owner_legacy.get("logo", "") or owner_legacy.get("picture", ""),
-        "location": owner_legacy.get("location", ""),
-        "stripe_account_id": owner_legacy.get("stripe_account_id"),
-        "stripe_connected": owner_legacy.get("stripe_connected", False),
-        "status": "active",
-        "trial_start": owner_legacy.get("trial_start") or datetime.datetime.utcnow().isoformat(),
-        "trial_ending_notice_sent": False,
-        "name": name or owner_legacy.get("name", "") or member_email.split("@")[0].title(),
-        "people": owner_legacy.get("people", ""),
-        "org_id": owner_legacy.get("org_id") or owner_email,
-        "role": role or "member",
+        "name": (rec.get("name") or rec.get("business") or "").strip(),
+        "role": role,
+        "status": rec.get("team_status") or rec.get("status") or "active",
+        "last_login": rec.get("last_login") or rec.get("lastLoginAt"),
+        "joined_at": rec.get("joined_at") or rec.get("created_at") or rec.get("trial_start"),
+        "avatar": rec.get("avatar") or rec.get("logo") or rec.get("picture") or "",
     }
 
-    current = users.get(member_email) or {}
-    current.update(base)
-    users[member_email] = current
+
+def _all_members(users: dict, org_email: str) -> list:
+    owner = users.get(org_email) or {}
+    rows = [_member_payload(org_email, owner, owner_email=org_email)]
+    seen = {org_email}
+
+    for key, rec in users.items():
+        if not (isinstance(key, str) and key.startswith("user::") and isinstance(rec, dict)):
+            continue
+        email = _norm(rec.get("email") or key.split("user::", 1)[-1])
+        if not email or email in seen:
+            continue
+        if _norm(rec.get("org_id")) != org_email:
+            continue
+        role = (rec.get("role") or "member").lower()
+        if role == "owner":
+            continue
+        rows.append(_member_payload(email, rec, owner_email=org_email))
+        seen.add(email)
+
+    # Compatibility for older records that only have a top-level member login.
+    for key, rec in users.items():
+        if not isinstance(key, str) or key.startswith("user::") or not isinstance(rec, dict):
+            continue
+        email = _norm(rec.get("email") or key)
+        role = (rec.get("role") or "").lower()
+        if email in seen or role not in VALID_ROLES:
+            continue
+        if _norm(rec.get("org_id")) != org_email:
+            continue
+        rows.append(_member_payload(email, rec, owner_email=org_email))
+        seen.add(email)
+
+    rows.sort(key=lambda m: (0 if m["role"] == "owner" else 1, (m.get("name") or m["email"]).lower()))
+    return rows
+
+
+def _invite_url(token: str) -> str:
+    return f"{FRONTEND_BASE}/accept-invite?token={token}"
+
+
+def _send_invite_email(*, to_email: str, inviter_name: str, business_name: str, role: str, accept_url: str) -> bool:
+    if not SENDGRID_API_KEY:
+        return False
+
+    inviter = inviter_name or business_name or "A RetainAI workspace owner"
+    workspace = business_name or "their RetainAI workspace"
+    subject = f"You’re invited to join {workspace} on RetainAI"
+    html = f"""
+    <div style="font-family:Arial,sans-serif;max-width:620px;margin:auto;color:#202124">
+      <h2 style="margin-bottom:8px">Join {workspace} on RetainAI</h2>
+      <p>{inviter} invited you to join as a <strong>{role.title()}</strong>.</p>
+      <p style="margin:28px 0">
+        <a href="{accept_url}" style="background:#f7cb53;color:#111;padding:13px 20px;border-radius:8px;text-decoration:none;font-weight:700">
+          Accept invitation
+        </a>
+      </p>
+      <p style="color:#666;font-size:14px">This link expires in 7 days. If you were not expecting this invitation, you can ignore this email.</p>
+    </div>
+    """
+
+    try:
+        message = Mail(
+            from_email=SENDER_EMAIL,
+            to_emails=to_email,
+            subject=subject,
+            html_content=html,
+        )
+        response = SendGridAPIClient(SENDGRID_API_KEY).send(message)
+        return response.status_code in (200, 201, 202)
+    except Exception:
+        return False
+
+
+def _find_active_invite(invites: dict, email: str, org_email: str):
+    now = int(time.time())
+    for token, inv in invites.items():
+        if not isinstance(inv, dict):
+            continue
+        if inv.get("accepted_at") or inv.get("cancelled_at"):
+            continue
+        if _norm(inv.get("email")) != email or _norm(inv.get("org_id")) != org_email:
+            continue
+        if int(inv.get("expires_at") or 0) > now:
+            return token, inv
+    return None, None
+
+
+def _public_invite(token: str, inv: dict, include_url: bool = False) -> dict:
+    out = {
+        "token": token,
+        "email": _norm(inv.get("email")),
+        "role": inv.get("role") or "member",
+        "created_at": inv.get("created_at"),
+        "expires_at": inv.get("expires_at"),
+        "email_sent": bool(inv.get("email_sent")),
+    }
+    if include_url:
+        out["accept_url"] = _invite_url(token)
+    return out
+
 
 # ───────────────── routes ─────────────────
 
 @team_bp.route("/api/team/members", methods=["GET"])
 def team_members():
-    me = _current_user_email()
-    if not me:
-        return jsonify({"error": "auth"}), 401
+    actor, error = _require_actor()
+    if error:
+        return error
 
-    users_db = _users()
-    users_db = _bootstrap_owner_if_missing(users_db, me)
+    return jsonify({
+        "members": _all_members(actor["users"], actor["org_email"]),
+        "current_role": actor["role"],
+        "can_manage": actor["role"] == "owner",
+        "org_id": actor["org_email"],
+    }), 200
 
-    me_user = _get_any_user_view(users_db, me)
-    if not me_user:
-        return jsonify({"error": "no_user"}), 404
 
-    org_id = me_user.get("org_id") or me
-    out = list(_iter_team_members(users_db, org_id))
-    return jsonify({"members": out})
+@team_bp.route("/api/team/invites", methods=["GET"])
+def list_invites():
+    actor, error = _require_actor(owner_only=True)
+    if error:
+        return error
+
+    now = int(time.time())
+    invites = _load_invites()
+    rows = []
+    for token, inv in invites.items():
+        if not isinstance(inv, dict):
+            continue
+        if _norm(inv.get("org_id")) != actor["org_email"]:
+            continue
+        if inv.get("accepted_at") or inv.get("cancelled_at"):
+            continue
+        if int(inv.get("expires_at") or 0) <= now:
+            continue
+        rows.append(_public_invite(token, inv, include_url=True))
+
+    rows.sort(key=lambda x: int(x.get("created_at") or 0), reverse=True)
+    return jsonify({"invites": rows}), 200
+
 
 @team_bp.route("/api/team/invite", methods=["POST"])
 def invite_member():
-    me = _current_user_email()
-    if not me:
-        return jsonify({"error":"auth"}), 401
+    actor, error = _require_actor(owner_only=True)
+    if error:
+        return error
 
-    users_db = _users()
-    users_db = _bootstrap_owner_if_missing(users_db, me)
-
-    me_user = _get_any_user_view(users_db, me)
-    if not me_user:
-        return jsonify({"error":"no_user"}), 404
-    if me_user.get("role", "owner") != "owner":
-        return jsonify({"error":"forbidden"}), 403
-
-    body  = request.get_json() or {}
+    body = request.get_json(silent=True) or {}
     email = _norm(body.get("email"))
-    role  = (body.get("role") or "member").lower()
-    if not email:
-        return jsonify({"error":"email_required"}), 400
+    role = (body.get("role") or "member").strip().lower()
 
-    org_id = me_user.get("org_id") or me_user.get("email") or me
+    if not email or not EMAIL_RE.match(email):
+        return jsonify({"error": "valid_email_required"}), 400
+    if role not in VALID_ROLES:
+        return jsonify({"error": "invalid_role"}), 400
+    if email == actor["org_email"]:
+        return jsonify({"error": "cannot_invite_owner"}), 409
 
-    # already a member in team namespace?
-    existing_member_rec = users_db.get(_user_key(email))
-    if existing_member_rec and (existing_member_rec.get("org_id") == org_id):
-        return jsonify({"error": "already_member"}), 409
+    users = actor["users"]
+    existing_role, existing_org, _owner, _subject = _resolve_actor(users, email)
+    if existing_role:
+        if existing_org == actor["org_email"]:
+            return jsonify({"error": "already_member"}), 409
+        return jsonify({"error": "email_in_use"}), 409
 
-    # pending invite?
-    invites = _invites()
+    invites = _load_invites()
+    existing_token, existing = _find_active_invite(invites, email, actor["org_email"])
+    if existing:
+        return jsonify({
+            "ok": True,
+            "existing": True,
+            "invite": _public_invite(existing_token, existing, include_url=True),
+        }), 200
+
     now = int(time.time())
-    for t, inv in invites.items():
-        if inv.get("accepted_at"):
-            continue
-        if _norm(inv.get("email")) == email and inv.get("org_id") == org_id and inv.get("expires_at", 0) > now:
-            accept_url = urljoin(FRONTEND_BASE, f"/accept-invite?token={t}")
-            return jsonify({"ok": True, "token": t, "accept_url": accept_url, "existing": True})
+    token = secrets.token_urlsafe(32)
+    accept_url = _invite_url(token)
+    owner = actor["owner"] or {}
+    email_sent = _send_invite_email(
+        to_email=email,
+        inviter_name=(owner.get("name") or "").strip(),
+        business_name=(owner.get("business") or owner.get("businessName") or "").strip(),
+        role=role,
+        accept_url=accept_url,
+    )
 
-    # create new invite
-    token = secrets.token_urlsafe(24)
     invites[token] = {
         "email": email,
         "role": role,
-        "org_id": org_id,
+        "org_id": actor["org_email"],
         "created_at": now,
-        "expires_at": now + 7*24*3600,
-        "accepted_at": None
+        "expires_at": now + INVITE_TTL_SECONDS,
+        "accepted_at": None,
+        "cancelled_at": None,
+        "email_sent": email_sent,
+        "last_sent_at": now if email_sent else None,
     }
     _save_invites(invites)
 
-    accept_url = urljoin(FRONTEND_BASE, f"/accept-invite?token={token}")
-    return jsonify({"ok": True, "token": token, "accept_url": accept_url})
+    return jsonify({
+        "ok": True,
+        "invite": _public_invite(token, invites[token], include_url=True),
+    }), 201
+
+
+@team_bp.route("/api/team/invite/resend", methods=["POST"])
+def resend_invite():
+    actor, error = _require_actor(owner_only=True)
+    if error:
+        return error
+
+    body = request.get_json(silent=True) or {}
+    old_token = (body.get("token") or "").strip()
+    invites = _load_invites()
+    old = invites.get(old_token)
+    if not isinstance(old, dict) or _norm(old.get("org_id")) != actor["org_email"]:
+        return jsonify({"error": "invite_not_found"}), 404
+    if old.get("accepted_at") or old.get("cancelled_at"):
+        return jsonify({"error": "invite_inactive"}), 409
+
+    now = int(time.time())
+    new_token = secrets.token_urlsafe(32)
+    new_invite = dict(old)
+    new_invite.update({
+        "created_at": now,
+        "expires_at": now + INVITE_TTL_SECONDS,
+        "accepted_at": None,
+        "cancelled_at": None,
+    })
+
+    owner = actor["owner"] or {}
+    email_sent = _send_invite_email(
+        to_email=_norm(new_invite.get("email")),
+        inviter_name=(owner.get("name") or "").strip(),
+        business_name=(owner.get("business") or owner.get("businessName") or "").strip(),
+        role=new_invite.get("role") or "member",
+        accept_url=_invite_url(new_token),
+    )
+    new_invite["email_sent"] = email_sent
+    new_invite["last_sent_at"] = now if email_sent else None
+
+    old["cancelled_at"] = now
+    old["replaced_by"] = new_token
+    invites[old_token] = old
+    invites[new_token] = new_invite
+    _save_invites(invites)
+
+    return jsonify({
+        "ok": True,
+        "invite": _public_invite(new_token, new_invite, include_url=True),
+    }), 200
+
+
+@team_bp.route("/api/team/invite/cancel", methods=["POST"])
+def cancel_invite():
+    actor, error = _require_actor(owner_only=True)
+    if error:
+        return error
+
+    body = request.get_json(silent=True) or {}
+    token = (body.get("token") or "").strip()
+    invites = _load_invites()
+    inv = invites.get(token)
+    if not isinstance(inv, dict) or _norm(inv.get("org_id")) != actor["org_email"]:
+        return jsonify({"error": "invite_not_found"}), 404
+    if inv.get("accepted_at"):
+        return jsonify({"error": "already_accepted"}), 409
+
+    inv["cancelled_at"] = int(time.time())
+    invites[token] = inv
+    _save_invites(invites)
+    return jsonify({"ok": True}), 200
+
+
+@team_bp.route("/api/team/role", methods=["POST"])
+def change_member_role():
+    actor, error = _require_actor(owner_only=True)
+    if error:
+        return error
+
+    body = request.get_json(silent=True) or {}
+    email = _norm(body.get("email"))
+    role = (body.get("role") or "").strip().lower()
+    if not email or role not in VALID_ROLES:
+        return jsonify({"error": "invalid_request"}), 400
+    if email == actor["org_email"]:
+        return jsonify({"error": "owner_role_locked"}), 409
+
+    users = actor["users"]
+    key = _user_key(email)
+    member = users.get(key)
+    if not isinstance(member, dict) or _norm(member.get("org_id")) != actor["org_email"]:
+        return jsonify({"error": "member_not_found"}), 404
+
+    member["role"] = role
+    member["updated_at"] = _utc_iso()
+    users[key] = member
+
+    login_rec = users.get(email)
+    if isinstance(login_rec, dict) and _norm(login_rec.get("org_id")) == actor["org_email"]:
+        login_rec["role"] = role
+        users[email] = login_rec
+
+    save_users(users)
+    return jsonify({"ok": True, "member": _member_payload(email, member, owner_email=actor["org_email"])}), 200
+
+
+@team_bp.route("/api/team/remove", methods=["POST"])
+def remove_member():
+    actor, error = _require_actor(owner_only=True)
+    if error:
+        return error
+
+    body = request.get_json(silent=True) or {}
+    email = _norm(body.get("email"))
+    if not email:
+        return jsonify({"error": "email_required"}), 400
+    if email == actor["org_email"]:
+        return jsonify({"error": "cannot_remove_owner"}), 409
+
+    users = actor["users"]
+    key = _user_key(email)
+    member = users.get(key)
+    if not isinstance(member, dict) or _norm(member.get("org_id")) != actor["org_email"]:
+        return jsonify({"error": "member_not_found"}), 404
+
+    users.pop(key, None)
+
+    # Remove only the teammate's login record. Organization data remains owned by the owner.
+    login_rec = users.get(email)
+    if isinstance(login_rec, dict) and _norm(login_rec.get("org_id")) == actor["org_email"]:
+        users.pop(email, None)
+
+    save_users(users)
+    return jsonify({"ok": True}), 200
+
 
 @team_bp.route("/api/team/invite/<token>", methods=["GET"])
 def read_invite(token):
-    invs = _invites()
-    inv = invs.get(token)
-    if not inv:
-        return jsonify({"error":"not_found"}), 404
-    if inv["expires_at"] < int(time.time()):
-        return jsonify({"error":"expired"}), 410
-    return jsonify({"invite": {"email": inv["email"], "role": inv["role"], "org_id": inv["org_id"]}})
+    invites = _load_invites()
+    inv = invites.get(token)
+    if not isinstance(inv, dict) or inv.get("cancelled_at"):
+        return jsonify({"error": "not_found"}), 404
+    if inv.get("accepted_at"):
+        return jsonify({"error": "already_accepted"}), 409
+    if int(inv.get("expires_at") or 0) <= int(time.time()):
+        return jsonify({"error": "expired"}), 410
+
+    users = load_users() or {}
+    owner = users.get(_norm(inv.get("org_id"))) if isinstance(users, dict) else {}
+    owner = owner or {}
+
+    return jsonify({
+        "invite": {
+            "email": _norm(inv.get("email")),
+            "role": inv.get("role") or "member",
+            "org_id": _norm(inv.get("org_id")),
+            "business": owner.get("business") or owner.get("businessName") or "RetainAI workspace",
+            "inviter_name": owner.get("name") or "",
+            "expires_at": inv.get("expires_at"),
+            "requires_password": True,
+        }
+    }), 200
+
 
 @team_bp.route("/api/team/accept", methods=["POST"])
 def accept_invite():
-    """
-    On accept:
-      1) Ensure org owner exists in team namespace.
-      2) Create/overwrite team member in 'user::email'.
-      3) Create/overwrite TOP-LEVEL users[email] with owner’s password and business fields.
-      → Teammate can now log in at /api/login using the OWNER'S password.
-    """
-    body  = request.get_json() or {}
-    token = body.get("token")
-    name  = (body.get("name") or "").strip()
-    email_input = _norm(body.get("email"))
+    body = request.get_json(silent=True) or {}
+    token = (body.get("token") or "").strip()
+    name = (body.get("name") or "").strip()
+    email = _norm(body.get("email"))
+    password = str(body.get("password") or "")
 
-    if not token or not email_input:
-        return jsonify({"error":"bad_request"}), 400
+    if not token or not email:
+        return jsonify({"error": "bad_request"}), 400
+    if len(password) < 8:
+        return jsonify({"error": "password_too_short"}), 400
 
-    invites = _invites()
+    invites = _load_invites()
     inv = invites.get(token)
-    if not inv:
-        return jsonify({"error":"not_found"}), 404
-    if inv["expires_at"] < int(time.time()):
-        return jsonify({"error":"expired"}), 410
+    if not isinstance(inv, dict) or inv.get("cancelled_at"):
+        return jsonify({"error": "not_found"}), 404
     if inv.get("accepted_at"):
-        return jsonify({"error":"already_accepted"}), 409
+        return jsonify({"error": "already_accepted"}), 409
+    if int(inv.get("expires_at") or 0) <= int(time.time()):
+        return jsonify({"error": "expired"}), 410
+    if _norm(inv.get("email")) != email:
+        return jsonify({"error": "email_mismatch", "invited": _norm(inv.get("email"))}), 400
 
-    # must match invited email
-    if _norm(inv["email"]) != email_input:
-        return jsonify({"error":"email_mismatch", "invited": _norm(inv["email"])}), 400
+    users = load_users() or {}
+    if not isinstance(users, dict):
+        return jsonify({"error": "storage_not_ready"}), 500
 
-    users_db = _users()
+    org_email = _norm(inv.get("org_id"))
+    owner = users.get(org_email)
+    if not isinstance(owner, dict):
+        return jsonify({"error": "org_not_found"}), 404
 
-    # Ensure owner exists in team namespace
-    org_owner_email = _norm(inv.get("org_id") or "")
-    if not org_owner_email:
-        return jsonify({"error":"org_invalid"}), 400
-    users_db = _bootstrap_owner_if_missing(users_db, org_owner_email)
+    existing_role, existing_org, _existing_owner, _subject = _resolve_actor(users, email)
+    if existing_role and existing_org != org_email:
+        return jsonify({"error": "email_in_use"}), 409
 
-    # 1) Team namespace record
-    key = _user_key(email_input)
-    users_db[key] = {
-        "email": email_input,
-        "name": name,
-        "role": inv["role"] or "member",
-        "org_id": inv["org_id"],
-        "last_login": None
+    role = (inv.get("role") or "member").lower()
+    if role not in VALID_ROLES:
+        role = "member"
+
+    now_iso = _utc_iso()
+    display_name = name or email.split("@", 1)[0].replace(".", " ").title()
+
+    users[_user_key(email)] = {
+        "email": email,
+        "name": display_name,
+        "role": role,
+        "org_id": org_email,
+        "team_status": "active",
+        "joined_at": now_iso,
+        "last_login": None,
     }
 
-    # 2) TOP-LEVEL login record with SAME PASSWORD as owner
-    try:
-        _clone_owner_login_to_member(
-            users_db,
-            owner_email=org_owner_email,
-            member_email=email_input,
-            name=name,
-            role=inv["role"] or "member",
-        )
-    except ValueError as e:
-        if str(e) == "owner_password_missing":
-            return jsonify({"error": "owner_has_no_password"}), 409
-        raise
+    # A teammate gets their own password. Organization-level data still comes from the owner.
+    users[email] = {
+        "email": email,
+        "password": password,
+        "name": display_name,
+        "role": role,
+        "org_id": org_email,
+        "status": "active",
+        "joined_at": now_iso,
+    }
+    save_users(users)
 
-    # persist
-    _save_users(users_db)
-
-    # 3) mark invite accepted
     inv["accepted_at"] = int(time.time())
     invites[token] = inv
     _save_invites(invites)
 
     return jsonify({
         "ok": True,
-        "login": {
-            "email": email_input,
-            "password_hint": "Use the same password as the account owner."
-        }
-    })
+        "user": {
+            "email": email,
+            "name": display_name,
+            "role": role,
+            "orgOwnerEmail": org_email,
+        },
+    }), 200

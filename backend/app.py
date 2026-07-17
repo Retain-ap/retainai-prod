@@ -2006,20 +2006,45 @@ def delete_appointment(user_email, appt_id):
 # ----------------------------
 def _resolve_org_and_role(email: str, users: dict):
     """
-    Return (role, org_owner_email, org_owner_record, subject_record)
-    role: "owner" or "member" (or None if not found)
+    Return (role, org_owner_email, org_owner_record, subject_record).
+
+    Team records live under ``user::<email>``. A teammate may also have a
+    top-level login record, but that must never make them an organization owner.
+    Roles currently returned are: owner, manager, or member.
     """
     email = _norm_email(email)
-    owner = users.get(email)
-    if owner:
-        return ("owner", email, owner, owner)
+    if not email or not isinstance(users, dict):
+        return (None, None, None, None)
 
-    member = users.get(f"user::{email}")
-    if member:
-        org_email = _norm_email(member.get("org_id") or "")
-        org_owner = users.get(org_email)
-        if org_owner:
-            return ("member", org_email, org_owner, member)
+    team_rec = users.get(f"user::{email}")
+    if isinstance(team_rec, dict):
+        role = str(team_rec.get("role") or "member").strip().lower()
+        org_email = _norm_email(team_rec.get("org_id") or email)
+
+        # Older team code may have created a user::<owner> mirror record.
+        if role == "owner" or org_email == email:
+            org_owner = users.get(org_email) or users.get(email)
+            if isinstance(org_owner, dict):
+                return ("owner", org_email, org_owner, team_rec)
+        else:
+            org_owner = users.get(org_email)
+            if isinstance(org_owner, dict):
+                if role not in ("manager", "member"):
+                    role = "member"
+                return (role, org_email, org_owner, team_rec)
+
+    top_level = users.get(email)
+    if isinstance(top_level, dict):
+        top_role = str(top_level.get("role") or "").strip().lower()
+        top_org = _norm_email(top_level.get("org_id") or "")
+
+        # A member's own login record is still a member record, not an owner.
+        if top_org and top_org != email and top_role in ("manager", "member"):
+            org_owner = users.get(top_org)
+            if isinstance(org_owner, dict):
+                return (top_role, top_org, org_owner, top_level)
+
+        return ("owner", email, top_level, top_level)
 
     return (None, None, None, None)
 
@@ -2488,7 +2513,7 @@ def _user_payload(email: str, user: dict) -> dict:
     org_owner = org_owner or {}
     subject = subject or user or {}
 
-    if role == "member":
+    if role and role != "owner":
         base = org_owner
         display_name = subject.get("name", "") or base.get("name", "")
     else:
@@ -2628,42 +2653,82 @@ def login():
     if not isinstance(users, dict):
         return jsonify({"error": "storage_not_ready"}), 500
 
-    # 1) Owner login
+    # Team membership takes priority over a teammate's top-level login record.
+    # This prevents a teammate from being mistaken for an organization owner.
+    team_key = f"user::{email}"
+    team_rec = users.get(team_key)
+    if isinstance(team_rec, dict):
+        owner_email = _norm_email(team_rec.get("org_id") or "")
+        owner_acct = users.get(owner_email) or {}
+        member_login = users.get(email) or {}
+
+        owner_ok = bool(owner_acct) and (
+            (owner_acct.get("status") == "active") or _within_trial(owner_acct, TRIAL_DAYS)
+        )
+        member_active = str(team_rec.get("team_status") or "active").lower() == "active"
+
+        # New teammates use their own password. The owner-password fallback keeps
+        # older invitations working until those accounts reset their password.
+        own_password = member_login.get("password", "")
+        legacy_owner_password = owner_acct.get("password", "")
+        password_ok = bool(own_password and password == own_password)
+        if not own_password:
+            password_ok = bool(legacy_owner_password and password == legacy_owner_password)
+
+        if owner_ok and member_active and password_ok:
+            now_iso = datetime.datetime.now(datetime.timezone.utc).isoformat().replace("+00:00", "Z")
+            team_rec["last_login"] = now_iso
+            users[team_key] = team_rec
+
+            if not isinstance(member_login, dict) or not member_login:
+                member_login = {
+                    "email": email,
+                    "name": team_rec.get("name") or email.split("@")[0].title(),
+                    "role": team_rec.get("role", "member"),
+                    "org_id": owner_email,
+                    "status": "active",
+                }
+            member_login["last_login"] = now_iso
+            users[email] = member_login
+            save_users(users)
+
+            member_user = {
+                "email": email,
+                "name": team_rec.get("name") or member_login.get("name") or email.split("@")[0].title(),
+                "business": owner_acct.get("business", ""),
+                "businessType": owner_acct.get("businessType", ""),
+                "teamSize": owner_acct.get("teamSize", ""),
+                "logo": owner_acct.get("logo") or owner_acct.get("picture") or "",
+                "status": "active",
+                "role": team_rec.get("role", "member"),
+                "org_id": owner_email,
+            }
+            return jsonify({"message": "Login successful", "user": _user_payload(email, member_user)}), 200
+
+        return jsonify({"error": "Invalid credentials or account not active"}), 401
+
+    # Organization owner login.
     user = users.get(email)
-    if user:
+    if isinstance(user, dict):
         allowed = (user.get("password") == password) and (
             (user.get("status") == "active") or _within_trial(user, TRIAL_DAYS)
         )
         if allowed:
+            now_iso = datetime.datetime.now(datetime.timezone.utc).isoformat().replace("+00:00", "Z")
+            user["last_login"] = now_iso
+            users[email] = user
+
+            # Keep an older user::<owner> mirror in sync when it exists.
+            owner_team_key = f"user::{email}"
+            owner_team_rec = users.get(owner_team_key)
+            if isinstance(owner_team_rec, dict) and str(owner_team_rec.get("role") or "").lower() == "owner":
+                owner_team_rec["last_login"] = now_iso
+                users[owner_team_key] = owner_team_rec
+
+            save_users(users)
             return jsonify({"message": "Login successful", "user": _user_payload(email, user)}), 200
 
-    # 2) Member login with owner's password
-    team_key = f"user::{email}"
-    team_rec = users.get(team_key)
-    if not team_rec:
-        return jsonify({"error": "Invalid credentials or account not active"}), 401
-
-    owner_email = _norm_email(team_rec.get("org_id") or "")
-    owner_acct = users.get(owner_email) or {}
-    owner_pw = owner_acct.get("password", "")
-    owner_ok = (owner_acct.get("status") == "active") or _within_trial(owner_acct, TRIAL_DAYS)
-
-    if not (owner_pw and password == owner_pw and owner_ok):
-        return jsonify({"error": "Invalid credentials or account not active"}), 401
-
-    member_user = {
-        "email": email,
-        "name": team_rec.get("name") or (email.split("@")[0].title()),
-        "business": owner_acct.get("business", ""),
-        "businessType": owner_acct.get("businessType", ""),
-        "teamSize": owner_acct.get("teamSize", ""),
-        "logo": owner_acct.get("logo") or owner_acct.get("picture") or "",
-        "status": "active",
-        "role": team_rec.get("role", "member"),
-        "org_id": owner_acct.get("org_id") or owner_email,
-    }
-
-    return jsonify({"message": "Login successful", "user": _user_payload(email, member_user)}), 200
+    return jsonify({"error": "Invalid credentials or account not active"}), 401
 
 @app.route("/api/oauth/google", methods=["POST"])
 def google_oauth():
@@ -5184,6 +5249,120 @@ def get_user_profile_route():
         }
     })
 
+# --- LIVE automation test route ---
+@app.route("/api/automations/test-live", methods=["POST", "OPTIONS"])
+def automations_test_live():
+    if request.method == "OPTIONS":
+        return ("", 204)
+
+    try:
+        user_email = (
+            request.headers.get("X-User-Email")
+            or request.headers.get("x-user-email")
+            or ""
+        ).strip().lower()
+
+        data = request.get_json(silent=True) or {}
+        lead_email = (data.get("lead_email") or data.get("leadEmail") or "").strip().lower()
+        flow = data.get("flow") or {}
+        ignore_waits = bool(data.get("ignore_waits", True))
+        ignore_quiet_hours = bool(data.get("ignore_quiet_hours", True))
+        bypass_rate_limits = bool(data.get("bypass_rate_limits", True))
+
+        if not user_email:
+            return jsonify({"ok": False, "error": "missing_user_email"}), 400
+
+        if not lead_email:
+            return jsonify({"ok": False, "error": "missing_lead_email"}), 400
+
+        if not isinstance(flow, dict) or not flow:
+            return jsonify({"ok": False, "error": "missing_flow"}), 400
+
+        all_leads = load_leads() or {}
+        user_leads = all_leads.get(user_email, []) or []
+
+        lead = None
+        for item in user_leads:
+            if (item.get("email") or "").strip().lower() == lead_email:
+                lead = item
+                break
+
+        if not lead:
+            return jsonify({"ok": False, "error": "lead_not_found"}), 404
+
+        profile = load_user_profile(user_email) or {}
+        steps = flow.get("steps", []) or []
+
+        run = {
+            "step": 0,
+            "done": False,
+            "started_at": datetime.datetime.utcnow().isoformat() + "Z",
+            "events": [],
+        }
+
+        caps = flow.get("caps", {"per_lead_per_day": 1, "respect_quiet_hours": True}) or {}
+        did = []
+
+        for step in steps:
+            step_type = (step.get("type") or "").strip()
+
+            if not step_type:
+                continue
+
+            # ignore waits for testing
+            if step_type == "wait" and ignore_waits:
+                did.append({
+                    "type": "wait",
+                    "status": "skipped_for_test",
+                    "info": {
+                        "days": step.get("days", 0),
+                        "hours": step.get("hours", 0),
+                        "minutes": step.get("minutes", 0),
+                    },
+                })
+                continue
+
+            # direct live execution through your existing step executor
+            progressed = execute_step(
+                flow=flow,
+                step=step,
+                lead=lead,
+                run=run,
+                caps={
+                    **caps,
+                    "respect_quiet_hours": False if ignore_quiet_hours else caps.get("respect_quiet_hours", True),
+                    "per_lead_per_day": 999 if bypass_rate_limits else caps.get("per_lead_per_day", 1),
+                },
+                profile=profile,
+            )
+
+            event = None
+            if isinstance(run.get("events"), list) and run["events"]:
+                event = run["events"][-1]
+
+            did.append({
+                "type": step_type,
+                "status": "ok" if progressed else "no_action",
+                "info": event or {},
+            })
+
+            if progressed:
+                advance(run)
+
+        return jsonify({
+            "ok": True,
+            "mode": "execute",
+            "lead_email": lead_email,
+            "did": did,
+            "run": run,
+        }), 200
+
+    except Exception as e:
+        return jsonify({
+            "ok": False,
+            "error": str(e)[:500],
+        }), 500
+        
 def _vp_int(v, name):
     if v is None or v == "":
         return None
