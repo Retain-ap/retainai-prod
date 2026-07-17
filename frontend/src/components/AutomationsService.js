@@ -1,10 +1,10 @@
 // frontend/src/components/AutomationsService.js
 import { apiUrl } from "../apiBase";
 
-const ROOT = apiUrl("automations");
+const ROOT = apiUrl("automations/");
 
 async function request(path = "", { method = "GET", body, userEmail, query } = {}) {
-  const suffix = path ? `/${String(path).replace(/^\/+/, "")}` : "";
+  const suffix = path ? String(path).replace(/^\/+/, "") : "";
   const params = new URLSearchParams();
   Object.entries(query || {}).forEach(([key, value]) => {
     if (value !== undefined && value !== null && value !== "") {
