@@ -17,6 +17,14 @@ import {
   FaClock,
   FaCrown,
   FaCheckCircle,
+  FaEnvelope,
+  FaLifeRing,
+  FaCreditCard,
+  FaWhatsapp,
+  FaRobot,
+  FaShieldAlt,
+  FaArrowRight,
+  FaExternalLinkAlt,
 } from "react-icons/fa";
 import { SiInstagram } from "react-icons/si";
 import "./settings.css";
@@ -168,6 +176,7 @@ export default function Settings({
   const [saving, setSaving] = useState(false);
   const [info, setInfo] = useState("");
   const [profileBackendOk, setProfileBackendOk] = useState(null);
+  const [supportCopied, setSupportCopied] = useState(false);
 
   useEffect(() => {
     if (initialTab && TABS.some((t) => t.key === initialTab)) {
@@ -440,6 +449,66 @@ export default function Settings({
     }
   }, [form, profile, refreshUser, syncProfileFromBackend]);
 
+  const supportEmail = "owner@retainai.ca";
+  const supportMailto = useMemo(() => {
+    const business = profile?.business || profile?.businessName || "";
+    const subject = business
+      ? `RetainAI support request — ${business}`
+      : "RetainAI support request";
+    const body = [
+      "Hi RetainAI Support,",
+      "",
+      "I need help with:",
+      "",
+      "What I expected to happen:",
+      "",
+      "What actually happened:",
+      "",
+      `Account email: ${profile?.email || ""}`,
+      `Business: ${business || "Not provided"}`,
+      `Account role: ${profile?.role || "Not available"}`,
+      "Browser / device:",
+      "",
+      "I have attached a screenshot if relevant.",
+    ].join("\n");
+
+    return `mailto:${supportEmail}?subject=${encodeURIComponent(
+      subject
+    )}&body=${encodeURIComponent(body)}`;
+  }, [profile?.business, profile?.businessName, profile?.email, profile?.role]);
+
+  const supportTopicMailto = useCallback(
+    (topic) => {
+      const business = profile?.business || profile?.businessName || "";
+      const subject = `RetainAI support — ${topic}`;
+      const body = [
+        "Hi RetainAI Support,",
+        "",
+        `I need help with ${topic.toLowerCase()}:`,
+        "",
+        "Details:",
+        "",
+        `Account email: ${profile?.email || ""}`,
+        `Business: ${business || "Not provided"}`,
+      ].join("\n");
+
+      return `mailto:${supportEmail}?subject=${encodeURIComponent(
+        subject
+      )}&body=${encodeURIComponent(body)}`;
+    },
+    [profile?.business, profile?.businessName, profile?.email]
+  );
+
+  const copySupportEmail = useCallback(async () => {
+    try {
+      await navigator.clipboard.writeText(supportEmail);
+      setSupportCopied(true);
+      window.setTimeout(() => setSupportCopied(false), 1800);
+    } catch {
+      window.prompt("Copy this support email:", supportEmail);
+    }
+  }, []);
+
   const leftOffset = sidebarCollapsed ? 60 : 245;
   const settingsWidth = `calc(100vw - ${leftOffset}px)`;
   const MAX_W = 1000;
@@ -680,12 +749,207 @@ export default function Settings({
         )}
 
         {tab === "help" && (
-          <div style={{ maxWidth: MAX_W, margin: "0 auto" }}>
-            <h2>Help & Support</h2>
-            <p className="help-line">
-              If you need anything, email{" "}
-              <a href="mailto:owner@retainai.ca">owner@retainai.ca</a>.
-            </p>
+          <div
+            className="help-support-page fade-in"
+            style={{ maxWidth: MAX_W, margin: "0 auto" }}
+          >
+            <section className="help-support-hero">
+              <div className="help-support-hero-copy">
+                <div className="help-eyebrow">
+                  <FaLifeRing aria-hidden="true" />
+                  RetainAI Support
+                </div>
+                <h2>How can we help?</h2>
+                <p>
+                  Get help with your account, team, billing, integrations,
+                  messages, and automations. Your account details are included
+                  automatically when you email support.
+                </p>
+              </div>
+
+              <a className="help-primary-btn" href={supportMailto}>
+                <FaEnvelope aria-hidden="true" />
+                Email support
+                <FaExternalLinkAlt
+                  className="help-btn-trailing-icon"
+                  aria-hidden="true"
+                />
+              </a>
+            </section>
+
+            <div className="help-overview-grid">
+              <section className="help-panel help-contact-panel">
+                <div className="help-panel-icon">
+                  <FaEnvelope aria-hidden="true" />
+                </div>
+                <div className="help-panel-copy">
+                  <div className="help-panel-kicker">Direct support</div>
+                  <h3>Talk to the RetainAI team</h3>
+                  <p>
+                    Send us the issue, what you expected, and a screenshot when
+                    possible. The email button prepares a useful support request
+                    for you.
+                  </p>
+
+                  <div className="help-email-row">
+                    <a href={`mailto:${supportEmail}`}>{supportEmail}</a>
+                    <button
+                      type="button"
+                      className="help-copy-btn"
+                      onClick={copySupportEmail}
+                      aria-label="Copy support email"
+                    >
+                      {supportCopied ? (
+                        <FaCheckCircle aria-hidden="true" />
+                      ) : (
+                        <FaCopy aria-hidden="true" />
+                      )}
+                      {supportCopied ? "Copied" : "Copy"}
+                    </button>
+                  </div>
+                </div>
+              </section>
+
+              <aside className="help-panel help-account-panel">
+                <div className="help-account-heading">
+                  <div>
+                    <div className="help-panel-kicker">Support profile</div>
+                    <h3>Your account details</h3>
+                  </div>
+                  <span className="help-account-status">Active session</span>
+                </div>
+
+                <dl className="help-account-list">
+                  <div>
+                    <dt>Account email</dt>
+                    <dd>{profile?.email || "—"}</dd>
+                  </div>
+                  <div>
+                    <dt>Business</dt>
+                    <dd>
+                      {profile?.business || profile?.businessName || "Not set"}
+                    </dd>
+                  </div>
+                  <div>
+                    <dt>Role</dt>
+                    <dd className="help-role-value">
+                      {profile?.role || "Owner"}
+                    </dd>
+                  </div>
+                </dl>
+              </aside>
+            </div>
+
+            <section className="help-section">
+              <div className="help-section-heading">
+                <div>
+                  <div className="help-panel-kicker">Quick help</div>
+                  <h3>Choose what you need help with</h3>
+                </div>
+                <p>Open the right settings page or start a prepared email.</p>
+              </div>
+
+              <div className="help-topic-grid">
+                <button
+                  type="button"
+                  className="help-topic-card"
+                  onClick={() => setTab("team")}
+                >
+                  <span className="help-topic-icon">
+                    <FaUsers aria-hidden="true" />
+                  </span>
+                  <span className="help-topic-copy">
+                    <strong>Account & team</strong>
+                    <small>Invites, roles, access, and profile questions.</small>
+                  </span>
+                  <FaArrowRight className="help-topic-arrow" aria-hidden="true" />
+                </button>
+
+                <button
+                  type="button"
+                  className="help-topic-card"
+                  onClick={() => setTab("integrations")}
+                >
+                  <span className="help-topic-icon">
+                    <FaPlug aria-hidden="true" />
+                  </span>
+                  <span className="help-topic-copy">
+                    <strong>Integrations</strong>
+                    <small>Calendar, Stripe, WhatsApp, and connection status.</small>
+                  </span>
+                  <FaArrowRight className="help-topic-arrow" aria-hidden="true" />
+                </button>
+
+                <a
+                  className="help-topic-card"
+                  href={supportTopicMailto("Billing and invoices")}
+                >
+                  <span className="help-topic-icon">
+                    <FaCreditCard aria-hidden="true" />
+                  </span>
+                  <span className="help-topic-copy">
+                    <strong>Billing & invoices</strong>
+                    <small>Subscriptions, payments, invoices, or payouts.</small>
+                  </span>
+                  <FaArrowRight className="help-topic-arrow" aria-hidden="true" />
+                </a>
+
+                <a
+                  className="help-topic-card"
+                  href={supportTopicMailto("Automations and messaging")}
+                >
+                  <span className="help-topic-icon">
+                    <FaRobot aria-hidden="true" />
+                  </span>
+                  <span className="help-topic-copy">
+                    <strong>Automations & messages</strong>
+                    <small>Flow errors, templates, WhatsApp, and email sends.</small>
+                  </span>
+                  <FaArrowRight className="help-topic-arrow" aria-hidden="true" />
+                </a>
+              </div>
+            </section>
+
+            <div className="help-lower-grid">
+              <section className="help-panel help-faq-panel">
+                <div className="help-panel-kicker">Before you email</div>
+                <h3>Information that helps us solve it faster</h3>
+
+                <div className="help-checklist">
+                  <div>
+                    <FaCheckCircle aria-hidden="true" />
+                    <span>What page you were on and what you clicked.</span>
+                  </div>
+                  <div>
+                    <FaCheckCircle aria-hidden="true" />
+                    <span>What you expected and what happened instead.</span>
+                  </div>
+                  <div>
+                    <FaCheckCircle aria-hidden="true" />
+                    <span>A screenshot and the approximate time of the issue.</span>
+                  </div>
+                  <div>
+                    <FaCheckCircle aria-hidden="true" />
+                    <span>The affected lead or teammate email, when relevant.</span>
+                  </div>
+                </div>
+              </section>
+
+              <aside className="help-panel help-security-panel">
+                <div className="help-security-icon">
+                  <FaShieldAlt aria-hidden="true" />
+                </div>
+                <div>
+                  <div className="help-panel-kicker">Stay secure</div>
+                  <h3>Never send sensitive credentials</h3>
+                  <p>
+                    RetainAI support will never need your password, one-time
+                    verification code, Stripe secret key, or WhatsApp access
+                    token. Redact private customer information from screenshots.
+                  </p>
+                </div>
+              </aside>
+            </div>
           </div>
         )}
       </main>
@@ -1273,3 +1537,4 @@ function TeamTab({ ownerEmail, userEmail, maxWidth, canManageTeam, currentRole }
     </div>
   );
 }
+
