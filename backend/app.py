@@ -3419,11 +3419,104 @@ def wa_send_text(to_number: str, body: str):
     return resp
 
 
+def wa_extract_template_metadata(template: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+    """Return normalized template metadata used by both the UI and send preflight."""
+    template = template if isinstance(template, dict) else {}
+    components = template.get("components") or []
+    if not isinstance(components, list):
+        components = []
+
+    body = next(
+        (c for c in components if isinstance(c, dict) and str(c.get("type") or "").upper() == "BODY"),
+        {},
+    ) or {}
+    body_text = str(body.get("text") or "")
+    body_tokens = re.findall(r"\{\{\s*([^{}]+?)\s*\}\}", body_text)
+
+    numeric_indexes = []
+    named_tokens = []
+    for token in body_tokens:
+        token = str(token or "").strip()
+        if token.isdigit():
+            numeric_indexes.append(int(token))
+        elif token and token not in named_tokens:
+            named_tokens.append(token)
+
+    if numeric_indexes:
+        body_param_count = max(numeric_indexes)
+        body_param_keys = [str(i) for i in range(1, body_param_count + 1)]
+        parameter_format = "POSITIONAL"
+    else:
+        body_param_keys = named_tokens
+        body_param_count = len(body_param_keys)
+        parameter_format = "NAMED" if body_param_keys else str(template.get("parameter_format") or "POSITIONAL").upper()
+
+    body_example = body.get("example") or {}
+    sample_values: List[str] = []
+    raw_examples = body_example.get("body_text") if isinstance(body_example, dict) else None
+    if isinstance(raw_examples, list) and raw_examples:
+        first_example = raw_examples[0]
+        if isinstance(first_example, list):
+            sample_values = [str(v) for v in first_example]
+        else:
+            sample_values = [str(v) for v in raw_examples]
+
+    header = next(
+        (c for c in components if isinstance(c, dict) and str(c.get("type") or "").upper() == "HEADER"),
+        {},
+    ) or {}
+    header_format = str(header.get("format") or "TEXT").upper()
+    header_text = str(header.get("text") or "")
+    header_param_count = len(set(re.findall(r"\{\{\s*([^{}]+?)\s*\}\}", header_text)))
+    media_header_required = header_format in {"IMAGE", "VIDEO", "DOCUMENT", "LOCATION"}
+
+    button_param_count = 0
+    buttons_component = next(
+        (c for c in components if isinstance(c, dict) and str(c.get("type") or "").upper() == "BUTTONS"),
+        {},
+    ) or {}
+    buttons = buttons_component.get("buttons") or []
+    if isinstance(buttons, list):
+        for button in buttons:
+            if not isinstance(button, dict):
+                continue
+            url = str(button.get("url") or "")
+            button_param_count += len(set(re.findall(r"\{\{\s*([^{}]+?)\s*\}\}", url)))
+
+    unsupported_reasons = []
+    if media_header_required:
+        unsupported_reasons.append(f"dynamic {header_format.lower()} header")
+    if header_param_count:
+        unsupported_reasons.append(f"{header_param_count} header parameter(s)")
+    if button_param_count:
+        unsupported_reasons.append(f"{button_param_count} dynamic button parameter(s)")
+
+    return {
+        "name": template.get("name"),
+        "language": template.get("language"),
+        "normalized_language": wa_normalize_lang(template.get("language") or ""),
+        "status": str(template.get("status") or "").upper(),
+        "category": template.get("category"),
+        "parameter_format": parameter_format,
+        "components": components,
+        "body_text": body_text,
+        "body_param_count": int(body_param_count or 0),
+        "body_param_keys": body_param_keys,
+        "body_example_params": sample_values,
+        "header_param_count": int(header_param_count or 0),
+        "button_param_count": int(button_param_count or 0),
+        "media_header_required": bool(media_header_required),
+        "supported_by_automations": not unsupported_reasons,
+        "unsupported_reason": ", ".join(unsupported_reasons),
+    }
+
+
 def wa_send_template(
     to_number: str,
     template_name: str,
     lang_code: str,
-    parameters: Optional[List[Any]] = None
+    parameters: Optional[List[Any]] = None,
+    expected_body_param_count: Optional[int] = None,
 ):
     to = wa_norm_number(to_number)
     token, phone_id = wa_env()
@@ -3431,11 +3524,29 @@ def wa_send_template(
     url = f"https://graph.facebook.com/{ver}/{phone_id}/messages"
     headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
 
-    components = []
+    clean_parameters: List[str] = []
     if parameters is not None:
+        if not isinstance(parameters, list):
+            raise ValueError("WhatsApp template parameters must be a list")
+        clean_parameters = [str(p).strip() if p is not None else "" for p in parameters]
+
+    if expected_body_param_count is not None:
+        expected = max(0, int(expected_body_param_count or 0))
+        if len(clean_parameters) != expected:
+            raise ValueError(
+                f"Template '{template_name}' expects {expected} body parameter(s), "
+                f"but {len(clean_parameters)} were provided."
+            )
+        if expected and any(not value for value in clean_parameters):
+            raise ValueError(
+                f"Template '{template_name}' has one or more empty required body parameters."
+            )
+
+    components = []
+    if clean_parameters:
         components = [{
             "type": "body",
-            "parameters": [{"type": "text", "text": str(p)} for p in parameters]
+            "parameters": [{"type": "text", "text": value} for value in clean_parameters]
         }]
 
     payload = {
@@ -3544,25 +3655,7 @@ def whatsapp_template_info():
         out = []
 
         def build_template_row(t: dict) -> dict:
-            components = t.get("components") or []
-            body_comp = next(
-                (c for c in components if str(c.get("type") or "").upper() == "BODY"),
-                {}
-            )
-            body_text = body_comp.get("text") or ""
-            matches = re.findall(r"\{\{\s*(\d+)\s*\}\}", body_text)
-            body_param_count = max([int(x) for x in matches], default=0)
-
-            return {
-                "name": t.get("name"),
-                "language": t.get("language"),
-                "normalized_language": wa_normalize_lang(t.get("language") or ""),
-                "status": (t.get("status") or "").upper(),
-                "category": t.get("category"),
-                "components": components,
-                "body_text": body_text,
-                "body_param_count": body_param_count,
-            }
+            return wa_extract_template_metadata(t)
 
         # exact name + optional exact language
         for t in items:
@@ -3814,7 +3907,62 @@ def send_whatsapp_message():
                     "availableLanguages": locales
                 }), 409
 
-            resp = wa_send_template(to_number, template_name, used_lang, params)
+            selected_template = next(
+                (
+                    template
+                    for template in items
+                    if (template.get("name") or "") == template_name
+                    and wa_normalize_lang(template.get("language") or "") == used_lang
+                ),
+                None,
+            )
+            template_meta = wa_extract_template_metadata(selected_template)
+            expected_count = int(template_meta.get("body_param_count") or 0)
+            provided_params = params or []
+
+            if not template_meta.get("supported_by_automations", True):
+                return jsonify({
+                    "ok": False,
+                    "error": "This template requires dynamic header or button parameters that are not configured.",
+                    "code": "TEMPLATE_COMPONENTS_UNSUPPORTED",
+                    "template": template_name,
+                    "language": used_lang,
+                    "unsupported_reason": template_meta.get("unsupported_reason"),
+                }), 422
+
+            if len(provided_params) != expected_count:
+                return jsonify({
+                    "ok": False,
+                    "error": (
+                        f"Template '{template_name}' expects {expected_count} body parameter(s), "
+                        f"but {len(provided_params)} were provided."
+                    ),
+                    "code": "TEMPLATE_PARAM_COUNT_MISMATCH",
+                    "template": template_name,
+                    "language": used_lang,
+                    "expected": expected_count,
+                    "received": len(provided_params),
+                    "body_text": template_meta.get("body_text"),
+                    "example_params": template_meta.get("body_example_params") or [],
+                }), 422
+
+            if expected_count and any(not str(value).strip() for value in provided_params):
+                return jsonify({
+                    "ok": False,
+                    "error": "Every required WhatsApp template parameter must have a value.",
+                    "code": "TEMPLATE_PARAM_EMPTY",
+                    "template": template_name,
+                    "language": used_lang,
+                    "expected": expected_count,
+                }), 422
+
+            resp = wa_send_template(
+                to_number,
+                template_name,
+                used_lang,
+                provided_params if expected_count else None,
+                expected_body_param_count=expected_count,
+            )
 
             preview_parts = []
             if params:
@@ -4698,7 +4846,7 @@ def dedupe_ok(key: str) -> bool:
 def choose_wa_template(preferred_name: Optional[str], preferred_lang: Optional[str]):
     name = (preferred_name or os.getenv("WHATSAPP_TEMPLATE_DEFAULT", "")).strip()
     if not name:
-        return None, None, 0
+        return None, None, 0, {}
 
     waba_id = wa_resolve_waba_id()
     r_list = wa_fetch_templates_for_waba(waba_id)
@@ -4707,35 +4855,27 @@ def choose_wa_template(preferred_name: Optional[str], preferred_lang: Optional[s
     requested = wa_normalize_lang(preferred_lang or os.getenv("WHATSAPP_TEMPLATE_LANG", "en"))
     primary = wa_primary_lang(requested)
 
-    locales = []
-    for t in items:
-        if (t.get("name") or "") == name:
-            locales.append({"language": wa_normalize_lang(t.get("language") or ""), "status": (t.get("status") or "").upper()})
+    candidates = []
+    for template in items:
+        if (template.get("name") or "") != name:
+            continue
+        meta = wa_extract_template_metadata(template)
+        candidates.append((template, meta))
 
-    used_lang = requested
-    exact = next((x for x in locales if x["language"] == requested and x["status"] == "APPROVED"), None)
-    if not exact:
-        same_primary = next((x for x in locales if wa_primary_lang(x["language"]) == primary and x["status"] == "APPROVED"), None)
-        any_appr = next((x for x in locales if x["status"] == "APPROVED"), None)
-        used_lang = (same_primary or any_appr or {"language": requested})["language"]
+    approved = [(template, meta) for template, meta in candidates if meta.get("status") == "APPROVED"]
+    exact = next((pair for pair in approved if pair[1].get("normalized_language") == requested), None)
+    same_primary = next(
+        (pair for pair in approved if wa_primary_lang(pair[1].get("normalized_language") or "") == primary),
+        None,
+    )
+    selected = exact or same_primary or (approved[0] if approved else None)
 
-    body_param_count = 0
-    try:
-        for t in items:
-            if (t.get("name") == name) and (wa_normalize_lang(t.get("language") or "") == used_lang):
-                comps = t.get("components") or []
-                body = next((c for c in comps if (c.get("type") or "").upper() == "BODY"), {}) or {}
-                ex = (body.get("example") or {})
-                body_text = None
-                if isinstance(ex.get("body_text"), list) and ex.get("body_text"):
-                    body_text = ex.get("body_text")[0]
-                if isinstance(body_text, str):
-                    body_param_count = len(set(re.findall(r"\{\{(\d+)\}\}", body_text)))
-                break
-    except Exception:
-        body_param_count = 0
+    if not selected:
+        return name, None, 0, {}
 
-    return name, used_lang, int(body_param_count or 0)
+    _, metadata = selected
+    used_lang = metadata.get("normalized_language") or requested
+    return name, used_lang, int(metadata.get("body_param_count") or 0), metadata
 
 def build_wa_params(count: int, lead: dict, profile: dict, run: dict, rendered_text: Optional[str]):
     vals: List[str] = []
@@ -4838,25 +4978,67 @@ def send_whatsapp_with_window(flow, step, lead, run, caps, profile) -> bool:
     template_cfg = step.get("template") or {}
     preferred_name = template_cfg.get("name") or step.get("template_name")
     preferred_lang = template_cfg.get("language") or os.getenv("WHATSAPP_TEMPLATE_LANG", "en")
-    tpl_name, used_lang, pcount = choose_wa_template(preferred_name, preferred_lang)
+    tpl_name, used_lang, pcount, template_meta = choose_wa_template(preferred_name, preferred_lang)
     if not tpl_name or not used_lang:
         create_notification(user_email, "WhatsApp template unavailable",
                             "No approved template/locale available to send outside the 24h window.")
         return True
 
-    explicit_params = []
+    if not template_meta.get("supported_by_automations", True):
+        reason = template_meta.get("unsupported_reason") or "unsupported dynamic header or button parameters"
+        create_notification(
+            user_email,
+            "WhatsApp template needs attention",
+            f"Template '{tpl_name}' cannot run in Automations yet: {reason}.",
+        )
+        return True
+
+    explicit_params: List[str] = []
     raw_params = template_cfg.get("params")
-    if isinstance(raw_params, str):
+    if isinstance(raw_params, list):
+        explicit_params = [str(p).strip() if p is not None else "" for p in raw_params]
+    elif isinstance(raw_params, str):
         explicit_params = [p.strip() for p in raw_params.split(",")]
-    params = explicit_params if explicit_params else build_wa_params(pcount, lead, profile, run, body)
-    params = (params + [""] * pcount)[:pcount]
+
+    if explicit_params:
+        params = [render_text(value, lead, run, profile).strip() for value in explicit_params]
+    else:
+        params = build_wa_params(pcount, lead, profile, run, body)
+
+    if len(params) != pcount:
+        create_notification(
+            user_email,
+            "WhatsApp template parameter mismatch",
+            f"Template '{tpl_name}' expects {pcount} body parameter(s), but the flow provides {len(params)}.",
+        )
+        return True
+
+    if any((not str(value).strip()) or contains_blockers(str(value)) for value in params):
+        create_notification(
+            user_email,
+            "WhatsApp template setup needed",
+            f"Template '{tpl_name}' has an empty or unresolved required parameter. Open the flow and complete every parameter mapping.",
+        )
+        return True
 
     shown = f"[template:{tpl_name}/{used_lang}] {body}"
     try:
-        resp = wa_send_template(to, tpl_name, used_lang, params)
+        resp = wa_send_template(
+            to,
+            tpl_name,
+            used_lang,
+            params if pcount else None,
+            expected_body_param_count=pcount,
+        )
         ok = getattr(resp, "status_code", 500) < 400
     except Exception as e:
-        print("[Automations] WA template send error:", e)
+        try:
+            app.logger.error(
+                "[AUTOMATIONS WA TEMPLATE PREFLIGHT] template=%s language=%s expected=%s provided=%s error=%s",
+                tpl_name, used_lang, pcount, len(params), e,
+            )
+        except Exception:
+            pass
         ok = False
     if ok:
         mark_sent(run, CHANNEL_WHATSAPP)
@@ -5224,6 +5406,108 @@ def _normalize_flow_for_user(flow: Dict[str, Any], user: str) -> Dict[str, Any]:
 
     f["auto_stop_on_reply"] = f.get("auto_stop_on_reply", True) is not False
     return f
+
+
+def _walk_automation_steps(steps: Any, prefix: str = ""):
+    for index, step in enumerate(steps if isinstance(steps, list) else []):
+        if not isinstance(step, dict):
+            continue
+        label = f"{prefix}step {index + 1}"
+        yield label, step
+        nested = step.get("then")
+        if isinstance(nested, list):
+            yield from _walk_automation_steps(nested, f"{label} -> ")
+
+
+def validate_flow_whatsapp_templates(flow: Dict[str, Any]) -> List[str]:
+    """Server-side activation validation so invalid template flows never go live."""
+    whatsapp_steps = [
+        (label, step)
+        for label, step in _walk_automation_steps(flow.get("steps") or [])
+        if step.get("type") == "send_whatsapp"
+    ]
+    if not whatsapp_steps:
+        return []
+
+    try:
+        waba_id = wa_resolve_waba_id()
+        response = wa_fetch_templates_for_waba(waba_id)
+        if not getattr(response, "ok", False):
+            return ["WhatsApp templates could not be verified with Meta. Try again before activating the flow."]
+        items = (response.json() or {}).get("data", []) or []
+    except Exception as exc:
+        return [f"WhatsApp templates could not be verified: {exc}"]
+
+    catalog = [wa_extract_template_metadata(item) for item in items]
+    errors: List[str] = []
+
+    for label, step in whatsapp_steps:
+        config = step.get("template") or {}
+        name = str(config.get("name") or step.get("template_name") or "").strip()
+        requested = wa_normalize_lang(
+            config.get("language") or os.getenv("WHATSAPP_TEMPLATE_LANG", "en")
+        )
+
+        if not name:
+            errors.append(f"{label}: select an approved WhatsApp template fallback.")
+            continue
+
+        candidates = [
+            meta for meta in catalog
+            if meta.get("name") == name and meta.get("status") == "APPROVED"
+        ]
+        exact = next(
+            (meta for meta in candidates if meta.get("normalized_language") == requested),
+            None,
+        )
+        same_primary = next(
+            (
+                meta for meta in candidates
+                if wa_primary_lang(meta.get("normalized_language") or "")
+                == wa_primary_lang(requested)
+            ),
+            None,
+        )
+        selected = exact or same_primary or (candidates[0] if candidates else None)
+
+        if not selected:
+            errors.append(f"{label}: template '{name}' is missing or not approved.")
+            continue
+
+        if not selected.get("supported_by_automations", True):
+            errors.append(
+                f"{label}: template '{name}' requires "
+                f"{selected.get('unsupported_reason') or 'unsupported dynamic components'}."
+            )
+            continue
+
+        expected = int(selected.get("body_param_count") or 0)
+        raw_params = config.get("params")
+        if isinstance(raw_params, list):
+            supplied = [str(value).strip() if value is not None else "" for value in raw_params]
+        elif isinstance(raw_params, str) and raw_params.strip():
+            supplied = [value.strip() for value in raw_params.split(",")]
+        else:
+            supplied = []
+
+        if supplied and len(supplied) != expected:
+            errors.append(
+                f"{label}: template '{name}' expects {expected} body parameter(s), "
+                f"but the flow contains {len(supplied)}."
+            )
+            continue
+
+        if supplied and any(not value for value in supplied):
+            errors.append(f"{label}: complete every parameter mapping for template '{name}'.")
+            continue
+
+        if not supplied and expected > 4:
+            errors.append(
+                f"{label}: template '{name}' expects {expected} parameters. "
+                "Map them explicitly before activation."
+            )
+
+    return errors
 
 automations_bp = Blueprint("automations", __name__)
 
@@ -5818,16 +6102,44 @@ def automations_templates():
 
 @automations_bp.route("/wa/templates", methods=["GET"])
 def list_wa_templates():
-    waba_id = wa_resolve_waba_id()
-    r = wa_fetch_templates_for_waba(waba_id)
+    try:
+        waba_id = wa_resolve_waba_id()
+        r = wa_fetch_templates_for_waba(waba_id)
+    except Exception as exc:
+        return jsonify({
+            "ok": False,
+            "templates": [],
+            "error": f"Unable to resolve WhatsApp templates: {exc}",
+        }), 503
+
     if not getattr(r, "ok", False):
-        return jsonify({"ok": False, "templates": [], "error": "unavailable"}), 503
+        try:
+            details = r.json()
+        except Exception:
+            details = {"raw": getattr(r, "text", "")}
+        return jsonify({
+            "ok": False,
+            "templates": [],
+            "error": "WhatsApp templates are unavailable.",
+            "details": details,
+        }), 503
 
     data = r.json() or {}
     items = data.get("data", []) or []
-    approved = [t for t in items if (t.get("status") or "").upper() == "APPROVED"]
-    approved.sort(key=lambda x: f"{x.get('name','')}-{x.get('language','')}".lower())
-    return jsonify({"ok": True, "templates": approved})
+    templates = [
+        wa_extract_template_metadata(template)
+        for template in items
+        if str(template.get("status") or "").upper() == "APPROVED"
+    ]
+    templates.sort(
+        key=lambda item: f"{item.get('name','')}-{item.get('normalized_language','')}".lower()
+    )
+    return jsonify({
+        "ok": True,
+        "waba_id": waba_id,
+        "templates": templates,
+        "count": len(templates),
+    })
 
 @automations_bp.route("/", methods=["GET"])
 def list_flows_route():
@@ -5841,6 +6153,14 @@ def create_flow_route():
     user = user_from_request()
     body = request.get_json(force=True) or {}
     flow = _normalize_flow_for_user(body.get("flow", {}) or {}, user)
+    if flow.get("enabled"):
+        validation_errors = validate_flow_whatsapp_templates(flow)
+        if validation_errors:
+            return jsonify({
+                "ok": False,
+                "error": "Flow cannot be activated until its WhatsApp templates are valid.",
+                "validation_errors": validation_errors,
+            }), 422
     flows = load_user_flows(user)
     flows.append(flow)
     save_user_flows(user, flows)
@@ -5859,6 +6179,14 @@ def update_flow_route(flow_id):
             merged["id"] = flow_id
             merged["owner"] = user
             merged = _normalize_flow_for_user(merged, user)
+            if merged.get("enabled"):
+                validation_errors = validate_flow_whatsapp_templates(merged)
+                if validation_errors:
+                    return jsonify({
+                        "ok": False,
+                        "error": "Flow cannot be activated until its WhatsApp templates are valid.",
+                        "validation_errors": validation_errors,
+                    }), 422
             flows[i] = merged
             save_user_flows(user, flows)
             return jsonify({"ok": True, "flow": merged})
@@ -5876,6 +6204,14 @@ def enable_flow_route(flow_id):
         if f.get("id") == flow_id:
             f["enabled"] = enabled
             flows[i] = _normalize_flow_for_user(f, user)
+            if enabled:
+                validation_errors = validate_flow_whatsapp_templates(flows[i])
+                if validation_errors:
+                    return jsonify({
+                        "ok": False,
+                        "error": "Flow cannot be activated until its WhatsApp templates are valid.",
+                        "validation_errors": validation_errors,
+                    }), 422
             save_user_flows(user, flows)
             return jsonify({"ok": True, "flow": flows[i]})
 

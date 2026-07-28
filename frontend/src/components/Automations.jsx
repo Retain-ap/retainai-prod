@@ -337,21 +337,82 @@ function buildEmptyFlow(userEmail) {
   );
 }
 
-function splitParams(str) {
-  if (!str) return [];
-  return String(str)
+const WA_DEFAULT_PARAM_TOKENS = [
+  "{{lead.first_name}}",
+  "{{business_name}}",
+  "{{booking_link}}",
+  "{{last_ai_text}}",
+];
+
+const WA_PARAM_TOKEN_OPTIONS = [
+  { label: "First name", value: "{{lead.first_name}}" },
+  { label: "Full name", value: "{{lead.full_name}}" },
+  { label: "Business", value: "{{business_name}}" },
+  { label: "Booking link", value: "{{booking_link}}" },
+  { label: "AI message", value: "{{last_ai_text}}" },
+];
+
+function splitParams(value) {
+  if (Array.isArray(value)) {
+    return value.map((item) => (item == null ? "" : String(item).trim()));
+  }
+  if (!value) return [];
+  return String(value)
     .split(",")
-    .map((s) => s.trim())
-    .filter((s) => s.length || s === "");
+    .map((item) => item.trim());
 }
 
-function joinParams(arr) {
-  return (arr || []).map((s) => (s == null ? "" : String(s))).join(", ");
+function resizeParamValues(value, count, useDefaults = false) {
+  const next = splitParams(value).slice(0, count);
+  while (next.length < count) {
+    const index = next.length;
+    next.push(useDefaults ? WA_DEFAULT_PARAM_TOKENS[index] || "" : "");
+  }
+  return next;
 }
 
 function normalizeWATemplates(raw) {
   if (!Array.isArray(raw)) return [];
   const byName = {};
+
+  const addLanguage = (name, source = {}) => {
+    const code =
+      source.code ||
+      source.normalized_language ||
+      source.language ||
+      "";
+    if (!name || !code) return;
+
+    byName[name] = byName[name] || { name, languages: [] };
+
+    const metadata = {
+      code,
+      status: String(source.status || "APPROVED").toUpperCase(),
+      category: source.category || "",
+      body_params: Number(
+        source.body_param_count ?? source.body_params ?? 0
+      ),
+      body_text: source.body_text || "",
+      body_param_keys: Array.isArray(source.body_param_keys)
+        ? source.body_param_keys.map(String)
+        : [],
+      body_example_params: Array.isArray(source.body_example_params)
+        ? source.body_example_params.map((item) => String(item))
+        : [],
+      parameter_format: source.parameter_format || "POSITIONAL",
+      supported_by_automations: source.supported_by_automations !== false,
+      unsupported_reason: source.unsupported_reason || "",
+    };
+
+    const existingIndex = byName[name].languages.findIndex(
+      (language) => language.code === code
+    );
+    if (existingIndex >= 0) {
+      byName[name].languages[existingIndex] = metadata;
+    } else {
+      byName[name].languages.push(metadata);
+    }
+  };
 
   raw.forEach((item) => {
     if (typeof item === "string") {
@@ -362,31 +423,73 @@ function normalizeWATemplates(raw) {
     const name = item?.name || "";
     if (!name) return;
 
-    byName[name] = byName[name] || { name, languages: [] };
-
     if (Array.isArray(item.languages)) {
-      item.languages.forEach((l) => {
-        if (!l?.code) return;
-        byName[name].languages.push({
-          code: l.code,
-          status: (l.status || "APPROVED").toUpperCase(),
-          body_params: Number(l.body_params ?? 0),
-        });
-      });
-    } else if (item.language) {
-      byName[name].languages.push({
-        code: item.language,
-        status: (item.status || "APPROVED").toUpperCase(),
-        body_params: Number(item.body_params ?? 0),
-      });
+      item.languages.forEach((language) => addLanguage(name, language));
+    } else {
+      addLanguage(name, item);
     }
   });
 
-  Object.values(byName).forEach((t) => {
-    t.languages.sort((a, b) => (a.status === "APPROVED" ? -1 : 1));
+  Object.values(byName).forEach((template) => {
+    template.languages.sort((a, b) => {
+      if (a.supported_by_automations !== b.supported_by_automations) {
+        return a.supported_by_automations ? -1 : 1;
+      }
+      if (a.status !== b.status) return a.status === "APPROVED" ? -1 : 1;
+      return a.code.localeCompare(b.code);
+    });
   });
 
   return Object.values(byName).sort((a, b) => a.name.localeCompare(b.name));
+}
+
+function collectWhatsAppTemplateIssues(flow, rawTemplates) {
+  const templates = normalizeWATemplates(rawTemplates);
+  const issues = [];
+
+  const inspectSteps = (steps, prefix = "") => {
+    (Array.isArray(steps) ? steps : []).forEach((step, index) => {
+      const label = `${prefix}step ${index + 1}`;
+
+      if (step?.type === "send_whatsapp") {
+        const config = step.template || {};
+        if (!config.name) {
+          issues.push(`${label}: select an approved WhatsApp template fallback.`);
+        } else {
+          const template = templates.find((item) => item.name === config.name);
+          const language =
+            template?.languages.find((item) => item.code === config.language) ||
+            template?.languages[0];
+
+          if (!template || !language) {
+            issues.push(`${label}: template “${config.name}” is no longer available.`);
+          } else if (!language.supported_by_automations) {
+            issues.push(
+              `${label}: template “${config.name}” needs ${
+                language.unsupported_reason || "unsupported dynamic components"
+              }.`
+            );
+          } else {
+            const values = resizeParamValues(config.params, language.body_params);
+            if (values.length !== language.body_params) {
+              issues.push(
+                `${label}: template “${config.name}” expects ${language.body_params} parameter(s).`
+              );
+            } else if (values.some((value) => !String(value || "").trim())) {
+              issues.push(`${label}: complete every template parameter mapping.`);
+            }
+          }
+        }
+      }
+
+      if (Array.isArray(step?.then)) {
+        inspectSteps(step.then, `${label} → `);
+      }
+    });
+  };
+
+  inspectSteps(flow?.steps || []);
+  return issues;
 }
 
 function humanStepLabel(step) {
@@ -586,18 +689,45 @@ function StepCard({ step, onChange, onRemove, waTemplates }) {
   }, [selectedTpl, waTpl.language]);
 
   const paramCount = Number(selectedLangMeta?.body_params || 0);
-
-  const paramsArray = useMemo(() => {
-    const arr = splitParams(waTpl.params);
-    while (arr.length < paramCount) arr.push("");
-    return arr.slice(0, paramCount);
-  }, [waTpl.params, paramCount]);
+  const paramsArray = useMemo(
+    () => resizeParamValues(waTpl.params, paramCount),
+    [waTpl.params, paramCount]
+  );
+  const filledParamCount = paramsArray.filter((value) =>
+    String(value || "").trim()
+  ).length;
+  const templateSupported = selectedLangMeta?.supported_by_automations !== false;
+  const templateReady =
+    !!waTpl.name &&
+    !!selectedLangMeta &&
+    templateSupported &&
+    filledParamCount === paramCount;
 
   const fillCommonParams = () => {
-    const commons = ["{{lead.first_name}}", "{{business_name}}", "{{booking_link}}", "{{last_ai_text}}"];
-    const out = [];
-    for (let i = 0; i < paramCount; i++) out.push(commons[i] || "");
-    setTpl({ params: joinParams(out) });
+    setTpl({ params: resizeParamValues([], paramCount, true) });
+  };
+
+  const selectTemplate = (name) => {
+    const template = normalizedTemplates.find((item) => item.name === name);
+    const language =
+      template?.languages.find((item) => item.supported_by_automations) ||
+      template?.languages[0] ||
+      null;
+    const count = Number(language?.body_params || 0);
+    setTpl({
+      name,
+      language: language?.code || "en_US",
+      params: resizeParamValues([], count, true),
+    });
+  };
+
+  const selectLanguage = (code) => {
+    const language = selectedTpl?.languages.find((item) => item.code === code);
+    const count = Number(language?.body_params || 0);
+    setTpl({
+      language: code,
+      params: resizeParamValues(waTpl.params, count, true),
+    });
   };
 
   return (
@@ -657,78 +787,128 @@ function StepCard({ step, onChange, onRemove, waTemplates }) {
       )}
 
       {step.type === "send_whatsapp" && (
-        <div style={{ display: "grid", gap: 12 }}>
-          <Field label="WhatsApp message">
-            <TextArea
-              ref={waBodyRef}
-              rows={4}
-              value={step.text || ""}
-              onChange={(e) => set({ text: e.target.value })}
-              placeholder="Use {{last_ai_text}} or include {{booking_link}} / {{business_name}}"
-            />
-          </Field>
+        <div style={{ display: "grid", gap: 14 }}>
+          <div
+            style={{
+              ...softCard,
+              padding: 14,
+              background: "#1c1e20",
+              display: "grid",
+              gap: 12,
+            }}
+          >
+            <div>
+              <div style={{ color: C.text, fontWeight: 900 }}>Message inside the 24-hour window</div>
+              <div style={{ color: C.muted, fontSize: 12, marginTop: 4, lineHeight: 1.5 }}>
+                RetainAI sends this regular message when the lead has contacted you within the last 24 hours.
+              </div>
+            </div>
 
-          <TokenRow onInsert={(t) => insertToken(waBodyRef, t, "text")} />
+            <Field label="WhatsApp message">
+              <TextArea
+                ref={waBodyRef}
+                rows={4}
+                value={step.text || ""}
+                onChange={(e) => set({ text: e.target.value })}
+                placeholder="Use {{last_ai_text}} or write a message with your business and booking link."
+              />
+            </Field>
 
-          <div style={{ ...softCard, padding: 12, background: "#1d1f20" }}>
-            <div style={{ display: "flex", justifyContent: "space-between", gap: 12, alignItems: "center", marginBottom: 10 }}>
-              <div>
-                <div style={{ color: C.text, fontWeight: 800 }}>Template fallback</div>
-                <div style={{ color: C.muted, fontSize: 12, marginTop: 2 }}>
-                  Used outside the 24-hour WhatsApp window
+            <TokenRow onInsert={(token) => insertToken(waBodyRef, token, "text")} />
+          </div>
+
+          <div
+            style={{
+              ...softCard,
+              padding: 16,
+              background: "#191b1d",
+              borderColor: waTpl.name
+                ? templateReady
+                  ? "rgba(48,180,108,0.55)"
+                  : "rgba(247,203,83,0.48)"
+                : C.border,
+              display: "grid",
+              gap: 14,
+            }}
+          >
+            <div
+              style={{
+                display: "flex",
+                justifyContent: "space-between",
+                alignItems: "flex-start",
+                gap: 14,
+                flexWrap: "wrap",
+              }}
+            >
+              <div style={{ minWidth: 0 }}>
+                <div style={{ color: C.text, fontWeight: 900, fontSize: 16 }}>
+                  Approved template fallback
+                </div>
+                <div style={{ color: C.muted, fontSize: 12, marginTop: 4, lineHeight: 1.5 }}>
+                  Required when the 24-hour customer-service window is closed. The parameter count must exactly match Meta's approved template.
                 </div>
               </div>
-              <label style={{ display: "inline-flex", alignItems: "center", gap: 8, fontSize: 12, color: C.muted }}>
+
+              <label
+                style={{
+                  display: "inline-flex",
+                  alignItems: "center",
+                  gap: 8,
+                  color: C.muted,
+                  fontSize: 12,
+                  fontWeight: 800,
+                  cursor: "pointer",
+                }}
+              >
                 <input
                   type="checkbox"
-                  checked={!!(waTpl.name || waTpl.language || waTpl.params)}
+                  checked={!!waTpl.name}
                   onChange={(e) => {
                     if (e.target.checked) {
-                      const first = normalizedTemplates[0];
-                      setTpl({
-                        name: waTpl.name || first?.name || "",
-                        language: waTpl.language || first?.languages?.[0]?.code || "en_US",
-                        params: waTpl.params || "",
-                      });
+                      const first = normalizedTemplates.find((template) =>
+                        template.languages.some((language) => language.supported_by_automations)
+                      ) || normalizedTemplates[0];
+                      selectTemplate(first?.name || "");
                     } else {
                       set({ template: undefined });
                     }
                   }}
                 />
-                Enable
+                Enabled
               </label>
             </div>
 
-            {waTpl.name || waTpl.language || waTpl.params ? (
-              <div style={{ display: "grid", gap: 10 }}>
+            {!normalizedTemplates.length ? (
+              <div
+                style={{
+                  border: "1px solid rgba(255,188,188,0.25)",
+                  background: "rgba(58,17,17,0.5)",
+                  color: C.redTxt,
+                  borderRadius: 12,
+                  padding: 12,
+                  fontSize: 13,
+                  lineHeight: 1.5,
+                }}
+              >
+                No approved WhatsApp templates were returned. Check the Connected Accounts page and confirm the WABA ID, access token, and approved templates in Meta.
+              </div>
+            ) : null}
+
+            {waTpl.name ? (
+              <div style={{ display: "grid", gap: 14 }}>
                 <div
                   style={{
                     display: "grid",
-                    gridTemplateColumns: "minmax(0,1.4fr) minmax(0,1fr) minmax(120px,0.7fr)",
+                    gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))",
                     gap: 10,
                   }}
                 >
                   <Field label="Template">
-                    <Select
-                      value={waTpl.name || ""}
-                      onChange={(e) => {
-                        const name = e.target.value;
-                        const tpl = normalizedTemplates.find((t) => t.name === name);
-                        const lang = tpl?.languages?.[0]?.code || "en_US";
-                        const patch = { name, language: lang };
-
-                        if ((tpl?.languages?.[0]?.body_params || 0) > 0) {
-                          const commons = ["{{lead.first_name}}", "{{business_name}}", "{{booking_link}}", "{{last_ai_text}}"];
-                          patch.params = joinParams(commons.slice(0, tpl.languages[0].body_params));
-                        }
-
-                        setTpl(patch);
-                      }}
-                    >
-                      <option value="">Select…</option>
-                      {normalizedTemplates.map((n) => (
-                        <option key={n.name} value={n.name}>
-                          {n.name}
+                    <Select value={waTpl.name || ""} onChange={(e) => selectTemplate(e.target.value)}>
+                      <option value="">Select an approved template…</option>
+                      {normalizedTemplates.map((template) => (
+                        <option key={template.name} value={template.name}>
+                          {template.name}
                         </option>
                       ))}
                     </Select>
@@ -737,63 +917,238 @@ function StepCard({ step, onChange, onRemove, waTemplates }) {
                   <Field label="Language">
                     <Select
                       value={waTpl.language || selectedTpl?.languages?.[0]?.code || "en_US"}
-                      onChange={(e) => setTpl({ language: e.target.value })}
+                      onChange={(e) => selectLanguage(e.target.value)}
                     >
-                      {(selectedTpl?.languages || []).map((l) => (
-                        <option key={l.code} value={l.code}>
-                          {l.code}
+                      {(selectedTpl?.languages || []).map((language) => (
+                        <option key={language.code} value={language.code}>
+                          {language.code}
+                          {language.supported_by_automations ? "" : " — needs advanced setup"}
                         </option>
                       ))}
-                      {!selectedTpl?.languages?.length && <option value="en_US">en_US</option>}
                     </Select>
-                  </Field>
-
-                  <Field label="Params">
-                    <Input readOnly value={paramCount} />
                   </Field>
                 </div>
 
-                {paramCount > 0 ? (
+                {selectedLangMeta ? (
                   <>
-                    <div style={{ display: "grid", gridTemplateColumns: "repeat(2, minmax(0,1fr))", gap: 10 }}>
-                      {paramsArray.map((val, i) => (
-                        <Input
-                          key={i}
-                          value={val}
-                          onChange={(e) => {
-                            const next = [...paramsArray];
-                            next[i] = e.target.value;
-                            setTpl({ params: joinParams(next) });
+                    <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+                      <span
+                        style={{
+                          borderRadius: 999,
+                          padding: "5px 9px",
+                          background: "rgba(48,180,108,0.13)",
+                          border: "1px solid rgba(48,180,108,0.35)",
+                          color: C.green,
+                          fontSize: 11,
+                          fontWeight: 900,
+                        }}
+                      >
+                        Approved
+                      </span>
+                      <span
+                        style={{
+                          borderRadius: 999,
+                          padding: "5px 9px",
+                          background: "rgba(247,203,83,0.1)",
+                          border: "1px solid rgba(247,203,83,0.28)",
+                          color: C.gold,
+                          fontSize: 11,
+                          fontWeight: 900,
+                        }}
+                      >
+                        {paramCount} body variable{paramCount === 1 ? "" : "s"}
+                      </span>
+                      {selectedLangMeta.category ? (
+                        <span
+                          style={{
+                            borderRadius: 999,
+                            padding: "5px 9px",
+                            background: "rgba(170,176,182,0.08)",
+                            border: `1px solid ${C.border}`,
+                            color: C.muted,
+                            fontSize: 11,
+                            fontWeight: 900,
                           }}
-                          placeholder={
-                            i === 0
-                              ? "{{lead.first_name}}"
-                              : i === 1
-                              ? "{{business_name}}"
-                              : i === 2
-                              ? "{{booking_link}}"
-                              : "{{last_ai_text}}"
-                          }
-                        />
-                      ))}
+                        >
+                          {selectedLangMeta.category}
+                        </span>
+                      ) : null}
                     </div>
-                    <div>
-                      <Btn kind="ghost" onClick={fillCommonParams}>
-                        Fill common tokens
-                      </Btn>
+
+                    {!templateSupported ? (
+                      <div
+                        style={{
+                          border: "1px solid rgba(255,188,188,0.3)",
+                          background: "rgba(58,17,17,0.5)",
+                          color: C.redTxt,
+                          borderRadius: 12,
+                          padding: 12,
+                          fontSize: 13,
+                          lineHeight: 1.5,
+                        }}
+                      >
+                        This template needs {selectedLangMeta.unsupported_reason || "advanced header or button parameters"}. Choose a text-body template for this automation.
+                      </div>
+                    ) : null}
+
+                    <div
+                      style={{
+                        border: `1px solid ${C.border}`,
+                        background: "#202224",
+                        borderRadius: 14,
+                        padding: 14,
+                      }}
+                    >
+                      <div style={{ color: C.muted, fontSize: 11, fontWeight: 900, marginBottom: 8 }}>
+                        APPROVED BODY PREVIEW
+                      </div>
+                      <div
+                        style={{
+                          color: C.text,
+                          whiteSpace: "pre-wrap",
+                          lineHeight: 1.55,
+                          fontSize: 13,
+                          wordBreak: "break-word",
+                        }}
+                      >
+                        {selectedLangMeta.body_text || "This template has no body preview."}
+                      </div>
+                    </div>
+
+                    {paramCount > 0 ? (
+                      <div style={{ display: "grid", gap: 10 }}>
+                        <div
+                          style={{
+                            display: "flex",
+                            justifyContent: "space-between",
+                            alignItems: "center",
+                            gap: 10,
+                            flexWrap: "wrap",
+                          }}
+                        >
+                          <div>
+                            <div style={{ color: C.text, fontWeight: 900 }}>Map every template variable</div>
+                            <div style={{ color: C.muted, fontSize: 12, marginTop: 3 }}>
+                              {filledParamCount} of {paramCount} complete. Values are rendered separately and sent to Meta in the approved order.
+                            </div>
+                          </div>
+                          <Btn kind="ghost" onClick={fillCommonParams}>
+                            Use recommended mapping
+                          </Btn>
+                        </div>
+
+                        {paramsArray.map((value, index) => {
+                          const key = selectedLangMeta.body_param_keys?.[index] || String(index + 1);
+                          const example = selectedLangMeta.body_example_params?.[index] || "";
+                          return (
+                            <div
+                              key={`${waTpl.name}_${waTpl.language}_${index}`}
+                              style={{
+                                ...softCard,
+                                padding: 12,
+                                background: "#1e2022",
+                                display: "grid",
+                                gap: 9,
+                              }}
+                            >
+                              <div
+                                style={{
+                                  display: "flex",
+                                  justifyContent: "space-between",
+                                  alignItems: "center",
+                                  gap: 10,
+                                  flexWrap: "wrap",
+                                }}
+                              >
+                                <div style={{ color: C.text, fontWeight: 900, fontSize: 13 }}>
+                                  {`{{${key}}}`}
+                                </div>
+                                {example ? (
+                                  <div style={{ color: C.muted, fontSize: 11 }}>Example: {example}</div>
+                                ) : null}
+                              </div>
+
+                              <Input
+                                value={value}
+                                onChange={(e) => {
+                                  const next = [...paramsArray];
+                                  next[index] = e.target.value;
+                                  setTpl({ params: next });
+                                }}
+                                placeholder={WA_DEFAULT_PARAM_TOKENS[index] || "Enter a fixed value or token"}
+                              />
+
+                              <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+                                {WA_PARAM_TOKEN_OPTIONS.map((option) => (
+                                  <button
+                                    key={`${index}_${option.value}`}
+                                    type="button"
+                                    onClick={() => {
+                                      const next = [...paramsArray];
+                                      next[index] = option.value;
+                                      setTpl({ params: next });
+                                    }}
+                                    style={{
+                                      borderRadius: 999,
+                                      border: `1px solid ${C.border}`,
+                                      background: value === option.value ? C.gold : "#252729",
+                                      color: value === option.value ? "#111" : C.text,
+                                      padding: "5px 8px",
+                                      fontSize: 10,
+                                      fontWeight: 900,
+                                      cursor: "pointer",
+                                    }}
+                                  >
+                                    {option.label}
+                                  </button>
+                                ))}
+                              </div>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    ) : (
+                      <div
+                        style={{
+                          border: "1px solid rgba(48,180,108,0.28)",
+                          background: "rgba(48,180,108,0.08)",
+                          color: C.green,
+                          borderRadius: 12,
+                          padding: 12,
+                          fontSize: 13,
+                        }}
+                      >
+                        This approved template has no body variables. No parameter mapping is required.
+                      </div>
+                    )}
+
+                    <div
+                      style={{
+                        border: `1px solid ${
+                          templateReady ? "rgba(48,180,108,0.35)" : "rgba(247,203,83,0.3)"
+                        }`,
+                        background: templateReady
+                          ? "rgba(48,180,108,0.08)"
+                          : "rgba(247,203,83,0.07)",
+                        color: templateReady ? C.green : C.gold,
+                        borderRadius: 12,
+                        padding: 11,
+                        fontSize: 12,
+                        fontWeight: 800,
+                      }}
+                    >
+                      {templateReady
+                        ? `Ready: RetainAI will send exactly ${paramCount} parameter${paramCount === 1 ? "" : "s"}.`
+                        : "Complete the template setup before activating this flow."}
                     </div>
                   </>
-                ) : (
-                  <Field label="Template params (comma-separated)">
-                    <Input
-                      value={waTpl.params || ""}
-                      onChange={(e) => setTpl({ params: e.target.value })}
-                      placeholder="{{lead.first_name}}, {{business_name}}, {{booking_link}}"
-                    />
-                  </Field>
-                )}
+                ) : null}
               </div>
-            ) : null}
+            ) : (
+              <div style={{ color: C.muted, fontSize: 13 }}>
+                Enable the fallback and choose an approved template before activating this WhatsApp step.
+              </div>
+            )}
           </div>
         </div>
       )}
@@ -1361,6 +1716,12 @@ export default function Automations({ user }) {
       setError("");
 
       const payload = normalizeFlow(editing, userEmail);
+      if (payload.enabled) {
+        const issues = collectWhatsAppTemplateIssues(payload, waTemplates);
+        if (issues.length) {
+          throw new Error(`This active flow needs attention: ${issues.join(" ")}`);
+        }
+      }
       const isUpdate = !!payload.id && flows.some((x) => x.id === payload.id);
 
       if (isUpdate) {
@@ -1605,7 +1966,16 @@ export default function Automations({ user }) {
                     }}
                     onToggle={async () => {
                       const enabled = !f.enabled;
+                      if (enabled) {
+                        const issues = collectWhatsAppTemplateIssues(f, waTemplates);
+                        if (issues.length) {
+                          setError(`Flow cannot be activated yet: ${issues.join(" ")}`);
+                          return;
+                        }
+                      }
+
                       const prev = [...flows];
+                      setError("");
                       setFlows((curr) => curr.map((x) => (x.id === f.id ? { ...x, enabled } : x)));
                       try {
                         await api.updateFlow(userEmail, f.id, { ...f, enabled });
