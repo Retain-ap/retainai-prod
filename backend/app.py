@@ -220,6 +220,8 @@ NOTIFICATIONS_FILE = os.path.join(DATA_ROOT, "notifications.json")
 APPOINTMENTS_FILE  = os.path.join(DATA_ROOT, "appointments.json")
 CHAT_FILE          = os.path.join(DATA_ROOT, "whatsapp_chats.json")
 STATUS_FILE        = os.path.join(DATA_ROOT, "whatsapp_status.json")
+WA_WEBHOOK_EVENTS_FILE = os.path.join(DATA_ROOT, "whatsapp_webhook_events.json")
+WA_UNMATCHED_FILE      = os.path.join(DATA_ROOT, "whatsapp_unmatched.json")
 
 ICS_DIR = os.path.join(DATA_ROOT, "ics_files")
 os.makedirs(ICS_DIR, exist_ok=True)
@@ -262,6 +264,24 @@ def load_statuses():
 
 def save_statuses(data):
     _legacy_save_json(STATUS_FILE, data)
+
+
+def load_wa_webhook_events():
+    data = _legacy_load_json(WA_WEBHOOK_EVENTS_FILE)
+    return data if isinstance(data, list) else []
+
+
+def save_wa_webhook_events(data):
+    _legacy_save_json(WA_WEBHOOK_EVENTS_FILE, data if isinstance(data, list) else [])
+
+
+def load_wa_unmatched():
+    data = _legacy_load_json(WA_UNMATCHED_FILE)
+    return data if isinstance(data, list) else []
+
+
+def save_wa_unmatched(data):
+    _legacy_save_json(WA_UNMATCHED_FILE, data if isinstance(data, list) else [])
 
 
 # ----------------------------
@@ -3137,32 +3157,221 @@ def wa_norm_number(s: str) -> str:
     return d
 
 
-def lead_matches_wa(lead: dict, wa_digits: str) -> bool:
-    for key in ("whatsapp", "phone"):
-        if wa_norm_number(lead.get(key)) == wa_digits:
-            return True
+def _wa_numbers_equal(a: str, b: str) -> bool:
+    """Compare WhatsApp/phone numbers without losing valid country-code matches."""
+    left = wa_norm_number(a)
+    right = wa_norm_number(b)
+    if not left or not right:
+        return False
+    if left == right:
+        return True
+    # Tolerate one side being stored without a country code.
+    if len(left) >= 10 and len(right) >= 10 and left[-10:] == right[-10:]:
+        return True
     return False
 
 
-def find_user_by_whatsapp(wa_id: str) -> Optional[str]:
+def _lead_phone_values(lead: dict) -> list:
+    if not isinstance(lead, dict):
+        return []
+    keys = (
+        "whatsapp", "phone", "mobile", "phone_number", "phoneNumber",
+        "mobile_phone", "mobilePhone", "telephone", "tel"
+    )
+    values = []
+    for key in keys:
+        value = lead.get(key)
+        if value not in (None, ""):
+            values.append(str(value))
+    return values
+
+
+def lead_matches_wa(lead: dict, wa_digits: str) -> bool:
+    return any(_wa_numbers_equal(value, wa_digits) for value in _lead_phone_values(lead))
+
+
+def resolve_whatsapp_lead(wa_id: str):
+    """Return one atomic owner/lead match so owner and lead can never come from different records."""
     wa = wa_norm_number(wa_id)
-    leads_by_user = load_leads()
-    for user_email, leads in (leads_by_user or {}).items():
+    if not wa:
+        return None, None, None
+
+    leads_by_user = load_leads() or {}
+    for user_email, leads in leads_by_user.items():
         for lead in (leads or []):
             if lead_matches_wa(lead, wa):
-                return user_email
-    return None
+                lead_id = str(lead.get("id") or "").strip()
+                if lead_id:
+                    return str(user_email or "").strip().lower(), lead_id, lead
+    return None, None, None
+
+
+def find_user_by_whatsapp(wa_id: str) -> Optional[str]:
+    user_email, _, _ = resolve_whatsapp_lead(wa_id)
+    return user_email
 
 
 def find_lead_by_whatsapp(wa_id: str) -> Optional[str]:
-    wa = wa_norm_number(wa_id)
-    leads_by_user = load_leads()
-    for _, leads in (leads_by_user or {}).items():
-        for lead in (leads or []):
-            if lead_matches_wa(lead, wa):
-                lid = lead.get("id")
-                return str(lid) if lid is not None else None
-    return None
+    _, lead_id, _ = resolve_whatsapp_lead(wa_id)
+    return lead_id
+
+
+def _wa_event(kind: str, **data):
+    """Keep a small durable webhook trail for production diagnostics."""
+    try:
+        events = load_wa_webhook_events()
+        event = {
+            "id": f"waevt_{uuid4().hex[:12]}",
+            "kind": str(kind or "event"),
+            "created_at": datetime.datetime.utcnow().isoformat() + "Z",
+        }
+        event.update(_json_sanitize(data or {}))
+        events.insert(0, event)
+        save_wa_webhook_events(events[:250])
+        return event
+    except Exception:
+        return None
+
+
+def _wa_mask_number(value: str) -> str:
+    digits = wa_norm_number(value)
+    if len(digits) <= 4:
+        return digits
+    return ("*" * max(0, len(digits) - 4)) + digits[-4:]
+
+
+def _wa_message_text(message: dict) -> str:
+    """Convert all common WhatsApp inbound message types into readable CRM text."""
+    if not isinstance(message, dict):
+        return "[unknown message]"
+
+    message_type = str(message.get("type") or "unknown").strip().lower()
+    if message_type == "text":
+        return str((message.get("text") or {}).get("body") or "").strip()
+
+    if message_type == "button":
+        button = message.get("button") or {}
+        return str(button.get("text") or button.get("payload") or "[button reply]").strip()
+
+    if message_type == "interactive":
+        interactive = message.get("interactive") or {}
+        reply = interactive.get("button_reply") or interactive.get("list_reply") or {}
+        return str(reply.get("title") or reply.get("description") or reply.get("id") or "[interactive reply]").strip()
+
+    if message_type == "image":
+        caption = str((message.get("image") or {}).get("caption") or "").strip()
+        return caption or "[image received]"
+    if message_type == "video":
+        caption = str((message.get("video") or {}).get("caption") or "").strip()
+        return caption or "[video received]"
+    if message_type == "document":
+        document = message.get("document") or {}
+        return str(document.get("caption") or document.get("filename") or "[document received]").strip()
+    if message_type == "audio":
+        return "[audio message received]"
+    if message_type == "sticker":
+        return "[sticker received]"
+    if message_type == "location":
+        location = message.get("location") or {}
+        name = str(location.get("name") or location.get("address") or "").strip()
+        lat = location.get("latitude")
+        lng = location.get("longitude")
+        if name:
+            return f"[location: {name}]"
+        if lat is not None and lng is not None:
+            return f"[location: {lat}, {lng}]"
+        return "[location received]"
+    if message_type == "contacts":
+        return "[contact received]"
+    if message_type == "reaction":
+        emoji = str((message.get("reaction") or {}).get("emoji") or "").strip()
+        return f"[reaction {emoji}]" if emoji else "[reaction received]"
+
+    return f"[{message_type} message received]"
+
+
+def _wa_store_unmatched(sender_waid: str, message: dict, text_value: str, phone_number_id: str = ""):
+    try:
+        unmatched = load_wa_unmatched()
+        message_id = str((message or {}).get("id") or "").strip()
+        if message_id and any(str(row.get("message_id") or "") == message_id for row in unmatched):
+            return
+        unmatched.insert(0, {
+            "id": f"waun_{uuid4().hex[:12]}",
+            "message_id": message_id,
+            "sender": wa_norm_number(sender_waid),
+            "sender_masked": _wa_mask_number(sender_waid),
+            "phone_number_id": str(phone_number_id or ""),
+            "type": str((message or {}).get("type") or "unknown"),
+            "text": str(text_value or "")[:500],
+            "received_at": datetime.datetime.utcnow().isoformat() + "Z",
+        })
+        save_wa_unmatched(unmatched[:100])
+    except Exception:
+        pass
+
+
+def _wa_append_inbound(user_email: str, lead_id: str, lead: dict, sender_waid: str, message: dict, text_value: str):
+    """Persist one inbound message exactly once and update lead activity."""
+    message_id = str((message or {}).get("id") or "").strip()
+    timestamp = str((message or {}).get("timestamp") or "").strip()
+    try:
+        received_at = datetime.datetime.utcfromtimestamp(int(timestamp)).isoformat() + "Z" if timestamp else datetime.datetime.utcnow().isoformat() + "Z"
+    except Exception:
+        received_at = datetime.datetime.utcnow().isoformat() + "Z"
+
+    chats = load_chats() or {}
+    user_chats = chats.get(user_email, {}) or {}
+    thread = user_chats.get(str(lead_id), []) or []
+
+    if message_id and any(str(item.get("id") or item.get("message_id") or "") == message_id for item in thread):
+        return thread, False
+
+    row = {
+        "id": message_id or f"wain_{uuid4().hex[:16]}",
+        "message_id": message_id,
+        "from": "lead",
+        "direction": "inbound",
+        "text": str(text_value or "").strip() or "[message received]",
+        "type": str((message or {}).get("type") or "unknown"),
+        "phone": wa_norm_number(sender_waid),
+        "time": received_at,
+        "context": _json_sanitize((message or {}).get("context") or {}),
+    }
+    thread.append(row)
+    user_chats[str(lead_id)] = thread
+    chats[user_email] = user_chats
+    save_chats(chats)
+
+    _MSG_CACHE[(str(user_email or ""), str(lead_id or ""))] = {
+        "at": datetime.datetime.utcnow(),
+        "data": thread,
+    }
+
+    # Update lead activity so no-reply logic and CRM previews immediately see the response.
+    try:
+        leads_by_user = load_leads() or {}
+        owner_leads = leads_by_user.get(user_email, []) or []
+        for item in owner_leads:
+            if str(item.get("id") or "") == str(lead_id):
+                item["last_reply_at"] = received_at
+                item["last_inbound_at"] = received_at
+                item["last_contact"] = received_at
+                item["last_message"] = row["text"]
+                item["last_message_direction"] = "inbound"
+                item["wa_last_inbound_id"] = row["id"]
+                if "wa_opt_out" in lead:
+                    item["wa_opt_out"] = bool(lead.get("wa_opt_out"))
+                break
+        leads_by_user[user_email] = owner_leads
+        save_leads(leads_by_user)
+    except Exception as exc:
+        try:
+            app.logger.warning("[WA WEBHOOK] lead activity update failed: %s", exc)
+        except Exception:
+            pass
+
+    return thread, True
 
 
 def wa_env() -> Tuple[str, str]:
@@ -3571,14 +3780,23 @@ def wa_send_template(
 
 @app.get("/api/whatsapp/health")
 def whatsapp_health():
+    events = load_wa_webhook_events()
+    unmatched = load_wa_unmatched()
+    last_webhook = events[0].get("created_at") if events else None
+    last_inbound = next((event.get("created_at") for event in events if event.get("kind") == "inbound_matched"), None)
     return jsonify({
         "ok": True,
         "has_token": bool(os.getenv("WHATSAPP_TOKEN")),
         "has_phone_id": bool(os.getenv("WHATSAPP_PHONE_ID")),
         "has_waba_id": bool(os.getenv("WHATSAPP_WABA_ID") or os.getenv("WHATSAPP_BUSINESS_ID")),
+        "has_verify_token": bool(os.getenv("WHATSAPP_VERIFY_TOKEN")),
+        "has_app_secret": bool(os.getenv("APP_SECRET") or os.getenv("META_APP_SECRET")),
         "default_template": os.getenv("WHATSAPP_TEMPLATE_DEFAULT"),
         "default_lang_ui": wa_primary_lang(os.getenv("WHATSAPP_TEMPLATE_LANG", "en")) or "en",
         "default_lang_api": wa_normalize_lang(os.getenv("WHATSAPP_TEMPLATE_LANG", "en")),
+        "webhook_last_seen_at": last_webhook,
+        "last_matched_inbound_at": last_inbound,
+        "unmatched_inbound_count": len(unmatched),
     }), 200
 
 
@@ -3744,10 +3962,25 @@ def _get_thread_cached(user_email: str, lead_id: str):
 
 @app.route("/api/whatsapp/messages", methods=["GET"])
 def get_whatsapp_messages():
-    user_email = (request.args.get("user_email") or "").strip().lower()
+    user_email = (request.args.get("user_email") or request.headers.get("X-User-Email") or "").strip().lower()
     lead_id = (request.args.get("lead_id") or "").strip()
-    msgs, _ = _get_thread_cached(user_email, lead_id)
-    return jsonify({"messages": msgs}), 200
+    if not user_email or not lead_id:
+        return jsonify({"error": "user_email and lead_id are required", "messages": []}), 400
+
+    msgs, cached = _get_thread_cached(user_email, lead_id)
+    payload = {
+        "ok": True,
+        "messages": msgs,
+        "count": len(msgs),
+        "cached": bool(cached),
+        "last_message_at": (msgs[-1].get("time") if msgs else None),
+        "server_time": datetime.datetime.utcnow().isoformat() + "Z",
+    }
+    response = jsonify(payload)
+    response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
+    response.headers["Pragma"] = "no-cache"
+    response.headers["Expires"] = "0"
+    return response, 200
 
 
 @app.get("/api/whatsapp/status")
@@ -4128,150 +4361,207 @@ def _verify_meta_signature(raw_body: bytes, header_sig: str) -> bool:
         return False
 
 
+@app.get("/api/whatsapp/inbound-health")
+def whatsapp_inbound_health():
+    user_email = (request.args.get("user_email") or request.headers.get("X-User-Email") or "").strip().lower()
+    if not user_email:
+        return jsonify({"ok": False, "error": "user_email is required"}), 400
+
+    events = load_wa_webhook_events()
+    unmatched = load_wa_unmatched()
+
+    matched_events = [event for event in events if event.get("kind") == "inbound_matched"]
+    user_events = [event for event in matched_events if not user_email or event.get("user_email") == user_email]
+    return jsonify({
+        "ok": True,
+        "webhook_last_seen_at": events[0].get("created_at") if events else None,
+        "last_matched_inbound_at": user_events[0].get("created_at") if user_events else None,
+        "recent_matched": user_events[:10],
+        "recent_unmatched": [
+            {
+                "id": row.get("id"),
+                "sender_masked": row.get("sender_masked"),
+                "type": row.get("type"),
+                "received_at": row.get("received_at"),
+            }
+            for row in unmatched[:10]
+        ],
+        "unmatched_count": len(unmatched),
+    }), 200
+
+
 @app.route("/api/whatsapp/webhook", methods=["GET", "POST"])
 def whatsapp_webhook():
     if request.method == "GET":
-        if request.args.get("hub.verify_token") == (os.getenv("WHATSAPP_VERIFY_TOKEN") or ""):
-            return request.args.get("hub.challenge") or "Verified", 200
+        verify_token = os.getenv("WHATSAPP_VERIFY_TOKEN") or ""
+        mode = request.args.get("hub.mode")
+        token = request.args.get("hub.verify_token")
+        challenge = request.args.get("hub.challenge")
+        if mode == "subscribe" and token == verify_token:
+            _wa_event("verification", ok=True)
+            return challenge or "Verified", 200
+        _wa_event("verification", ok=False)
         return "Invalid verification token", 403
 
     raw = request.get_data()
     header_sig = request.headers.get("X-Hub-Signature-256")
     if not _verify_meta_signature(raw, header_sig):
+        _wa_event("signature_rejected")
         return "Signature mismatch", 403
 
     payload = request.get_json(silent=True) or {}
+    _wa_event(
+        "webhook_received",
+        object=payload.get("object"),
+        entry_count=len(payload.get("entry", []) or []),
+    )
 
     try:
-        for entry in payload.get("entry", []):
-            for change in entry.get("changes", []):
+        for entry in payload.get("entry", []) or []:
+            for change in entry.get("changes", []) or []:
                 value = change.get("value", {}) or {}
+                metadata = value.get("metadata", {}) or {}
+                phone_number_id = str(metadata.get("phone_number_id") or "")
 
-                # delivery/read statuses
-                for status in (value.get("statuses", []) or []):
-                    statuses = load_statuses()
-                    statuses[status.get("id") or "unknown"] = {
-                        "status": status.get("status"),
-                        "timestamp": status.get("timestamp"),
-                        "recipient": status.get("recipient_id"),
-                        "errors": status.get("errors")
-                    }
+                # Delivery/read/failure updates.
+                status_rows = value.get("statuses", []) or []
+                if status_rows:
+                    statuses = load_statuses() or {}
+                    for status in status_rows:
+                        status_id = str(status.get("id") or "unknown")
+                        statuses[status_id] = {
+                            "status": status.get("status"),
+                            "timestamp": status.get("timestamp"),
+                            "recipient": status.get("recipient_id"),
+                            "conversation": _json_sanitize(status.get("conversation") or {}),
+                            "pricing": _json_sanitize(status.get("pricing") or {}),
+                            "errors": _json_sanitize(status.get("errors") or []),
+                            "updated_at": datetime.datetime.utcnow().isoformat() + "Z",
+                        }
+                        _wa_event(
+                            "status",
+                            message_id=status_id,
+                            status=status.get("status"),
+                            recipient_masked=_wa_mask_number(status.get("recipient_id") or ""),
+                        )
                     save_statuses(statuses)
 
-                # inbound messages
-                messages = value.get("messages", []) or []
                 contacts = value.get("contacts", []) or []
-                sender_waid = contacts[0].get("wa_id") if contacts else None
+                contact_waid = str((contacts[0] or {}).get("wa_id") or "") if contacts else ""
 
-                for m in messages:
-                    t = m.get("type")
-                    if t == "text":
-                        text = m.get("text", {}).get("body", "")
-                    elif t == "interactive":
-                        text = str(m.get("interactive"))
-                    elif t == "button":
-                        text = str(m.get("button"))
-                    else:
-                        text = f"[{t} message]"
+                for message in value.get("messages", []) or []:
+                    sender_waid = str(message.get("from") or contact_waid or "").strip()
+                    message_id = str(message.get("id") or "").strip()
+                    text_value = _wa_message_text(message)
 
-                    # opt-out / opt-in (best-effort)
-                    if sender_waid and isinstance(text, str):
-                        up = text.strip().upper()
+                    if not sender_waid:
+                        _wa_event("inbound_invalid", message_id=message_id, reason="missing_sender")
+                        continue
 
-                        if up in ("STOP", "UNSUBSCRIBE", "STOP ALL", "CANCEL"):
-                            wa = wa_norm_number(sender_waid)
-                            data = load_leads()
-                            changed = False
-                            for _, leads in (data or {}).items():
-                                for ld in (leads or []):
-                                    if lead_matches_wa(ld, wa):
-                                        ld["wa_opt_out"] = True
-                                        changed = True
-                            if changed:
-                                save_leads(data)
-                            try:
-                                wa_send_text(sender_waid, "You have been unsubscribed. Reply START to opt back in.")
-                            except Exception:
-                                pass
-
-                        elif up in ("START", "UNSTOP", "SUBSCRIBE"):
-                            wa = wa_norm_number(sender_waid)
-                            data = load_leads()
-                            changed = False
-                            for _, leads in (data or {}).items():
-                                for ld in (leads or []):
-                                    if lead_matches_wa(ld, wa):
-                                        ld["wa_opt_out"] = False
-                                        changed = True
-                            if changed:
-                                save_leads(data)
-                            try:
-                                wa_send_text(sender_waid, "You are now opted back in. You can reply STOP anytime to opt out.")
-                            except Exception:
-                                pass
-
-                    user_email = find_user_by_whatsapp(sender_waid) if sender_waid else None
-                    lead_id = find_lead_by_whatsapp(sender_waid) if sender_waid else None
-
-                    if not user_email or not lead_id:
+                    user_email, lead_id, lead = resolve_whatsapp_lead(sender_waid)
+                    if not user_email or not lead_id or not lead:
+                        _wa_store_unmatched(sender_waid, message, text_value, phone_number_id)
+                        _wa_event(
+                            "inbound_unmatched",
+                            message_id=message_id,
+                            sender_masked=_wa_mask_number(sender_waid),
+                            message_type=message.get("type"),
+                            text=str(text_value or "")[:180],
+                        )
                         try:
                             app.logger.warning(
-                                "[WA WEBHOOK] inbound from unknown sender waid=%s text=%s",
-                                sender_waid,
-                                text
+                                "[WA WEBHOOK] unmatched inbound sender=%s message_id=%s type=%s text=%s",
+                                _wa_mask_number(sender_waid),
+                                message_id,
+                                message.get("type"),
+                                str(text_value or "")[:180],
                             )
                         except Exception:
                             pass
                         continue
 
-                    chats = load_chats()
-                    user_chats = (chats.get(user_email, {}) or {})
-                    thread = (user_chats.get(str(lead_id), []) or [])
-                    thread.append({
-                        "from": "lead",
-                        "text": text,
-                        "time": datetime.datetime.utcnow().isoformat() + "Z"
-                    })
-                    user_chats[str(lead_id)] = thread
-                    chats[user_email] = user_chats
-                    save_chats(chats)
+                    # STOP/START compliance is handled after resolving the exact lead.
+                    normalized_command = str(text_value or "").strip().upper()
+                    if normalized_command in ("STOP", "UNSUBSCRIBE", "STOP ALL", "CANCEL"):
+                        lead["wa_opt_out"] = True
+                    elif normalized_command in ("START", "UNSTOP", "SUBSCRIBE"):
+                        lead["wa_opt_out"] = False
 
-                    _MSG_CACHE[(str(user_email or ""), str(lead_id or ""))] = {
-                        "at": datetime.datetime.utcnow(),
-                        "data": thread
-                    }
+                    thread, inserted = _wa_append_inbound(
+                        user_email=user_email,
+                        lead_id=lead_id,
+                        lead=lead,
+                        sender_waid=sender_waid,
+                        message=message,
+                        text_value=text_value,
+                    )
 
-                    # notification center hook
-                    lead_name = ""
-                    lead_email = ""
-                    try:
-                        leads_by_user = load_leads() or {}
-                        for ld in (leads_by_user.get(user_email, []) or []):
-                            if str(ld.get("id") or "") == str(lead_id):
-                                lead_name = ld.get("name") or ld.get("first_name") or ""
-                                lead_email = ld.get("email") or ""
-                                break
-                    except Exception:
-                        pass
+                    if not inserted:
+                        _wa_event(
+                            "inbound_duplicate",
+                            message_id=message_id,
+                            user_email=user_email,
+                            lead_id=lead_id,
+                        )
+                        continue
 
+                    _wa_event(
+                        "inbound_matched",
+                        message_id=message_id,
+                        user_email=user_email,
+                        lead_id=lead_id,
+                        sender_masked=_wa_mask_number(sender_waid),
+                        message_type=message.get("type"),
+                        text=str(text_value or "")[:180],
+                    )
+
+                    lead_name = lead.get("name") or lead.get("first_name") or lead.get("email") or "Lead"
+                    lead_email = lead.get("email") or ""
                     add_notification(
                         user_email=user_email,
                         subject="WhatsApp received",
-                        message=text[:180] if isinstance(text, str) else "New inbound WhatsApp message received.",
+                        message=str(text_value or "New inbound WhatsApp message received.")[:180],
                         channel="whatsapp",
                         lead_email=lead_email,
                         extra={
                             "lead_name": lead_name,
+                            "lead_id": lead_id,
                             "type": "inbound",
+                            "message_id": message_id,
                         },
                     )
 
-    except Exception as e:
+                    # Optional appointment-intent processing. Disabled unless explicitly enabled.
+                    if (os.getenv("WA_AUTO_APPOINTMENTS_ENABLED") or "false").strip().lower() == "true":
+                        try:
+                            from app_wa_auto_appointments import process_incoming_message
+                            process_incoming_message(user_email, lead, str(text_value or ""))
+                        except Exception as exc:
+                            try:
+                                app.logger.warning("[WA AUTO APPOINTMENT] inbound processing failed: %s", exc)
+                            except Exception:
+                                pass
+
+                    # Compliance confirmation messages only.
+                    if normalized_command in ("STOP", "UNSUBSCRIBE", "STOP ALL", "CANCEL"):
+                        try:
+                            wa_send_text(sender_waid, "You have been unsubscribed. Reply START to opt back in.")
+                        except Exception:
+                            pass
+                    elif normalized_command in ("START", "UNSTOP", "SUBSCRIBE"):
+                        try:
+                            wa_send_text(sender_waid, "You are now opted back in. Reply STOP anytime to opt out.")
+                        except Exception:
+                            pass
+
+    except Exception as exc:
+        _wa_event("webhook_parse_error", error=str(exc))
         try:
-            app.logger.warning("[WHATSAPP WEBHOOK] parse error: %s", e)
+            app.logger.exception("[WHATSAPP WEBHOOK] parse error: %s", exc)
         except Exception:
             pass
 
+    # Meta expects a fast 200 response; diagnostics are persisted above.
     return "OK", 200
 
 # ============================================================

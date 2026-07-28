@@ -721,6 +721,7 @@ export default function Messages({ user, leads = [], defaultTemplate = "", langu
   /** --- thread state --- */
   const [thread, setThread] = useState([]);
   const [loading, setLoading] = useState(false);
+  const [threadSync, setThreadSync] = useState({ ok: true, lastAt: null, error: "" });
   const chatRef = useRef(null);
   const pollTimer = useRef(null);
 
@@ -735,6 +736,7 @@ export default function Messages({ user, leads = [], defaultTemplate = "", langu
       pollTimer.current = null;
     }
     setSuggestion(null);
+    setThreadSync({ ok: true, lastAt: null, error: "" });
 
     if (user?.email && lead?.id) {
       const key = AUTO_LOG_KEY(user.email, lead.id);
@@ -754,13 +756,38 @@ export default function Messages({ user, leads = [], defaultTemplate = "", langu
         const r = await fetch(
           `${API}/api/whatsapp/messages?user_email=${encodeURIComponent(user.email)}&lead_id=${encodeURIComponent(
             lead.id
-          )}`
+          )}&_=${Date.now()}`,
+          {
+            credentials: "include",
+            cache: "no-store",
+            headers: {
+              Accept: "application/json",
+              "X-User-Email": String(user.email || "").toLowerCase(),
+            },
+          }
         );
         const j = await r.json();
+        if (!r.ok) throw new Error(j?.error || `Message sync failed (${r.status})`);
+
         const normalized = normalizeThreadMessages(j?.messages, user.email, lead.id);
-        if (!stop) setThread(Array.isArray(normalized) ? normalized : []);
-      } catch {}
-      if (!stop) pollTimer.current = setTimeout(tick, 5000);
+        if (!stop) {
+          setThread(Array.isArray(normalized) ? normalized : []);
+          setThreadSync({ ok: true, lastAt: j?.server_time || new Date().toISOString(), error: "" });
+        }
+      } catch (error) {
+        if (!stop) {
+          setThreadSync({
+            ok: false,
+            lastAt: null,
+            error: error?.message || "Unable to sync WhatsApp messages",
+          });
+        }
+      }
+
+      if (!stop) {
+        const delay = typeof document !== "undefined" && document.visibilityState === "hidden" ? 10000 : 3000;
+        pollTimer.current = setTimeout(tick, delay);
+      }
     };
 
     tick();
@@ -1092,7 +1119,15 @@ export default function Messages({ user, leads = [], defaultTemplate = "", langu
           const r = await fetch(
             `${API}/api/whatsapp/messages?user_email=${encodeURIComponent(user.email)}&lead_id=${encodeURIComponent(
               lead.id
-            )}`
+            )}&_=${Date.now()}`,
+            {
+              credentials: "include",
+              cache: "no-store",
+              headers: {
+                Accept: "application/json",
+                "X-User-Email": String(user.email || "").toLowerCase(),
+              },
+            }
           );
           const jj = await r.json();
           const normalized = normalizeThreadMessages(jj?.messages, user.email, lead.id);
@@ -1207,7 +1242,15 @@ export default function Messages({ user, leads = [], defaultTemplate = "", langu
           const r = await fetch(
             `${API}/api/whatsapp/messages?user_email=${encodeURIComponent(user.email)}&lead_id=${encodeURIComponent(
               lead.id
-            )}`
+            )}&_=${Date.now()}`,
+            {
+              credentials: "include",
+              cache: "no-store",
+              headers: {
+                Accept: "application/json",
+                "X-User-Email": String(user.email || "").toLowerCase(),
+              },
+            }
           );
           const j = await r.json();
           const normalized = normalizeThreadMessages(j?.messages, user.email, lead.id);
@@ -1494,7 +1537,12 @@ export default function Messages({ user, leads = [], defaultTemplate = "", langu
               <div style={{ fontSize: 12, color: C.sub }}>{fmtNA(lead?.phone || lead?.whatsapp)}</div>
             </div>
 
-            <div style={{ marginLeft: "auto", display: "flex", gap: 8, alignItems: "center" }}>
+            <div style={{ marginLeft: "auto", display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap", justifyContent: "flex-end" }}>
+              <Pill
+                color={threadSync.ok ? C.wa : "#ff8a8a"}
+                text={threadSync.ok ? "Live sync" : "Sync issue"}
+              />
+
               <button
                 onClick={() => setShowAutoLog((s) => !s)}
                 style={{
@@ -1524,6 +1572,21 @@ export default function Messages({ user, leads = [], defaultTemplate = "", langu
               />
             </div>
           </div>
+
+          {!threadSync.ok && (
+            <div
+              style={{
+                padding: "9px 12px",
+                background: "rgba(255, 96, 96, 0.10)",
+                borderBottom: "1px solid rgba(255, 96, 96, 0.24)",
+                color: "#ffb1b1",
+                fontSize: 12,
+                fontWeight: 700,
+              }}
+            >
+              WhatsApp replies are not syncing right now: {threadSync.error}
+            </div>
+          )}
 
           {/* Template controls */}
           {!gate.inside24h && (
