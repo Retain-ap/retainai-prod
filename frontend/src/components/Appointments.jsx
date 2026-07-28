@@ -408,6 +408,7 @@ export default function Appointments({ user, leads = [], setLeads }) {
       window.removeEventListener("appointments:changed", onChanged);
       document.removeEventListener("visibilitychange", onVis);
     };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [user?.email]);
 
   const assignedBackend = useMemo(() => {

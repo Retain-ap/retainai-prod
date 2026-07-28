@@ -1,0 +1,844 @@
+:root {
+  --rai-bg: #111315;
+  --rai-bg-soft: #17191c;
+  --rai-panel: #1c1f22;
+  --rai-panel-2: #222529;
+  --rai-border: #30343a;
+  --rai-border-soft: #272b30;
+  --rai-text: #f3f4f6;
+  --rai-muted: #9ca3ad;
+  --rai-gold: #f7cb53;
+  --rai-green: #46c985;
+  --rai-red: #ef6a6a;
+  --rai-blue: #5b8def;
+  --rai-radius: 16px;
+  --rai-shadow: 0 14px 34px rgba(0, 0, 0, 0.24);
+}
+
+html {
+  min-width: 320px;
+  overflow-x: hidden;
+  background: var(--rai-bg);
+}
+
+body,
+#root {
+  min-width: 320px;
+  min-height: 100%;
+  overflow-x: hidden;
+  background: var(--rai-bg);
+  color: var(--rai-text);
+}
+
+button,
+input,
+select,
+textarea {
+  font: inherit;
+}
+
+button,
+a,
+input,
+select,
+textarea {
+  -webkit-tap-highlight-color: transparent;
+}
+
+img,
+svg,
+canvas,
+video {
+  max-width: 100%;
+}
+
+.crm-root {
+  min-width: 0;
+}
+
+.crm-main-content {
+  min-width: 0;
+  max-width: 100%;
+  isolation: isolate;
+}
+
+.crm-main-content > * {
+  min-width: 0;
+  max-width: 100%;
+}
+
+.crm-mobile-header,
+.crm-sidebar-overlay {
+  display: none;
+}
+
+/* Settings shell */
+.settings-layout {
+  position: relative !important;
+  inset: auto !important;
+  width: 100% !important;
+  min-width: 0;
+  min-height: 100vh;
+  display: grid !important;
+  grid-template-columns: 238px minmax(0, 1fr);
+  overflow: hidden;
+  background: linear-gradient(135deg, #15171a 0%, #1b1d21 100%) !important;
+  border: 1px solid #25282d;
+}
+
+.settings-nav {
+  width: auto !important;
+  min-width: 0;
+  padding: 26px 12px !important;
+  background: rgba(20, 22, 25, 0.96) !important;
+  border-right: 1px solid #2a2e33 !important;
+  box-shadow: none !important;
+}
+
+.settings-nav button {
+  min-height: 48px;
+  margin: 2px 0;
+  padding: 12px 14px !important;
+  border: 1px solid transparent !important;
+  border-left: 1px solid transparent !important;
+  border-radius: 12px;
+  color: #aeb4bd !important;
+  font-size: 0.92rem !important;
+}
+
+.settings-nav button:hover {
+  background: #1d2024 !important;
+  color: #fff !important;
+}
+
+.settings-nav button.active {
+  background: linear-gradient(180deg, #292d32 0%, #24272b 100%) !important;
+  border-color: #393e45 !important;
+  color: #fff !important;
+  box-shadow: inset 3px 0 0 var(--rai-gold), 0 7px 18px rgba(0, 0, 0, 0.14);
+}
+
+.settings-nav button.active .settings-icon {
+  color: var(--rai-gold);
+}
+
+.settings-content {
+  min-width: 0;
+  padding: 44px clamp(22px, 4vw, 58px) 56px !important;
+  overflow-y: auto;
+  color: var(--rai-text);
+}
+
+.settings-content h2 {
+  margin: 0 0 22px !important;
+  font-size: clamp(1.75rem, 3vw, 2.25rem) !important;
+  letter-spacing: -0.035em;
+}
+
+.profile-tab .profile-card {
+  max-width: 100% !important;
+  border: 1px solid var(--rai-border) !important;
+  border-radius: 18px !important;
+  background: linear-gradient(145deg, #202327 0%, #1c1f22 100%) !important;
+  box-shadow: var(--rai-shadow);
+}
+
+.field-input,
+.team-field input,
+.team-field select,
+.team-role-select {
+  min-height: 44px;
+}
+
+/* Connected accounts */
+.integrations-page {
+  width: 100%;
+}
+
+.settings-page-heading {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 24px;
+  margin-bottom: 24px;
+}
+
+.settings-page-heading h2 {
+  margin-bottom: 8px !important;
+}
+
+.settings-page-heading p {
+  max-width: 650px;
+  margin: 0;
+  color: var(--rai-muted);
+  line-height: 1.6;
+}
+
+.settings-page-eyebrow {
+  display: block;
+  margin-bottom: 8px;
+  color: var(--rai-gold);
+  font-size: 0.72rem;
+  font-weight: 900;
+  letter-spacing: 0.13em;
+  text-transform: uppercase;
+}
+
+.settings-page-security {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  flex: 0 0 auto;
+  padding: 10px 12px;
+  border: 1px solid #343940;
+  border-radius: 999px;
+  background: #1b1e22;
+  color: #c4c8cf;
+  font-size: 0.78rem;
+  font-weight: 800;
+}
+
+.settings-page-security svg {
+  color: var(--rai-green);
+}
+
+.integration-overview {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+  margin-bottom: 18px;
+}
+
+.integration-overview > div {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  min-width: 0;
+  padding: 14px 16px;
+  border: 1px solid #30343a;
+  border-radius: 14px;
+  background: rgba(30, 33, 37, 0.72);
+}
+
+.integration-overview span {
+  color: #a8aeb7;
+  font-size: 0.78rem;
+  font-weight: 700;
+}
+
+.integration-overview strong {
+  font-size: 0.78rem;
+  white-space: nowrap;
+}
+
+.integration-overview strong.ready {
+  color: var(--rai-green);
+}
+
+.integration-overview strong.muted {
+  color: #8f969f;
+}
+
+.connected-accounts-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 18px;
+}
+
+.account-card {
+  min-width: 0;
+  min-height: 360px;
+  display: flex;
+  flex-direction: column;
+  padding: 22px;
+  border: 1px solid #30343a;
+  border-radius: 18px;
+  background: linear-gradient(145deg, #202328 0%, #1a1d20 100%);
+  box-shadow: 0 10px 24px rgba(0, 0, 0, 0.18);
+  transition: transform 0.18s ease, border-color 0.18s ease, box-shadow 0.18s ease;
+}
+
+.account-card:hover {
+  transform: translateY(-2px);
+  border-color: #41474f;
+  box-shadow: 0 16px 32px rgba(0, 0, 0, 0.24);
+}
+
+.account-card.is-connected {
+  border-color: rgba(70, 201, 133, 0.36);
+}
+
+.account-card-top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 18px;
+}
+
+.account-brand-icon {
+  width: 48px;
+  height: 48px;
+  display: grid;
+  place-items: center;
+  border: 1px solid rgba(255,255,255,0.08);
+  border-radius: 14px;
+  font-size: 1.45rem;
+}
+
+.account-brand-icon svg {
+  width: 25px;
+  height: 25px;
+}
+
+.account-brand-icon.google {
+  background: rgba(72, 133, 237, 0.12);
+  color: #6a9df3;
+}
+
+.account-brand-icon.stripe {
+  background: rgba(99, 91, 255, 0.14);
+  color: #8b84ff;
+}
+
+.account-brand-icon.whatsapp {
+  background: rgba(37, 211, 102, 0.12);
+  color: #44d87a;
+}
+
+.account-brand-icon.instagram {
+  background: rgba(228, 64, 95, 0.12);
+  color: #ed7188;
+}
+
+.account-status-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  padding: 7px 10px;
+  border: 1px solid #373c43;
+  border-radius: 999px;
+  background: #202328;
+  color: #aab0b8;
+  font-size: 0.72rem;
+  font-weight: 900;
+  white-space: nowrap;
+}
+
+.account-status-badge > span {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: #818891;
+}
+
+.account-status-badge.connected {
+  border-color: rgba(70, 201, 133, 0.3);
+  background: rgba(70, 201, 133, 0.08);
+  color: #66d99c;
+}
+
+.account-status-badge.connected > span {
+  background: var(--rai-green);
+  box-shadow: 0 0 0 4px rgba(70, 201, 133, 0.1);
+}
+
+.account-status-badge.attention {
+  border-color: rgba(247, 203, 83, 0.28);
+  background: rgba(247, 203, 83, 0.07);
+  color: #f0cd73;
+}
+
+.account-status-badge.attention > span {
+  background: var(--rai-gold);
+}
+
+.account-status-badge.coming-soon {
+  color: #b2b7bf;
+}
+
+.account-card-copy h3 {
+  margin: 0 0 7px;
+  color: #f4f5f7;
+  font-size: 1.08rem;
+  letter-spacing: -0.015em;
+}
+
+.account-card-copy p {
+  min-height: 44px;
+  margin: 0;
+  color: #9da3ac;
+  font-size: 0.84rem;
+  line-height: 1.55;
+}
+
+.account-card-content {
+  flex: 1;
+  display: grid;
+  align-content: start;
+  gap: 11px;
+  margin: 18px 0;
+}
+
+.account-detail-box {
+  padding: 12px 13px;
+  border: 1px solid #2e3339;
+  border-radius: 12px;
+  background: #171a1d;
+  color: #aeb4bc;
+  font-size: 0.78rem;
+  line-height: 1.55;
+}
+
+.account-field {
+  display: grid;
+  gap: 7px;
+}
+
+.account-field > span {
+  color: #aeb4bc;
+  font-size: 0.75rem;
+  font-weight: 800;
+}
+
+.account-field select {
+  width: 100%;
+  min-height: 44px;
+  padding: 0 12px;
+  border: 1px solid #3a4048;
+  border-radius: 10px;
+  outline: none;
+  background: #17191c;
+  color: #fff;
+}
+
+.account-field select:focus {
+  border-color: #5b8def;
+  box-shadow: 0 0 0 3px rgba(91, 141, 239, 0.12);
+}
+
+.account-id-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  min-width: 0;
+  padding: 9px 10px;
+  border-radius: 10px;
+  background: rgba(255,255,255,0.025);
+}
+
+.account-id-row span {
+  color: #8f969f;
+  font-size: 0.72rem;
+  font-weight: 700;
+}
+
+.account-id-row code {
+  overflow: hidden;
+  color: #d8dbe0;
+  font-size: 0.72rem;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.account-check-list {
+  display: grid;
+  gap: 8px;
+}
+
+.account-check-list > div {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: #aeb4bc;
+  font-size: 0.78rem;
+}
+
+.account-check-list > div > span {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #676e77;
+}
+
+.account-check-list > div.ready > span {
+  background: var(--rai-green);
+}
+
+.account-check-list > div.missing > span {
+  background: #d6a84b;
+}
+
+.account-inline-message {
+  padding: 9px 11px;
+  border-radius: 10px;
+  font-size: 0.75rem;
+  line-height: 1.45;
+}
+
+.account-inline-message.error {
+  border: 1px solid rgba(239, 106, 106, 0.25);
+  background: rgba(239, 106, 106, 0.08);
+  color: #f19b9b;
+}
+
+.account-card-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 9px;
+  margin-top: auto;
+}
+
+.account-primary-btn,
+.account-secondary-btn,
+.account-danger-btn {
+  min-height: 42px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 9px 13px;
+  border-radius: 10px;
+  font-size: 0.78rem;
+  font-weight: 900;
+  cursor: pointer;
+  transition: filter 0.15s ease, transform 0.12s ease, border-color 0.15s ease;
+}
+
+.account-primary-btn {
+  flex: 1 1 150px;
+  border: 0;
+  color: #fff;
+}
+
+.account-primary-btn.google { background: #4d83e3; }
+.account-primary-btn.stripe { background: #635bff; }
+.account-primary-btn.whatsapp { background: #28b962; color: #07150d; }
+
+.account-secondary-btn {
+  flex: 1 1 110px;
+  border: 1px solid #3b4148;
+  background: #202328;
+  color: #d4d7dc;
+}
+
+.account-danger-btn {
+  flex: 0 1 auto;
+  border: 1px solid rgba(239, 106, 106, 0.35);
+  background: rgba(239, 106, 106, 0.08);
+  color: #ef8c8c;
+}
+
+.account-primary-btn:hover:not(:disabled),
+.account-secondary-btn:hover:not(:disabled),
+.account-danger-btn:hover:not(:disabled) {
+  filter: brightness(1.08);
+  transform: translateY(-1px);
+}
+
+.account-primary-btn:disabled,
+.account-secondary-btn:disabled,
+.account-danger-btn:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.account-spin {
+  animation: accountSpin 0.8s linear infinite;
+}
+
+@keyframes accountSpin {
+  to { transform: rotate(360deg); }
+}
+
+.integration-privacy-note {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  margin-top: 18px;
+  padding: 15px 16px;
+  border: 1px solid rgba(247, 203, 83, 0.18);
+  border-radius: 14px;
+  background: rgba(247, 203, 83, 0.045);
+}
+
+.integration-privacy-note > svg {
+  flex: 0 0 auto;
+  margin-top: 2px;
+  color: var(--rai-gold);
+}
+
+.integration-privacy-note div {
+  display: grid;
+  gap: 3px;
+}
+
+.integration-privacy-note strong {
+  color: #eceef1;
+  font-size: 0.82rem;
+}
+
+.integration-privacy-note span {
+  color: #9ca2ab;
+  font-size: 0.76rem;
+  line-height: 1.5;
+}
+
+/* Shared responsive safety net for inline-heavy legacy pages */
+.crm-main-content table {
+  max-width: 100%;
+}
+
+@media (max-width: 1100px) {
+  .connected-accounts-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .account-card {
+    min-height: 320px;
+  }
+}
+
+@media (max-width: 900px) {
+  .crm-mobile-header {
+    position: fixed;
+    inset: 0 0 auto 0;
+    z-index: 190;
+    min-height: 64px;
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: max(10px, env(safe-area-inset-top)) 14px 10px;
+    border-bottom: 1px solid #2b2f34;
+    background: rgba(18, 20, 23, 0.94);
+    backdrop-filter: blur(18px);
+    box-shadow: 0 8px 24px rgba(0,0,0,0.2);
+  }
+
+  .crm-mobile-menu-btn {
+    width: 42px;
+    height: 42px;
+    display: grid;
+    place-items: center;
+    flex: 0 0 auto;
+    border: 1px solid #353a41;
+    border-radius: 12px;
+    background: #22262a;
+    color: #fff;
+    font-size: 1.05rem;
+  }
+
+  .crm-mobile-logo {
+    width: 36px;
+    height: 36px;
+    object-fit: contain;
+    border-radius: 10px;
+  }
+
+  .crm-mobile-title {
+    min-width: 0;
+    display: grid;
+    gap: 1px;
+  }
+
+  .crm-mobile-title strong {
+    color: #fff;
+    font-size: 0.95rem;
+  }
+
+  .crm-mobile-title span {
+    color: #9da4ad;
+    font-size: 0.72rem;
+  }
+
+  .crm-sidebar-overlay {
+    position: fixed;
+    inset: 0;
+    z-index: 194;
+    display: block;
+    border: 0;
+    background: rgba(0, 0, 0, 0.62);
+    backdrop-filter: blur(2px);
+  }
+
+  .crm-main-content {
+    width: 100% !important;
+    min-height: 100dvh !important;
+    margin-left: 0 !important;
+    overflow-x: hidden;
+  }
+
+  .crm-main-content:not(.crm-section-settings) {
+    padding-right: 14px !important;
+    padding-left: 14px !important;
+  }
+
+  .crm-main-content [style*="grid-template-columns"] {
+    grid-template-columns: minmax(0, 1fr) !important;
+  }
+
+  .crm-main-content [style*="min-width"] {
+    min-width: 0 !important;
+    max-width: 100% !important;
+  }
+
+  .crm-main-content [style*="display: flex"] {
+    max-width: 100%;
+    flex-wrap: wrap;
+  }
+
+  .crm-main-content input,
+  .crm-main-content select,
+  .crm-main-content textarea {
+    max-width: 100%;
+  }
+
+  .crm-main-content table {
+    display: block;
+    width: 100%;
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  .settings-layout {
+    min-height: calc(100dvh - 64px);
+    grid-template-columns: minmax(0, 1fr);
+    overflow: visible;
+    border: 0;
+  }
+
+  .settings-nav {
+    position: sticky;
+    top: 64px;
+    z-index: 30;
+    width: 100% !important;
+    display: flex !important;
+    flex-direction: row !important;
+    gap: 7px;
+    padding: 9px 12px !important;
+    overflow-x: auto;
+    overscroll-behavior-inline: contain;
+    border-right: 0 !important;
+    border-bottom: 1px solid #2b2f34 !important;
+    scrollbar-width: none;
+  }
+
+  .settings-nav::-webkit-scrollbar {
+    display: none;
+  }
+
+  .settings-nav button {
+    flex: 0 0 auto;
+    min-height: 42px;
+    padding: 9px 12px !important;
+    border-radius: 10px;
+    white-space: nowrap;
+  }
+
+  .settings-nav button.active {
+    box-shadow: inset 0 -2px 0 var(--rai-gold) !important;
+  }
+
+  .settings-content {
+    padding: 26px 16px 44px !important;
+    overflow: visible;
+  }
+
+  .profile-tab .profile-card {
+    flex-direction: column;
+    gap: 20px !important;
+  }
+
+  .field-row {
+    align-items: stretch !important;
+    flex-direction: column;
+    gap: 7px;
+  }
+
+  .field-label {
+    width: auto !important;
+  }
+
+  .profile-actions {
+    flex-wrap: wrap;
+  }
+
+  .profile-actions .btn {
+    flex: 1 1 140px;
+  }
+
+  .settings-page-heading {
+    flex-direction: column;
+  }
+
+  .integration-overview {
+    grid-template-columns: 1fr;
+  }
+
+  .team-heading-row,
+  .team-toolbar,
+  .team-panel-title,
+  .team-invite-row,
+  .team-invite-actions {
+    align-items: stretch !important;
+  }
+}
+
+@media (max-width: 620px) {
+  .settings-content {
+    padding: 22px 12px 36px !important;
+  }
+
+  .settings-label {
+    display: none;
+  }
+
+  .settings-nav button {
+    width: 44px;
+    justify-content: center;
+    padding: 9px !important;
+  }
+
+  .settings-nav .settings-icon {
+    font-size: 1rem;
+  }
+
+  .account-card {
+    min-height: 0;
+    padding: 18px;
+    border-radius: 16px;
+  }
+
+  .account-card-actions {
+    flex-direction: column;
+  }
+
+  .account-primary-btn,
+  .account-secondary-btn,
+  .account-danger-btn {
+    width: 100%;
+    flex-basis: auto;
+  }
+
+  .settings-page-security {
+    width: 100%;
+    justify-content: center;
+  }
+
+  .integration-overview > div {
+    align-items: flex-start;
+    flex-direction: column;
+    gap: 5px;
+  }
+
+  .crm-main-content:not(.crm-section-settings) {
+    padding-right: 10px !important;
+    padding-left: 10px !important;
+  }
+
+  .crm-main-content button {
+    min-height: 42px;
+  }
+}

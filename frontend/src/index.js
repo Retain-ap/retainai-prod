@@ -1,8 +1,9 @@
-﻿// src/index.js
+// src/index.js
 import React from "react";
 import ReactDOM from "react-dom/client";
 import App from "./App";
 import "./index.css";
+import "./retainai-ui.css";
 import GoogleAuthWrapper from "./components/GoogleAuthProvider";
 import { SettingsProvider } from "./components/SettingsContext";
 import { apiUrl } from "./apiBase";

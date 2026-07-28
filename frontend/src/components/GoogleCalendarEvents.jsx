@@ -217,136 +217,70 @@ export default function GoogleCalendarEvents({ user, onEvents, onStatus, onCalen
   }, [stopPolling, tryClosePopup]);
 
   return (
-    <div className="integration-card-inner">
-      <div className="integration-center" style={{ alignItems: "center" }}>
-        <SiGooglecalendar size={38} style={{ color: "#4885ed", marginBottom: 12 }} />
-        <div className="integration-title" style={{ marginBottom: 3 }}>
-          Google Calendar
+    <article className={`account-card account-card-google${connected ? " is-connected" : ""}`}>
+      <div className="account-card-top">
+        <div className="account-brand-icon google" aria-hidden="true">
+          <SiGooglecalendar />
         </div>
-        <div className="integration-desc" style={{ marginBottom: 18 }}>
-          Connect your Google Calendar for seamless sync.
-        </div>
+        <span className={`account-status-badge ${connected ? "connected" : "disconnected"}`}>
+          <span />
+          {connected ? "Connected" : "Not connected"}
+        </span>
+      </div>
 
+      <div className="account-card-copy">
+        <h3>Google Calendar</h3>
+        <p>Sync appointments and calendar events with your RetainAI workspace.</p>
+      </div>
+
+      <div className="account-card-content">
+        {connected && calendars.length > 0 ? (
+          <label className="account-field">
+            <span>Calendar used by RetainAI</span>
+            <select
+              value={calendarId}
+              onChange={(event) => setCalendarId(event.target.value)}
+              disabled={loading}
+            >
+              {calendars.map((calendar) => (
+                <option key={calendar.id} value={calendar.id}>
+                  {calendar.summary}{calendar.primary ? " (Primary)" : ""}
+                </option>
+              ))}
+            </select>
+          </label>
+        ) : (
+          <div className="account-detail-box">
+            {connected
+              ? "Calendar access is active. Refresh to load available calendars."
+              : "Connect Google to view appointments and avoid double-booking."}
+          </div>
+        )}
+
+        {error ? <div className="account-inline-message error">{error}</div> : null}
+      </div>
+
+      <div className="account-card-actions">
         {!connected ? (
           <>
-            <button
-              className="integration-btn"
-              onClick={handleConnect}
-              disabled={loading}
-              style={{
-                marginTop: 12,
-                width: "100%",
-                background: "#4885ed",
-                color: "#fff",
-                border: "none",
-                boxShadow: "0 2px 7px rgba(72,133,237,0.08)",
-              }}
-            >
+            <button className="account-primary-btn google" onClick={handleConnect} disabled={loading || !user?.email}>
               {loading ? "Connecting…" : "Connect Google Calendar"}
             </button>
-
-            <button
-              className="integration-btn"
-              onClick={refreshStatus}
-              disabled={loading || !user?.email}
-              style={{
-                marginTop: 10,
-                width: "100%",
-                background: "#191919",
-                color: "#cfcfcf",
-                border: "1px solid #2a2a2a",
-                boxShadow: "none",
-              }}
-            >
+            <button className="account-secondary-btn" onClick={refreshStatus} disabled={loading || !user?.email}>
               Refresh status
             </button>
-
-            {error && <div className="integration-error">{error}</div>}
           </>
         ) : (
           <>
-            <div
-              style={{
-                display: "flex",
-                alignItems: "center",
-                justifyContent: "center",
-                marginBottom: 16,
-                width: "100%",
-              }}
-            >
-              <span className="integration-dot" />
-              <span className="integration-connected" style={{ marginRight: 10 }}>
-                Connected
-              </span>
-              <button
-                className="integration-btn"
-                onClick={handleDisconnect}
-                disabled={loading}
-                style={{
-                  marginLeft: 16,
-                  minWidth: 120,
-                  background: "#191919",
-                  color: "#4885ed",
-                  border: "2px solid #4885ed",
-                  boxShadow: "none",
-                }}
-              >
-                {loading ? "…" : "Disconnect"}
-              </button>
-            </div>
-
-            {calendars.length > 0 && (
-              <div style={{ width: "100%", marginBottom: 10 }}>
-                <label
-                  style={{
-                    color: "#c8c8c8",
-                    fontWeight: 500,
-                    fontSize: "1em",
-                    marginRight: 8,
-                    display: "block",
-                    textAlign: "center",
-                  }}
-                >
-                  Calendar:
-                </label>
-                <div style={{ display: "flex", justifyContent: "center", width: "100%" }}>
-                  <select
-                    className="integration-select"
-                    value={calendarId}
-                    onChange={(e) => setCalendarId(e.target.value)}
-                    style={{ minWidth: 240, maxWidth: 330, margin: "0 auto", textAlign: "center" }}
-                  >
-                    {calendars.map((cal) => (
-                      <option key={cal.id} value={cal.id}>
-                        {cal.summary}
-                        {cal.primary ? " (Primary)" : ""}
-                      </option>
-                    ))}
-                  </select>
-                </div>
-              </div>
-            )}
-
-            <button
-              className="integration-btn"
-              onClick={refreshStatus}
-              disabled={loading || !user?.email}
-              style={{
-                marginTop: 6,
-                width: "100%",
-                background: "#191919",
-                color: "#cfcfcf",
-                border: "1px solid #2a2a2a",
-                boxShadow: "none",
-              }}
-            >
-              Refresh status
+            <button className="account-primary-btn google" onClick={refreshStatus} disabled={loading || !user?.email}>
+              {loading ? "Refreshing…" : "Refresh connection"}
             </button>
-
-            {error && <div className="integration-error">{error}</div>}
+            <button className="account-danger-btn" onClick={handleDisconnect} disabled={loading}>
+              Disconnect
+            </button>
           </>
         )}
       </div>
-    </div>
+    </article>
   );
 }

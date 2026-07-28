@@ -1,4 +1,4 @@
-﻿import React, { useState, useEffect } from "react";
+import React, { useState, useEffect } from "react";
 
 export default function InviteTeamModal({ user, onClose }) {
   const [email, setEmail] = useState("");

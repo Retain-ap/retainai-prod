@@ -18,6 +18,19 @@ import { useSettings } from "./SettingsContext";
 import Automations from "./Automations";
 import InviteTeamModal from "./InviteTeamModal";
 import { apiUrl } from "../apiBase";
+import { FaBars } from "react-icons/fa";
+
+const SECTION_LABELS = {
+  dashboard: "Dashboard",
+  analytics: "Analytics",
+  calendar: "Calendar",
+  messages: "Messages",
+  notifications: "Notifications",
+  automations: "Automations",
+  "ai-prompts": "AI Prompts",
+  invoices: "Invoices",
+  settings: "Settings",
+};
 
 const DEFAULT_TAGS = [
   "VIP",
@@ -167,12 +180,31 @@ function CrmDashboard() {
   const [highlightLeadIds, setHighlightLeadIds] = useState([]);
   const [loadingLeads, setLoadingLeads] = useState(false);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
+  const [isMobile, setIsMobile] = useState(() =>
+    typeof window !== "undefined" ? window.innerWidth <= 900 : false
+  );
+  const [mobileNavOpen, setMobileNavOpen] = useState(false);
+
+  useEffect(() => {
+    const media = window.matchMedia("(max-width: 900px)");
+    const sync = () => {
+      setIsMobile(media.matches);
+      if (!media.matches) setMobileNavOpen(false);
+    };
+    sync();
+    media.addEventListener?.("change", sync);
+    return () => media.removeEventListener?.("change", sync);
+  }, []);
+
+  useEffect(() => {
+    setMobileNavOpen(false);
+  }, [section]);
   const [drawerLead, setDrawerLead] = useState(null);
 
   // Google Calendar bits
   const [googleEvents, setGoogleEvents] = useState([]);
   const [gcalStatus, setGcalStatus] = useState("");
-  const [gcalConnected, setGcalConnected] = useState(false);
+  const [, setGcalConnected] = useState(false);
 
   const [selectedDate, setSelectedDate] = useState(null);
   const [showQuickAdd, setShowQuickAdd] = useState(false);
@@ -569,7 +601,7 @@ function CrmDashboard() {
   }, [effectiveEmail, user, setUser]);
 
   const crmAppointments = useMemo(() => getAppointmentsFromLeads(leads), [leads]);
-  const SIDEBAR_WIDTH = sidebarCollapsed ? 60 : 245;
+  const SIDEBAR_WIDTH = isMobile ? 0 : sidebarCollapsed ? 60 : 245;
 
   // Google connection
   const checkGoogleConnection = useCallback(async () => {
@@ -704,25 +736,53 @@ function CrmDashboard() {
       className="crm-root"
       style={{
         minHeight: "100vh",
-        width: "100vw",
+        width: "100%",
         overflowX: "hidden",
         background: "#181a1b",
       }}
     >
+      <header className="crm-mobile-header">
+        <button
+          type="button"
+          className="crm-mobile-menu-btn"
+          onClick={() => setMobileNavOpen(true)}
+          aria-label="Open navigation"
+        >
+          <FaBars />
+        </button>
+        <img src={logo} alt="RetainAI" className="crm-mobile-logo" />
+        <div className="crm-mobile-title">
+          <strong>RetainAI</strong>
+          <span>{SECTION_LABELS[section] || "CRM"}</span>
+        </div>
+      </header>
+
+      {mobileNavOpen && (
+        <button
+          type="button"
+          className="crm-sidebar-overlay"
+          onClick={() => setMobileNavOpen(false)}
+          aria-label="Close navigation"
+        />
+      )}
+
       <Sidebar
         logo={logo}
         onLogout={handleLogout}
         user={user}
         setSection={setSection}
         section={section}
-        collapsed={sidebarCollapsed}
+        collapsed={isMobile ? false : sidebarCollapsed}
         setCollapsed={setSidebarCollapsed}
+        isMobile={isMobile}
+        mobileOpen={mobileNavOpen}
+        onMobileClose={() => setMobileNavOpen(false)}
         onInviteTeam={() => setShowInviteModal(true)}
         onImportLeads={openImports}
       />
 
       <div
-        className="crm-main-content"
+        className={`crm-main-content crm-section-${section}`}
         style={{
           minHeight: "100vh",
           marginLeft: SIDEBAR_WIDTH,
@@ -730,7 +790,13 @@ function CrmDashboard() {
           display: "flex",
           flexDirection: "column",
           width: `calc(100vw - ${SIDEBAR_WIDTH}px)`,
-          padding: "24px",
+          padding: isMobile
+            ? section === "settings"
+              ? "64px 0 0"
+              : "76px 14px 24px"
+            : section === "settings"
+            ? "0"
+            : "24px",
           boxSizing: "border-box",
         }}
       >
@@ -895,7 +961,7 @@ function CrmDashboard() {
                   position: "fixed",
                   left: 0,
                   top: 0,
-                  width: "100vw",
+                  width: "100%",
                   height: "100vh",
                   background: "#000a",
                   zIndex: 99,

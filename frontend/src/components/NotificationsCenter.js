@@ -234,6 +234,7 @@ export default function NotificationsCenter({ user }) {
     const onChanged = () => load();
     window.addEventListener("notifications:changed", onChanged);
     return () => window.removeEventListener("notifications:changed", onChanged);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [API, user?.email]);
 
   useEffect(() => {

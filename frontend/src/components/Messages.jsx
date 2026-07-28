@@ -1020,6 +1020,7 @@ export default function Messages({ user, leads = [], defaultTemplate = "", langu
     }, 250);
 
     return () => clearTimeout(t);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [leadSignal, API, user?.email, lead?.id, templateName, templateLangUI]);
 
   useEffect(() => {

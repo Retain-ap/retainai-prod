@@ -14,6 +14,7 @@ import {
   FaCog,
   FaFileInvoiceDollar,
   FaUserPlus,
+  FaTimes,
 } from "react-icons/fa";
 import defaultAvatar from "../assets/default-avatar.png";
 import { promptInstall, canPromptInstall } from "../index"; // <- use helpers
@@ -28,6 +29,9 @@ export default function Sidebar({
   setCollapsed,
   onInviteTeam,
   onImportLeads,
+  isMobile = false,
+  mobileOpen = false,
+  onMobileClose,
 }) {
   const [profileOpen, setProfileOpen] = useState(false);
 
@@ -92,6 +96,14 @@ export default function Sidebar({
   const displayName =
     user?.name && user.name.trim() !== "" ? user.name : user?.email;
 
+  const goTo = useCallback(
+    (nextSection) => {
+      setSection(nextSection);
+      if (isMobile && typeof onMobileClose === "function") onMobileClose();
+    },
+    [setSection, isMobile, onMobileClose]
+  );
+
   // ----- NEW: brand, type, and role logic -----
   const brand =
     user?.business || user?.businessName || user?.lineOfBusiness || "Your Business";
@@ -106,7 +118,21 @@ export default function Sidebar({
   // --------------------------------------------
 
   return (
-    <aside className={`sidebar${collapsed ? " collapsed" : ""}`}>
+    <aside
+      className={`sidebar${collapsed ? " collapsed" : ""}${
+        isMobile ? " mobile" : ""
+      }${mobileOpen ? " mobile-open" : ""}`}
+    >
+      {isMobile && (
+        <button
+          type="button"
+          className="sidebar-mobile-close"
+          onClick={onMobileClose}
+          aria-label="Close navigation"
+        >
+          <FaTimes />
+        </button>
+      )}
       <button
         type="button"
         className="sidebar-toggle"
@@ -194,56 +220,56 @@ export default function Sidebar({
         <button
           type="button"
           className={section === "dashboard" ? "active" : ""}
-          onClick={() => setSection("dashboard")}
+          onClick={() => goTo("dashboard")}
         >
           <FaUsers /> {!collapsed && "Dashboard"}
         </button>
         <button
           type="button"
           className={section === "analytics" ? "active" : ""}
-          onClick={() => setSection("analytics")}
+          onClick={() => goTo("analytics")}
         >
           <FaChartBar /> {!collapsed && "Analytics"}
         </button>
         <button
           type="button"
           className={section === "calendar" ? "active" : ""}
-          onClick={() => setSection("calendar")}
+          onClick={() => goTo("calendar")}
         >
           <FaCalendarAlt /> {!collapsed && "Calendar"}
         </button>
         <button
           type="button"
           className={section === "messages" ? "active" : ""}
-          onClick={() => setSection("messages")}
+          onClick={() => goTo("messages")}
         >
           <FaEnvelopeOpenText /> {!collapsed && "Messages"}
         </button>
         <button
           type="button"
           className={section === "notifications" ? "active" : ""}
-          onClick={() => setSection("notifications")}
+          onClick={() => goTo("notifications")}
         >
           <FaBell /> {!collapsed && "Notifications"}
         </button>
         <button
           type="button"
           className={section === "automations" ? "active" : ""}
-          onClick={() => setSection("automations")}
+          onClick={() => goTo("automations")}
         >
           <FaRobot /> {!collapsed && "Automations"}
         </button>
         <button
           type="button"
           className={section === "ai-prompts" ? "active" : ""}
-          onClick={() => setSection("ai-prompts")}
+          onClick={() => goTo("ai-prompts")}
         >
           <FaRobot /> {!collapsed && "AI Prompts"}
         </button>
         <button
           type="button"
           className={section === "invoices" ? "active" : ""}
-          onClick={() => setSection("invoices")}
+          onClick={() => goTo("invoices")}
         >
           <FaFileInvoiceDollar /> {!collapsed && "Invoices"}
         </button>
@@ -256,7 +282,8 @@ export default function Sidebar({
           className="sidebar-invite-btn"
           onClick={() => {
             if (typeof onInviteTeam === "function") onInviteTeam();
-            else setSection("settings");
+            else goTo("settings");
+            if (isMobile && typeof onMobileClose === "function") onMobileClose();
           }}
           aria-label="Invite team members"
           title="Invite team members"
@@ -271,7 +298,7 @@ export default function Sidebar({
         <button
           type="button"
           className="sidebar-settings-btn"
-          onClick={() => setSection("settings")}
+          onClick={() => goTo("settings")}
         >
           <FaCog style={{ marginRight: 9, fontSize: 18 }} />
           Settings

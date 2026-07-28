@@ -1345,6 +1345,7 @@ export default function Automations({ user }) {
     return () => {
       mounted = false;
     };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [userEmail]);
 
   const applyTemplate = (t) => {

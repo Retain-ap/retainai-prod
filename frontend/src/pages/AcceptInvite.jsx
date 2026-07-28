@@ -1,6 +1,5 @@
 // src/pages/AcceptInvite.jsx
 import React, { useEffect, useState } from "react";
-import { API_BASE } from "../config";
 
 export default function AcceptInvite() {
   // CRA/Webpack-friendly env detection (no import.meta)

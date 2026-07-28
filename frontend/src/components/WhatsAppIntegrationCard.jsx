@@ -1,4 +1,4 @@
-﻿import React, { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import { SiWhatsapp } from "react-icons/si";
 import { API_BASE } from "../config";
 

@@ -144,116 +144,63 @@ export default function StripeConnectCard({ user, refreshUser }) {
   }
 
   return (
-    <div className={`integration-card${isConnected ? " stripe-connected" : ""}`}>
-      <div
-        style={{
-          width: "100%",
-          minHeight: 240,
-          display: "flex",
-          flexDirection: "column",
-          alignItems: "center",
-          justifyContent: "center",
-        }}
-      >
-        <span style={{ fontSize: 34, color: "#635bff", marginBottom: 12 }}>
-          <svg width="34" height="34" viewBox="0 0 24 24" fill="currentColor">
+    <article className={`account-card account-card-stripe${isConnected ? " is-connected" : ""}`}>
+      <div className="account-card-top">
+        <div className="account-brand-icon stripe" aria-hidden="true">
+          <svg viewBox="0 0 24 24" fill="currentColor">
             <path d="M7.8 4.5h8.4v2.1H11.7c-2.1 0-3.3 1.2-3.3 3s1.2 3 3.3 3H16c2.1 0 3.6 1.2 3.6 3.9 0 2.7-1.8 4.5-5.4 4.5H8.1v-2.1h6.6c1.8 0 2.7-1.2 2.7-2.7 0-1.5-.9-2.7-2.7-2.7H8.1v-2.1H16c1.8 0 3-1.2 3-2.7s-1.2-2.7-3-2.7H7.8v-2.1z" />
           </svg>
-        </span>
-
-        <div style={{ width: "100%", textAlign: "center" }}>
-          <div
-            style={{
-              fontWeight: 700,
-              color: "#fff",
-              fontSize: 20,
-              marginBottom: 2,
-            }}
-          >
-            Stripe Payments
-          </div>
-
-          <div style={{ color: "#aaa", fontSize: 15, margin: "2px 0 18px 0" }}>
-            {isConnected
-              ? "Your Stripe account is connected."
-              : "Connect or create a Stripe account to accept payments."}
-          </div>
-
-          {isConnected ? (
-            <div
-              style={{
-                display: "flex",
-                flexWrap: "wrap",
-                justifyContent: "center",
-                gap: 12,
-              }}
-            >
-              <button className="settings-btn connected" disabled>
-                Connected
-              </button>
-
-              <button
-                className="settings-btn"
-                onClick={handleDashboard}
-                disabled={loading}
-              >
-                {loading ? "Opening…" : "Open Stripe Dashboard"}
-              </button>
-
-              <button
-                className="settings-btn refresh"
-                onClick={handleRefresh}
-                disabled={loading}
-              >
-                Refresh Status
-              </button>
-
-              <button
-                className="settings-btn disconnect"
-                onClick={handleDisconnect}
-                disabled={loading}
-                style={{ background: "#e66565" }}
-              >
-                {loading ? "Disconnecting…" : "Disconnect"}
-              </button>
-            </div>
-          ) : (
-            <div
-              style={{
-                display: "flex",
-                flexWrap: "wrap",
-                justifyContent: "center",
-                gap: 12,
-              }}
-            >
-              <button
-                className="settings-btn"
-                onClick={handleLinkExisting}
-                disabled={loading}
-              >
-                {loading ? "Redirecting…" : "Link Existing Stripe Account"}
-              </button>
-
-              <button
-                className="settings-btn"
-                onClick={handleSignup}
-                disabled={loading}
-              >
-                {loading ? "Redirecting…" : "Create Stripe Account"}
-              </button>
-            </div>
-          )}
-
-          {error && (
-            <div
-              className="integration-error"
-              style={{ color: "#e66565", marginTop: 16 }}
-            >
-              {error}
-            </div>
-          )}
         </div>
+        <span className={`account-status-badge ${isConnected ? "connected" : "disconnected"}`}>
+          <span />
+          {isConnected ? "Connected" : "Not connected"}
+        </span>
       </div>
-    </div>
+
+      <div className="account-card-copy">
+        <h3>Stripe Payments</h3>
+        <p>Accept payments and manage your connected Stripe business account.</p>
+      </div>
+
+      <div className="account-card-content">
+        <div className="account-detail-box">
+          {isConnected
+            ? "Payments are enabled for this workspace. Open Stripe for payouts, balances, and account settings."
+            : "Link an existing Stripe account or create a new one through RetainAI."}
+        </div>
+        {user?.stripe_account_id ? (
+          <div className="account-id-row">
+            <span>Account</span>
+            <code>{user.stripe_account_id}</code>
+          </div>
+        ) : null}
+        {error ? <div className="account-inline-message error">{error}</div> : null}
+      </div>
+
+      <div className="account-card-actions">
+        {isConnected ? (
+          <>
+            <button className="account-primary-btn stripe" onClick={handleDashboard} disabled={loading}>
+              {loading ? "Opening…" : "Open Stripe"}
+            </button>
+            <button className="account-secondary-btn" onClick={handleRefresh} disabled={loading}>
+              Refresh
+            </button>
+            <button className="account-danger-btn" onClick={handleDisconnect} disabled={loading}>
+              Disconnect
+            </button>
+          </>
+        ) : (
+          <>
+            <button className="account-primary-btn stripe" onClick={handleLinkExisting} disabled={loading}>
+              {loading ? "Redirecting…" : "Link existing account"}
+            </button>
+            <button className="account-secondary-btn" onClick={handleSignup} disabled={loading}>
+              Create account
+            </button>
+          </>
+        )}
+      </div>
+    </article>
   );
 }

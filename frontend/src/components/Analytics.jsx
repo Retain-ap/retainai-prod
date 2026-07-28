@@ -30,14 +30,10 @@ import {
 /* ===== THEME ===== */
 const BG = "#181a1b";
 const CARD = "#232323";
-const SOFT = "#1e2326";
 const BORDER = "#2b2f33";
 const TEXT = "#f3f4f5";
 const SUBTEXT = "#9aa3ab";
 const GOLD = "#f7cb53";
-const GREEN = "#30b46c";
-const RED = "#e66565";
-const BLUE = "#5b8def";
 
 const N1 = "#cfd5db";
 const N2 = "#8b949e";
@@ -89,13 +85,6 @@ function hasTag(lead, targets) {
   return targets.some((target) => tags.includes(String(target).toLowerCase()));
 }
 
-function appointmentDateObj(appt) {
-  if (appt?.appointment_time) return safeDate(appt.appointment_time);
-  if (appt?.date) {
-    return safeDate(`${appt.date}T${appt.time || "00:00"}`);
-  }
-  return null;
-}
 
 function getLeadDisplayName(lead) {
   return lead?.name || lead?.email || "Unnamed Lead";

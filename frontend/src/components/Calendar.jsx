@@ -337,11 +337,7 @@ export default function Calendar({
   const selectedDay =
     selectedDate && safeDate(selectedDate) ? safeDate(selectedDate) : null;
 
-  const dayNotes = useMemo(() => {
-    if (!selectedDay) return [];
-    const key = dateKey(selectedDay);
-    return Array.isArray(notesMap[key]) ? notesMap[key] : [];
-  }, [notesMap, selectedDay]);
+
 
   const selectedDayItems = useMemo(() => {
     if (!selectedDay) return [];

@@ -3,6 +3,7 @@ import React, { useEffect, useMemo, useState, useCallback } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
 import GoogleCalendarEvents from "./GoogleCalendarEvents";
 import StripeConnectCard from "./StripeConnectCard";
+import WhatsAppHealthCard from "./WhatsAppHealthCard";
 import {
   FaUser,
   FaPlug,
@@ -20,7 +21,6 @@ import {
   FaEnvelope,
   FaLifeRing,
   FaCreditCard,
-  FaWhatsapp,
   FaRobot,
   FaShieldAlt,
   FaArrowRight,
@@ -509,15 +509,12 @@ export default function Settings({
     }
   }, []);
 
-  const leftOffset = sidebarCollapsed ? 60 : 245;
-  const settingsWidth = `calc(100vw - ${leftOffset}px)`;
-  const MAX_W = 1000;
+  const MAX_W = 1120;
 
   if (!profile?.email) {
     return (
       <div
         className="settings-layout"
-        style={{ left: leftOffset, width: settingsWidth }}
       >
         <div style={{ padding: 16, maxWidth: 900 }}>
           <div style={{ fontWeight: 900, marginBottom: 8, color: "#fff" }}>
@@ -534,7 +531,6 @@ export default function Settings({
   return (
     <div
       className="settings-layout"
-      style={{ left: leftOffset, width: settingsWidth }}
     >
       <nav className="settings-nav">
         {TABS.map((t) => (
@@ -693,57 +689,87 @@ export default function Settings({
         )}
 
         {tab === "integrations" && (
-          <div style={{ maxWidth: MAX_W, margin: "0 auto" }}>
-            <h2>Integrations</h2>
-
-            <div className="integration-row" style={{ justifyContent: "center" }}>
-              <div className="integration-card">
-                <GoogleCalendarEvents
-                  user={profile}
-                  onStatus={setGcalStatus}
-                  onEvents={setGoogleEvents}
-                />
+          <div className="integrations-page" style={{ maxWidth: MAX_W, margin: "0 auto" }}>
+            <div className="settings-page-heading">
+              <div>
+                <span className="settings-page-eyebrow">Workspace connections</span>
+                <h2>Connected accounts</h2>
+                <p>Connect the services RetainAI uses for scheduling, payments, and customer conversations.</p>
               </div>
+              <div className="settings-page-security">
+                <FaShieldAlt aria-hidden="true" />
+                Secure account connections
+              </div>
+            </div>
+
+            <div className="integration-overview">
+              <div>
+                <span>Google Calendar</span>
+                <strong className={profile?.gcal_connected ? "ready" : "muted"}>
+                  {profile?.gcal_connected ? "Connected" : "Optional"}
+                </strong>
+              </div>
+              <div>
+                <span>Stripe Payments</span>
+                <strong className={profile?.stripe_connected ? "ready" : "muted"}>
+                  {profile?.stripe_connected ? "Connected" : "Optional"}
+                </strong>
+              </div>
+              <div>
+                <span>Account access</span>
+                <strong className="ready">Encrypted OAuth</strong>
+              </div>
+            </div>
+
+            <div className="connected-accounts-grid">
+              <GoogleCalendarEvents
+                user={profile}
+                onStatus={setGcalStatus}
+                onEvents={setGoogleEvents}
+              />
 
               <StripeConnectCard
                 user={profile}
                 refreshUser={async () => {
                   try {
-                    if (typeof refreshUser === "function") {
-                      await refreshUser();
-                    }
+                    if (typeof refreshUser === "function") await refreshUser();
                   } catch {}
-
                   try {
                     await syncProfileFromBackend(profile.email);
                   } catch {}
                 }}
               />
 
-              <div className="integration-card coming-soon">
-                <SiInstagram className="integration-icon instagram" />
-                <div>
-                  <div className="integration-title">Instagram</div>
-                  <div className="integration-desc">Coming soon!</div>
+              <WhatsAppHealthCard user={profile} />
+
+              <article className="account-card account-card-coming-soon">
+                <div className="account-card-top">
+                  <div className="account-brand-icon instagram" aria-hidden="true">
+                    <SiInstagram />
+                  </div>
+                  <span className="account-status-badge coming-soon">Coming soon</span>
                 </div>
+                <div className="account-card-copy">
+                  <h3>Instagram</h3>
+                  <p>Bring customer messages and lead activity into one RetainAI inbox.</p>
+                </div>
+                <div className="account-card-content">
+                  <div className="account-detail-box">
+                    Instagram messaging will appear here once the integration is ready for production.
+                  </div>
+                </div>
+                <div className="account-card-actions">
+                  <button className="account-secondary-btn" disabled>Not available yet</button>
+                </div>
+              </article>
+            </div>
+
+            <div className="integration-privacy-note">
+              <FaShieldAlt aria-hidden="true" />
+              <div>
+                <strong>Your credentials stay private.</strong>
+                <span>RetainAI uses secure provider authorization and never displays connected-account secrets on this page.</span>
               </div>
-            </div>
-
-            <div style={{ marginTop: 12, color: "#bbb" }}>
-              Google Calendar status:{" "}
-              <b style={{ color: "#fff" }}>{gcalStatus || "Not connected"}</b>
-            </div>
-
-            <div style={{ marginTop: 8, color: "#bbb" }}>
-              Stripe status:{" "}
-              <b style={{ color: "#fff" }}>
-                {profile?.stripe_connected ? "Connected" : "Not connected"}
-              </b>
-              {profile?.stripe_account_id ? (
-                <span style={{ marginLeft: 8, color: "#8d8d93" }}>
-                  ({profile.stripe_account_id})
-                </span>
-              ) : null}
             </div>
           </div>
         )}
