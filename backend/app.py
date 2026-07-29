@@ -1513,6 +1513,19 @@ from flask import request, jsonify
 def _norm_email(e: str) -> str:
     return (e or "").strip().lower()
 
+def _platform_owner_emails() -> set:
+    return {
+        _norm_email(value)
+        for value in os.getenv(
+            "PLATFORM_OWNER_EMAILS",
+            "owner@retainai.ca,mateo.zuf23@gmail.com",
+        ).split(",")
+        if _norm_email(value)
+    }
+
+def _is_platform_owner(email: str) -> bool:
+    return _norm_email(email) in _platform_owner_emails()
+
 def _req_user_email() -> str:
     return _norm_email(_session_org_email())
 
@@ -2644,15 +2657,49 @@ def _user_payload(email: str, user: dict) -> dict:
         "canInviteTeam": role == "owner",
         "canEditBusiness": role == "owner",
         "canManageBilling": role == "owner",
-        "platformOwner": email in {
-            _norm_email(value)
-            for value in os.getenv(
-                "PLATFORM_OWNER_EMAILS",
-                "owner@retainai.ca,mateo.zuf23@gmail.com",
-            ).split(",")
-            if _norm_email(value)
-        },
+        "platformOwner": _is_platform_owner(email),
     }
+
+def _bootstrap_platform_owner() -> None:
+    """
+    Provision or recover the dedicated platform-owner login from Render secrets.
+    No password is embedded in source control. When PLATFORM_OWNER_PASSWORD is
+    configured, it becomes the authoritative password after every safe restart.
+    """
+    password = str(os.getenv("PLATFORM_OWNER_PASSWORD") or "")
+    email = _norm_email(os.getenv("PLATFORM_OWNER_EMAIL") or "owner@retainai.ca")
+    if not password or not email:
+        return
+    if len(password) < 12:
+        print("[SECURITY] PLATFORM_OWNER_PASSWORD must contain at least 12 characters.")
+        return
+
+    users = load_users() or {}
+    if not isinstance(users, dict):
+        print("[SECURITY] Could not bootstrap the platform owner: storage is unavailable.")
+        return
+
+    account = users.get(email)
+    if not isinstance(account, dict):
+        account = {}
+    account.update(
+        {
+            "email": email,
+            "name": account.get("name") or "RetainAI Owner",
+            "business": account.get("business") or "RetainAI",
+            "businessName": account.get("businessName") or "RetainAI",
+            "role": "owner",
+            "org_id": email,
+            "status": "active",
+            "password": generate_password_hash(password),
+        }
+    )
+    users[email] = account
+    save_users(users)
+    print(f"[SECURITY] Platform owner account ready: {email}")
+
+
+_bootstrap_platform_owner()
 
 @app.route("/api/signup", methods=["POST", "OPTIONS"])
 @app.route("/api/auth/signup", methods=["POST", "OPTIONS"])
@@ -2770,7 +2817,9 @@ def login():
         member_login = users.get(email) or {}
 
         owner_ok = bool(owner_acct) and (
-            (owner_acct.get("status") == "active") or _within_trial(owner_acct, TRIAL_DAYS)
+            _is_platform_owner(owner_email)
+            or (owner_acct.get("status") == "active")
+            or _within_trial(owner_acct, TRIAL_DAYS)
         )
         member_active = str(team_rec.get("team_status") or "active").lower() == "active"
 
@@ -2817,7 +2866,9 @@ def login():
     user = users.get(email)
     if isinstance(user, dict):
         allowed = _password_matches(user.get("password", ""), password) and (
-            (user.get("status") == "active") or _within_trial(user, TRIAL_DAYS)
+            _is_platform_owner(email)
+            or (user.get("status") == "active")
+            or _within_trial(user, TRIAL_DAYS)
         )
         if allowed:
             now_iso = datetime.datetime.now(datetime.timezone.utc).isoformat().replace("+00:00", "Z")
@@ -2896,7 +2947,11 @@ def google_oauth():
             users[email] = user
             save_users(users)
 
-        if not (user.get("status") == "active" or _within_trial(user, TRIAL_DAYS)):
+        if not (
+            _is_platform_owner(email)
+            or user.get("status") == "active"
+            or _within_trial(user, TRIAL_DAYS)
+        ):
             return jsonify({"error": "Account not active. Please complete payment to activate."}), 403
 
         payload = _user_payload(email, user)
