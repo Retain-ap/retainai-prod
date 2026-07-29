@@ -19,10 +19,11 @@ import requests as pyrequests
 from email import policy
 from email.parser import BytesParser
 
-from flask import Flask, request, jsonify, send_from_directory, redirect, current_app, Blueprint
+from flask import Flask, request, jsonify, send_from_directory, redirect, current_app, Blueprint, session
 from flask_cors import CORS
 from dotenv import load_dotenv
 from flask_apscheduler import APScheduler
+from werkzeug.security import check_password_hash, generate_password_hash
 
 from sendgrid import SendGridAPIClient
 from sendgrid.helpers.mail import Mail, Email
@@ -59,6 +60,24 @@ print(f"[BOOT] RetainAI started (PID: {os.getpid()})")
 app = Flask(__name__)
 app.config.from_object(Config())
 app.config["BOOTSTRAP_DONE"] = False  # used to start scheduler once in prod
+
+SESSION_SECRET = (
+    os.getenv("SESSION_SECRET")
+    or os.getenv("FLASK_SECRET_KEY")
+    or os.getenv("APP_SECRET")
+    or os.getenv("META_APP_SECRET")
+)
+if not SESSION_SECRET:
+    # Keeps local development usable. Production must configure SESSION_SECRET so
+    # every worker can validate the same cookie after a restart.
+    SESSION_SECRET = os.urandom(32).hex()
+    print("[SECURITY] WARNING: SESSION_SECRET is not configured; sessions will not survive restarts.")
+app.config.update(
+    SECRET_KEY=SESSION_SECRET,
+    SESSION_COOKIE_NAME="retainai_session",
+    SESSION_COOKIE_HTTPONLY=True,
+    PERMANENT_SESSION_LIFETIME=datetime.timedelta(days=30),
+)
 
 
 # ----------------------------
@@ -103,6 +122,94 @@ app.config.update(
     SESSION_COOKIE_SAMESITE="None",
     SESSION_COOKIE_SECURE=not IS_LOCAL,
 )
+
+_PUBLIC_API_PATHS = {
+    "/api/health",
+    "/api/test",
+    "/api/login",
+    "/api/logout",
+    "/api/signup",
+    "/api/auth/signup",
+    "/api/oauth/google",
+    "/api/stripe/webhook",
+    "/api/stripe/oauth/callback",
+    "/api/stripe/verify",
+    "/api/google/oauth-callback",
+    "/api/email/inbound",
+    "/api/whatsapp/webhook",
+    "/api/vapid-public-key",
+    "/api/team/accept",
+}
+
+
+def _session_email() -> str:
+    return str(session.get("user_email") or "").strip().lower()
+
+
+def _session_org_email() -> str:
+    return str(session.get("org_email") or _session_email()).strip().lower()
+
+
+def _start_user_session(email: str, user_payload: dict, remember: bool = True) -> None:
+    session.clear()
+    session.permanent = bool(remember)
+    session["user_email"] = str(email or "").strip().lower()
+    session["org_email"] = str(
+        (user_payload or {}).get("orgOwnerEmail")
+        or (user_payload or {}).get("org_id")
+        or email
+        or ""
+    ).strip().lower()
+    session["role"] = str((user_payload or {}).get("role") or "owner").lower()
+
+
+@app.before_request
+def require_authenticated_api_session():
+    if request.method == "OPTIONS" or not request.path.startswith("/api/"):
+        return None
+    if request.path in _PUBLIC_API_PATHS:
+        return None
+    if request.path.startswith("/api/team/invite/"):
+        return None
+
+    actor = _session_email()
+    org = _session_org_email()
+    if not actor:
+        return jsonify({"error": "authentication_required"}), 401
+
+    # Legacy clients still send identity fields. Accept only the signed-in user
+    # or their workspace owner, preventing email-header impersonation.
+    claimed = [
+        request.headers.get("X-User-Email"),
+        request.headers.get("X-Owner-Email"),
+        request.headers.get("X-Auth-Email"),
+        request.args.get("user_email"),
+        request.args.get("owner_email"),
+    ]
+    if request.endpoint in {"api_profile", "api_user"}:
+        claimed.append(request.args.get("email"))
+    for key, value in (request.view_args or {}).items():
+        if "email" in str(key).lower():
+            claimed.append(value)
+
+    allowed = {actor, org}
+    for value in claimed:
+        normalized = str(value or "").strip().lower()
+        if normalized and normalized not in allowed:
+            return jsonify({"error": "forbidden_identity"}), 403
+    return None
+
+
+def _password_matches(stored: str, supplied: str) -> bool:
+    stored = str(stored or "")
+    if not stored or not supplied:
+        return False
+    if stored.startswith(("scrypt:", "pbkdf2:")):
+        try:
+            return check_password_hash(stored, supplied)
+        except Exception:
+            return False
+    return hmac.compare_digest(stored, supplied)
 
 def _cors_preflight_response():
     resp = current_app.make_response(("", 204))
@@ -949,30 +1056,6 @@ def api_profile():
         "orgOwnerEmail": org_email,
     }), 200
 
-@app.route("/api/profile/debug", methods=["GET"])
-def api_profile_debug():
-    email = (request.args.get("email") or "").strip().lower()
-    ok = True
-    msg = "ok"
-    u = None
-    try:
-        u = get_user(email) if email else None
-    except Exception as ex:
-        ok = False
-        msg = f"get_user raised: {ex}"
-
-    return jsonify({
-        "ok": ok,
-        "message": msg,
-        "email": email,
-        "USE_SQLITE": bool(USE_SQLITE),
-        "SQLITE_PATH": SQLITE_PATH,
-        "DATA_ROOT": DATA_ROOT,
-        "exists": bool(u) if email else None,
-        "user_sample": _json_sanitize(u) if (ok and u) else None
-    }), 200 if ok else 500
-
-
 # ----------------------------
 # OpenRouter helpers
 # ----------------------------
@@ -1430,13 +1513,7 @@ def _norm_email(e: str) -> str:
     return (e or "").strip().lower()
 
 def _req_user_email() -> str:
-    # Prefer headers (best for your app). Fallbacks just in case.
-    payload = request.get_json(silent=True) or {}
-    return _norm_email(
-        request.headers.get("X-User-Email")
-        or request.args.get("email")
-        or payload.get("email")
-    )
+    return _norm_email(_session_org_email())
 
 def _org_is_active(owner_record: dict) -> bool:
     if not owner_record or not isinstance(owner_record, dict):
@@ -2604,7 +2681,7 @@ def signup():
 
     users[email] = {
         "email": email,
-        "password": password,
+        "password": generate_password_hash(password),
         "name": name,
         "businessType": businessType,
         "business": businessName,
@@ -2665,6 +2742,7 @@ def login():
     data = request.get_json(silent=True) or {}
     email = _norm_email(data.get("email"))
     password = (data.get("password") or "").strip()
+    remember = bool(data.get("remember", True))
 
     if not email or not password:
         return jsonify({"error": "Invalid credentials or account not active"}), 401
@@ -2687,13 +2765,8 @@ def login():
         )
         member_active = str(team_rec.get("team_status") or "active").lower() == "active"
 
-        # New teammates use their own password. The owner-password fallback keeps
-        # older invitations working until those accounts reset their password.
         own_password = member_login.get("password", "")
-        legacy_owner_password = owner_acct.get("password", "")
-        password_ok = bool(own_password and password == own_password)
-        if not own_password:
-            password_ok = bool(legacy_owner_password and password == legacy_owner_password)
+        password_ok = _password_matches(own_password, password)
 
         if owner_ok and member_active and password_ok:
             now_iso = datetime.datetime.now(datetime.timezone.utc).isoformat().replace("+00:00", "Z")
@@ -2709,6 +2782,8 @@ def login():
                     "status": "active",
                 }
             member_login["last_login"] = now_iso
+            if own_password and not str(own_password).startswith(("scrypt:", "pbkdf2:")):
+                member_login["password"] = generate_password_hash(password)
             users[email] = member_login
             save_users(users)
 
@@ -2723,19 +2798,23 @@ def login():
                 "role": team_rec.get("role", "member"),
                 "org_id": owner_email,
             }
-            return jsonify({"message": "Login successful", "user": _user_payload(email, member_user)}), 200
+            payload = _user_payload(email, member_user)
+            _start_user_session(email, payload, remember)
+            return jsonify({"message": "Login successful", "user": payload}), 200
 
         return jsonify({"error": "Invalid credentials or account not active"}), 401
 
     # Organization owner login.
     user = users.get(email)
     if isinstance(user, dict):
-        allowed = (user.get("password") == password) and (
+        allowed = _password_matches(user.get("password", ""), password) and (
             (user.get("status") == "active") or _within_trial(user, TRIAL_DAYS)
         )
         if allowed:
             now_iso = datetime.datetime.now(datetime.timezone.utc).isoformat().replace("+00:00", "Z")
             user["last_login"] = now_iso
+            if not str(user.get("password") or "").startswith(("scrypt:", "pbkdf2:")):
+                user["password"] = generate_password_hash(password)
             users[email] = user
 
             # Keep an older user::<owner> mirror in sync when it exists.
@@ -2746,9 +2825,29 @@ def login():
                 users[owner_team_key] = owner_team_rec
 
             save_users(users)
-            return jsonify({"message": "Login successful", "user": _user_payload(email, user)}), 200
+            payload = _user_payload(email, user)
+            _start_user_session(email, payload, remember)
+            return jsonify({"message": "Login successful", "user": payload}), 200
 
     return jsonify({"error": "Invalid credentials or account not active"}), 401
+
+
+@app.route("/api/logout", methods=["POST"])
+def logout():
+    session.clear()
+    return jsonify({"ok": True}), 200
+
+
+@app.route("/api/session", methods=["GET"])
+def session_status():
+    email = _session_email()
+    if not email:
+        return jsonify({"authenticated": False}), 401
+    users = load_users() or {}
+    user = users.get(email) if isinstance(users, dict) else None
+    if not isinstance(user, dict):
+        return jsonify({"authenticated": False}), 401
+    return jsonify({"authenticated": True, "user": _user_payload(email, user)}), 200
 
 @app.route("/api/oauth/google", methods=["POST"])
 def google_oauth():
@@ -2791,7 +2890,9 @@ def google_oauth():
         if not (user.get("status") == "active" or _within_trial(user, TRIAL_DAYS)):
             return jsonify({"error": "Account not active. Please complete payment to activate."}), 403
 
-        return jsonify({"message": "Google login successful", "user": _user_payload(email, user)}), 200
+        payload = _user_payload(email, user)
+        _start_user_session(email, payload, bool(data.get("remember", True)))
+        return jsonify({"message": "Google login successful", "user": payload}), 200
 
     except Exception as e:
         print("[GOOGLE OAUTH ERROR]", e)
@@ -3375,8 +3476,8 @@ def _wa_append_inbound(user_email: str, lead_id: str, lead: dict, sender_waid: s
 
 
 def wa_env() -> Tuple[str, str]:
-    token = os.getenv("WHATSAPP_TOKEN")
-    phone_id = os.getenv("WHATSAPP_PHONE_ID")
+    token = WHATSAPP_TOKEN
+    phone_id = WHATSAPP_PHONE_ID
     if not token or not phone_id:
         raise RuntimeError("WhatsApp credentials missing (WHATSAPP_TOKEN / WHATSAPP_PHONE_ID)")
     return token, phone_id
@@ -3394,7 +3495,7 @@ def wa_resolve_waba_id(force: bool = False) -> str:
 
     try:
         token, phone_id = wa_env()
-        url = f"https://graph.facebook.com/v20.0/{phone_id}"
+        url = f"https://graph.facebook.com/{os.getenv('WHATSAPP_API_VERSION', 'v24.0')}/{phone_id}"
         headers = {"Authorization": f"Bearer {token}"}
         params = {"fields": "whatsapp_business_account{id},display_phone_number"}
         r = pyrequests.get(url, headers=headers, params=params, timeout=30)
@@ -3421,9 +3522,9 @@ def wa_resolve_waba_id(force: bool = False) -> str:
 def wa_fetch_templates_for_waba(waba_id: str):
     if not waba_id:
         raise RuntimeError("WhatsApp WABA ID could not be resolved")
-    headers = {"Authorization": f"Bearer {os.getenv('WHATSAPP_TOKEN')}"}
+    headers = {"Authorization": f"Bearer {WHATSAPP_TOKEN}"}
     params = {"fields": "name,language,status,category,components", "limit": 200}
-    url = f"https://graph.facebook.com/v20.0/{waba_id}/message_templates"
+    url = f"https://graph.facebook.com/{os.getenv('WHATSAPP_API_VERSION', 'v24.0')}/{waba_id}/message_templates"
     return pyrequests.get(url, headers=headers, params=params, timeout=30)
 
 
@@ -3433,7 +3534,7 @@ def wa_fetch_templates_raw():
 
 
 def wa_lookup_template_status(name: str, lang_api: str, force: bool = False) -> str:
-    if not (os.getenv("WHATSAPP_TOKEN") and (os.getenv("WHATSAPP_WABA_ID") or os.getenv("WHATSAPP_PHONE_ID"))):
+    if not (WHATSAPP_TOKEN and (WHATSAPP_WABA_ID or WHATSAPP_PHONE_ID)):
         return "UNKNOWN"
 
     normalized_name = (name or os.getenv("WHATSAPP_TEMPLATE_DEFAULT", "") or "").strip()
@@ -4348,9 +4449,9 @@ def debug_template_locales():
 
 
 def _verify_meta_signature(raw_body: bytes, header_sig: str) -> bool:
-    secret = os.getenv("APP_SECRET") or os.getenv("META_APP_SECRET")
+    secret = APP_SECRET
     if not secret or not header_sig:
-        return True
+        return False
     try:
         if not header_sig.startswith("sha256="):
             return False

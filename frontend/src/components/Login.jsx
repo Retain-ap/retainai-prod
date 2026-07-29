@@ -165,8 +165,9 @@ export default function Login() {
 
       const res = await fetch(`${API_BASE}/api/oauth/google`, {
         method: "POST",
+        credentials: "include",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ credential: token }),
+        body: JSON.stringify({ credential: token, remember }),
       });
 
       const data = await res.json();
@@ -211,8 +212,9 @@ export default function Login() {
 
       const res = await fetch(`${API_BASE}/api/login`, {
         method: "POST",
+        credentials: "include",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ email: cleanedEmail, password }),
+        body: JSON.stringify({ email: cleanedEmail, password, remember }),
       });
 
       const data = await res.json();

@@ -8,6 +8,18 @@ import GoogleAuthWrapper from "./components/GoogleAuthProvider";
 import { SettingsProvider } from "./components/SettingsContext";
 import { apiUrl } from "./apiBase";
 
+// All backend calls use the signed, HttpOnly session cookie. Keeping this in
+// one place also covers older components that did not set credentials.
+const nativeFetch = window.fetch.bind(window);
+window.fetch = (input, init = {}) => {
+  const url = typeof input === "string" ? input : input?.url || "";
+  const backendOrigin = new URL(apiUrl("")).origin;
+  if (url && new URL(url, window.location.origin).origin === backendOrigin) {
+    return nativeFetch(input, { ...init, credentials: "include" });
+  }
+  return nativeFetch(input, init);
+};
+
 // ---------------- PWA install prompt plumbing ----------------
 let _deferredInstallPrompt = null;
 

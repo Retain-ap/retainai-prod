@@ -8,6 +8,7 @@ import datetime
 from typing import Any, Dict, Optional, Tuple
 
 from flask import Blueprint, request, jsonify
+from werkzeug.security import generate_password_hash
 from sendgrid import SendGridAPIClient
 from sendgrid.helpers.mail import Mail
 
@@ -569,7 +570,7 @@ def accept_invite():
     # A teammate gets their own password. Organization-level data still comes from the owner.
     users[email] = {
         "email": email,
-        "password": password,
+        "password": generate_password_hash(password),
         "name": display_name,
         "role": role,
         "org_id": org_email,
