@@ -15,6 +15,9 @@ export default function ProtectedRoute({ children }) {
       })
       .then((data) => {
         if (!active) return;
+        if (!data?.authenticated || !data?.user) {
+          throw new Error("not_authenticated");
+        }
         if (data?.user) localStorage.setItem("user", JSON.stringify(data.user));
         setStatus("authenticated");
       })

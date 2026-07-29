@@ -47,6 +47,9 @@ const TABS = [
   { key: "profile", label: "Profile", icon: <FaUser /> },
   { key: "team", label: "Team", icon: <FaUsers /> },
   { key: "integrations", label: "Integrations", icon: <FaPlug /> },
+  { key: "billing", label: "Billing", icon: <FaCreditCard /> },
+  { key: "notifications", label: "Notifications", icon: <FaEnvelope /> },
+  { key: "security", label: "Security", icon: <FaShieldAlt /> },
   { key: "help", label: "Help & Support", icon: <FaQuestionCircle /> },
 ];
 
@@ -177,6 +180,25 @@ export default function Settings({
   const [info, setInfo] = useState("");
   const [profileBackendOk, setProfileBackendOk] = useState(null);
   const [supportCopied, setSupportCopied] = useState(false);
+  const [notificationPrefs, setNotificationPrefs] = useState(() => {
+    const saved = safeParse(localStorage.getItem("retainai:notification-preferences") || "");
+    return {
+      actionDigest: saved?.actionDigest !== false,
+      automationFailures: saved?.automationFailures !== false,
+      appointmentAlerts: saved?.appointmentAlerts !== false,
+      weeklyReport: saved?.weeklyReport !== false,
+    };
+  });
+
+  const updateNotificationPref = useCallback((key) => {
+    setNotificationPrefs((current) => {
+      const next = { ...current, [key]: !current[key] };
+      try {
+        localStorage.setItem("retainai:notification-preferences", JSON.stringify(next));
+      } catch {}
+      return next;
+    });
+  }, []);
 
   useEffect(() => {
     if (initialTab && TABS.some((t) => t.key === initialTab)) {
@@ -770,6 +792,102 @@ export default function Settings({
                 <strong>Your credentials stay private.</strong>
                 <span>RetainAI uses secure provider authorization and never displays connected-account secrets on this page.</span>
               </div>
+            </div>
+          </div>
+        )}
+
+        {tab === "billing" && (
+          <div className="integrations-page" style={{ maxWidth: MAX_W, margin: "0 auto" }}>
+            <div className="settings-page-heading">
+              <div>
+                <span className="settings-page-eyebrow">Plans and payments</span>
+                <h2>Billing</h2>
+                <p>Manage your RetainAI subscription and the Stripe account used for customer invoices.</p>
+              </div>
+              <div className="settings-page-security"><FaShieldAlt /> Secure billing</div>
+            </div>
+            <div className="integration-overview">
+              <div><span>Account status</span><strong className="ready">{profile?.status || "Active"}</strong></div>
+              <div><span>Current plan</span><strong>Standard</strong></div>
+              <div><span>Stripe invoicing</span><strong className={profile?.stripe_connected ? "ready" : "muted"}>{profile?.stripe_connected ? "Connected" : "Optional"}</strong></div>
+            </div>
+            <div className="connected-accounts-grid">
+              <StripeConnectCard
+                user={profile}
+                refreshUser={async () => {
+                  if (typeof refreshUser === "function") await refreshUser();
+                  await syncProfileFromBackend(profile.email);
+                }}
+              />
+              <article className="account-card">
+                <div className="account-card-copy">
+                  <h3>RetainAI subscription</h3>
+                  <p>Your workspace remains protected by server-verified account and billing status.</p>
+                </div>
+                <div className="account-card-content">
+                  <div className="account-detail-box">For plan changes, invoices, or billing assistance, contact owner@retainai.ca.</div>
+                </div>
+                <div className="account-card-actions">
+                  <a className="account-primary-btn" href={supportTopicMailto("billing and subscription")}>Contact billing support</a>
+                </div>
+              </article>
+            </div>
+          </div>
+        )}
+
+        {tab === "notifications" && (
+          <div className="integrations-page" style={{ maxWidth: MAX_W, margin: "0 auto" }}>
+            <div className="settings-page-heading">
+              <div>
+                <span className="settings-page-eyebrow">Stay informed</span>
+                <h2>Notifications</h2>
+                <p>Choose which operational updates RetainAI should prioritize for this device.</p>
+              </div>
+            </div>
+            <div className="connected-accounts-grid">
+              {[
+                ["actionDigest", "Daily action briefing", "A morning summary of at-risk customers, opportunities, and appointments."],
+                ["automationFailures", "Automation failures", "Immediate notice when a customer workflow needs attention."],
+                ["appointmentAlerts", "Appointment alerts", "Upcoming appointments, confirmations, and no-show risks."],
+                ["weeklyReport", "Weekly business report", "A concise retention and relationship-health summary."],
+              ].map(([key, title, copy]) => (
+                <article className="account-card" key={key}>
+                  <div className="account-card-copy"><h3>{title}</h3><p>{copy}</p></div>
+                  <div className="account-card-actions">
+                    <button className={notificationPrefs[key] ? "account-primary-btn" : "account-secondary-btn"} onClick={() => updateNotificationPref(key)}>
+                      {notificationPrefs[key] ? "Enabled" : "Disabled"}
+                    </button>
+                  </div>
+                </article>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {tab === "security" && (
+          <div className="integrations-page" style={{ maxWidth: MAX_W, margin: "0 auto" }}>
+            <div className="settings-page-heading">
+              <div>
+                <span className="settings-page-eyebrow">Account protection</span>
+                <h2>Security</h2>
+                <p>Your login is protected by a server-verified, encrypted HttpOnly session.</p>
+              </div>
+              <div className="settings-page-security"><FaShieldAlt /> Protected session</div>
+            </div>
+            <div className="integration-overview">
+              <div><span>Signed in as</span><strong>{profile.email}</strong></div>
+              <div><span>Workspace role</span><strong>{profile.role || "Owner"}</strong></div>
+              <div><span>Session storage</span><strong className="ready">HttpOnly cookie</strong></div>
+            </div>
+            <div className="connected-accounts-grid">
+              <article className="account-card">
+                <div className="account-card-copy"><h3>Password assistance</h3><p>Request a secure password reset through RetainAI support.</p></div>
+                <div className="account-card-actions"><a className="account-primary-btn" href={supportTopicMailto("password reset")}>Request reset</a></div>
+              </article>
+              <article className="account-card">
+                <div className="account-card-copy"><h3>Security recommendation</h3><p>Use a unique password and remove team members as soon as they no longer need workspace access.</p></div>
+                <div className="account-card-content"><div className="account-detail-box">Sensitive integrations and platform-owner controls are verified by the backend, not by browser storage.</div></div>
+              </article>
             </div>
           </div>
         )}

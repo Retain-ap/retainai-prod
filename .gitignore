@@ -11,3 +11,6 @@ venv
 leads.json
 notifications.json
 appointments.json
+# Local runtime state
+backend/platform_audit.json
+backend/platform_features.json

@@ -19,9 +19,13 @@ import Automations from "./Automations";
 import InviteTeamModal from "./InviteTeamModal";
 import { apiUrl } from "../apiBase";
 import { FaBars } from "react-icons/fa";
+import RetentionCommandCenter from "./RetentionCommandCenter";
+import OwnerConsole from "./OwnerConsole";
+import CommandPalette from "./CommandPalette";
 
 const SECTION_LABELS = {
-  dashboard: "Dashboard",
+  overview: "Overview",
+  dashboard: "Contacts",
   analytics: "Analytics",
   calendar: "Calendar",
   messages: "Messages",
@@ -30,6 +34,7 @@ const SECTION_LABELS = {
   "ai-prompts": "AI Prompts",
   invoices: "Invoices",
   settings: "Settings",
+  owner: "Owner Console",
 };
 
 const DEFAULT_TAGS = [
@@ -106,7 +111,7 @@ function CrmDashboard() {
 
   // When routed to /app/import, auto-open Settings → Imports
   const [settingsTab, setSettingsTab] = useState(null);
-  const [section, setSection] = useState("dashboard");
+  const [section, setSection] = useState("overview");
 
   useEffect(() => {
     const params = new URLSearchParams(location.search);
@@ -473,7 +478,7 @@ function CrmDashboard() {
     setUser(null);
     setUserState(null);
     localStorage.removeItem("user");
-    setSection("dashboard");
+    setSection("overview");
     navigate("/login", { replace: true });
   };
 
@@ -741,6 +746,7 @@ function CrmDashboard() {
         background: "#181a1b",
       }}
     >
+      <CommandPalette setSection={setSection} isOwner={Boolean(user?.platformOwner)} />
       <header className="crm-mobile-header">
         <button
           type="button"
@@ -800,6 +806,20 @@ function CrmDashboard() {
           boxSizing: "border-box",
         }}
       >
+        {section === "overview" && (
+          <RetentionCommandCenter
+            leads={leads}
+            appointments={crmAppointments}
+            onOpenMessages={() => setSection("messages")}
+            onOpenAutomations={(playbook) => {
+              try {
+                localStorage.setItem("retainai:selected-playbook", playbook || "");
+              } catch {}
+              setSection("automations");
+            }}
+          />
+        )}
+
         {section === "dashboard" && (
           <>
             <LeadsDashboard
@@ -1051,6 +1071,8 @@ function CrmDashboard() {
         )}
 
         {section === "automations" && <Automations user={user} />}
+
+        {section === "owner" && user?.platformOwner && <OwnerConsole />}
       </div>
 
       {showInviteModal && <InviteTeamModal user={user} onClose={() => setShowInviteModal(false)} />}

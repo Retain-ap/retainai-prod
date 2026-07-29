@@ -5,7 +5,6 @@ import App from "./App";
 import "./index.css";
 import "./retainai-ui.css";
 import GoogleAuthWrapper from "./components/GoogleAuthProvider";
-import { SettingsProvider } from "./components/SettingsContext";
 import { apiUrl } from "./apiBase";
 
 // All backend calls use the signed, HttpOnly session cookie. Keeping this in
@@ -148,11 +147,7 @@ if (process.env.NODE_ENV === "production") {
 
 const root = ReactDOM.createRoot(document.getElementById("root"));
 root.render(
-  <React.StrictMode>
-    <SettingsProvider>
-      <GoogleAuthWrapper>
-        <App />
-      </GoogleAuthWrapper>
-    </SettingsProvider>
-  </React.StrictMode>
+  <GoogleAuthWrapper>
+    <App />
+  </GoogleAuthWrapper>
 );

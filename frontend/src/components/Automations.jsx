@@ -1637,7 +1637,7 @@ function Preview({ userEmail, flow }) {
 
 /* -------------------- MAIN -------------------- */
 export default function Automations({ user }) {
-  const userEmail = (user?.email || "demo@retainai.ca").toLowerCase();
+  const userEmail = (user?.org_id || user?.email || "").toLowerCase();
 
   const [tab, setTab] = useState("flows");
   const [templates, setTemplates] = useState([]);
@@ -1678,7 +1678,8 @@ export default function Automations({ user }) {
 
         if (!mounted) return;
 
-        setTemplates(Array.isArray(t?.templates) ? t.templates : []);
+        const templateItems = Array.isArray(t?.templates) ? t.templates : [];
+        setTemplates(templateItems);
         setProfile({
           business_name: p?.profile?.business_name || "",
           booking_link: p?.profile?.booking_link || "",
@@ -1688,6 +1689,30 @@ export default function Automations({ user }) {
 
         const waItems = wa?.templates || [];
         setWATemplates(Array.isArray(waItems) ? waItems : []);
+
+        try {
+          const requested = localStorage.getItem("retainai:selected-playbook") || "";
+          const keywords = {
+            winback: ["inactive", "win"],
+            rebook: ["rebook", "follow"],
+            no_show: ["appointment", "reminder"],
+            reviews: ["review"],
+            birthday: ["birthday"],
+            invoice: ["invoice", "payment"],
+          }[requested] || [];
+          const match = templateItems.find((template) =>
+            keywords.some((keyword) =>
+              `${template?.name || ""} ${template?.description || ""}`.toLowerCase().includes(keyword)
+            )
+          );
+          if (match) {
+            setEditing(cloneTemplateToFlow(match, userEmail));
+            setTab("builder");
+          } else if (requested) {
+            setTab("templates");
+          }
+          localStorage.removeItem("retainai:selected-playbook");
+        } catch {}
 
         await refreshFlows();
       } catch (e) {

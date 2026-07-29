@@ -128,6 +128,7 @@ _PUBLIC_API_PATHS = {
     "/api/test",
     "/api/login",
     "/api/logout",
+    "/api/session",
     "/api/signup",
     "/api/auth/signup",
     "/api/oauth/google",
@@ -2643,6 +2644,14 @@ def _user_payload(email: str, user: dict) -> dict:
         "canInviteTeam": role == "owner",
         "canEditBusiness": role == "owner",
         "canManageBilling": role == "owner",
+        "platformOwner": email in {
+            _norm_email(value)
+            for value in os.getenv(
+                "PLATFORM_OWNER_EMAILS",
+                "owner@retainai.ca,mateo.zuf23@gmail.com",
+            ).split(",")
+            if _norm_email(value)
+        },
     }
 
 @app.route("/api/signup", methods=["POST", "OPTIONS"])
@@ -2842,7 +2851,7 @@ def logout():
 def session_status():
     email = _session_email()
     if not email:
-        return jsonify({"authenticated": False}), 401
+        return jsonify({"authenticated": False, "user": None}), 200
     users = load_users() or {}
     user = users.get(email) if isinstance(users, dict) else None
     if not isinstance(user, dict):
@@ -6661,10 +6670,12 @@ def save_subscription():
 # ----------------------------
 from app_imports import imports_bp
 from app_team import team_bp
+from app_owner import owner_bp
 from app_wa_auto_appointments import WA_AUTO_BP
 
 app.register_blueprint(imports_bp)
 app.register_blueprint(team_bp)
+app.register_blueprint(owner_bp)
 app.register_blueprint(WA_AUTO_BP)
 
 

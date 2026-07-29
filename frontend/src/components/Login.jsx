@@ -533,7 +533,7 @@ export default function Login() {
               <GoogleLogin
                 onSuccess={handleGoogleSuccess}
                 onError={() => setError("Google Login Failed")}
-                width="100%"
+                width="370"
                 shape="pill"
                 theme="filled_black"
                 text="signin_with"

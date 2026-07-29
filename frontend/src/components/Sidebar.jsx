@@ -5,7 +5,6 @@ import {
   FaCalendarAlt,
   FaEnvelopeOpenText,
   FaBell,
-  FaUsers,
   FaChartBar,
   FaChevronLeft,
   FaChevronRight,
@@ -15,6 +14,10 @@ import {
   FaFileInvoiceDollar,
   FaUserPlus,
   FaTimes,
+  FaHome,
+  FaAddressBook,
+  FaCrown,
+  FaSearch,
 } from "react-icons/fa";
 import defaultAvatar from "../assets/default-avatar.png";
 import { promptInstall, canPromptInstall } from "../index"; // <- use helpers
@@ -219,10 +222,17 @@ export default function Sidebar({
       <nav className="sidebar-nav">
         <button
           type="button"
+          className={section === "overview" ? "active" : ""}
+          onClick={() => goTo("overview")}
+        >
+          <FaHome /> {!collapsed && "Overview"}
+        </button>
+        <button
+          type="button"
           className={section === "dashboard" ? "active" : ""}
           onClick={() => goTo("dashboard")}
         >
-          <FaUsers /> {!collapsed && "Dashboard"}
+          <FaAddressBook /> {!collapsed && "Contacts"}
         </button>
         <button
           type="button"
@@ -275,6 +285,23 @@ export default function Sidebar({
         </button>
       </nav>
 
+      {!collapsed && (
+        <button
+          type="button"
+          className="sidebar-invite-btn"
+          onClick={() =>
+            window.dispatchEvent(
+              new KeyboardEvent("keydown", { key: "k", ctrlKey: true })
+            )
+          }
+          aria-label="Search or jump to a page"
+          title="Search RetainAI (Ctrl+K)"
+        >
+          <FaSearch style={{ marginRight: 9, fontSize: 16 }} />
+          Quick search
+        </button>
+      )}
+
       {/* Invite Team */}
       {!collapsed && (
         <button
@@ -295,6 +322,17 @@ export default function Sidebar({
 
       {/* Settings */}
       {!collapsed && (
+        <>
+        {user?.platformOwner && (
+          <button
+            type="button"
+            className="sidebar-settings-btn"
+            onClick={() => goTo("owner")}
+          >
+            <FaCrown style={{ marginRight: 9, fontSize: 18 }} />
+            Owner Console
+          </button>
+        )}
         <button
           type="button"
           className="sidebar-settings-btn"
@@ -303,6 +341,7 @@ export default function Sidebar({
           <FaCog style={{ marginRight: 9, fontSize: 18 }} />
           Settings
         </button>
+        </>
       )}
     </aside>
   );
