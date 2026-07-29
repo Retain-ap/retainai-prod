@@ -35,8 +35,10 @@ function cleanOrigin(s) {
     .replace(/\/api$/i, "");
 }
 
-// Default backend origin (your Render backend)
-const FALLBACK = "https://retainai-prod.onrender.com";
+// Use the production custom domain everywhere so the HttpOnly session cookie
+// is set and read on the same host. Mixing this with the Render hostname
+// causes successful logins to appear logged out.
+const FALLBACK = "https://api.retainai.ca";
 
 // ✅ BACKEND ORIGIN ONLY
 const API_BASE = cleanOrigin(readEnvBase() || FALLBACK);
