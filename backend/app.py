@@ -2666,7 +2666,7 @@ def _bootstrap_platform_owner() -> None:
     No password is embedded in source control. When PLATFORM_OWNER_PASSWORD is
     configured, it becomes the authoritative password after every safe restart.
     """
-    password = str(os.getenv("PLATFORM_OWNER_PASSWORD") or "")
+    password = str(os.getenv("PLATFORM_OWNER_PASSWORD") or "").strip()
     email = _norm_email(os.getenv("PLATFORM_OWNER_EMAIL") or "owner@retainai.ca")
     if not password or not email:
         return
@@ -2806,6 +2806,47 @@ def login():
     users = load_users() or {}
     if not isinstance(users, dict):
         return jsonify({"error": "storage_not_ready"}), 500
+
+    # The dedicated platform-owner login can repair itself from Render secrets.
+    # This makes owner recovery reliable even when storage was unavailable during
+    # application startup. The secret itself is never returned or logged.
+    configured_owner_email = _norm_email(
+        os.getenv("PLATFORM_OWNER_EMAIL") or "owner@retainai.ca"
+    )
+    if email == configured_owner_email and _is_platform_owner(email):
+        configured_owner_password = str(
+            os.getenv("PLATFORM_OWNER_PASSWORD") or ""
+        ).strip()
+        if not configured_owner_password:
+            return jsonify({
+                "error": "Owner login is not configured. Add PLATFORM_OWNER_PASSWORD to the backend service in Render."
+            }), 503
+        if not hmac.compare_digest(configured_owner_password, password):
+            return jsonify({"error": "Incorrect owner password"}), 401
+
+        owner = users.get(email)
+        if not isinstance(owner, dict):
+            owner = {}
+        owner.update(
+            {
+                "email": email,
+                "name": owner.get("name") or "RetainAI Owner",
+                "business": owner.get("business") or "RetainAI",
+                "businessName": owner.get("businessName") or "RetainAI",
+                "role": "owner",
+                "org_id": email,
+                "status": "active",
+                "password": generate_password_hash(configured_owner_password),
+                "last_login": datetime.datetime.now(datetime.timezone.utc)
+                .isoformat()
+                .replace("+00:00", "Z"),
+            }
+        )
+        users[email] = owner
+        save_users(users)
+        payload = _user_payload(email, owner)
+        _start_user_session(email, payload, remember)
+        return jsonify({"message": "Owner login successful", "user": payload}), 200
 
     # Team membership takes priority over a teammate's top-level login record.
     # This prevents a teammate from being mistaken for an organization owner.
