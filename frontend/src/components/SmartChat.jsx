@@ -11,18 +11,18 @@ const demoLeads = [
 // --- Helper: Simulate backend NLP/AI extraction ---
 // Replace with a real API POST if you want (see comment below)
 async function extractAppointmentFromMessage(message) {
-  const res = await fetch(`${API_BASE}/api/extract-appointment`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ message }),
-  });
-  const data = await res.json();
-  if (data.title && data.date && data.time) return data;
-  return null;
-}
+  try {
+    const res = await fetch(`${API_BASE}/api/extract-appointment`, {
+      method: "POST",
+      credentials: "include",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ message }),
+    });
+    const data = await res.json();
+    if (res.ok && data.title && data.date && data.time) return data;
+  } catch {}
 
-
-  // Simple simulated pattern matching (for demo)
+  // Local fallback keeps quick-add useful when AI extraction is unavailable.
   const dateRegex = /\b(on )?(\w+day|\d{4}-\d{2}-\d{2})\b/i;
   const timeRegex = /\b(\d{1,2})(:\d{2})?\s?(am|pm)?\b/i;
   const nameRegex = /\b(Sarah|Ali)\b/i;

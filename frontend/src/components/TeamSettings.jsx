@@ -1,23 +1,25 @@
 import React, { useEffect, useState } from "react";
-import { API_BASE } from "../config";
+import { apiUrl } from "../apiBase";
 
 export default function TeamSettings({ user }) {
   const [members, setMembers] = useState([]);
   const [email, setEmail] = useState("");
   const [role, setRole] = useState("member");
   const [inviteLink, setInviteLink] = useState(null);
-  const apiBase = API_BASE;
-
   async function loadMembers() {
-    const res = await fetch(`${apiBase}/api/team/members`, { headers: { "X-User-Email": user?.email || "" }});
+    const res = await fetch(apiUrl("team/members"), {
+      credentials: "include",
+      headers: { "X-User-Email": user?.email || "" },
+    });
     const data = await res.json();
     setMembers(data.members || []);
   }
   useEffect(() => { loadMembers(); }, []);
 
   async function invite() {
-    const res = await fetch(`${apiBase}/api/team/invite`, {
+    const res = await fetch(apiUrl("team/invite"), {
       method: "POST",
+      credentials: "include",
       headers: { "Content-Type":"application/json", "X-User-Email": user?.email || "" },
       body: JSON.stringify({ email, role })
     });

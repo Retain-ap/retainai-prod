@@ -1,6 +1,6 @@
 // src/App.jsx
 import React, { useEffect } from "react";
-import { BrowserRouter as Router, Routes, Route, Navigate, useNavigate } from "react-router-dom";
+import { BrowserRouter as Router, Routes, Route, Navigate, useLocation, useNavigate } from "react-router-dom";
 import LandingPage from "./components/LandingPage";
 import Login from "./components/Login";
 import Signup from "./components/Signup";
@@ -27,10 +27,63 @@ function OAuthPopupBridge() {
   return null;
 }
 
+const ROUTE_META = {
+  "/": {
+    title: "RetainAI — AI Customer Retention CRM for Small Business",
+    description:
+      "RetainAI is a Canadian AI customer retention CRM for relationship health, WhatsApp follow-ups, appointments, invoices, rebooking, and repeat revenue.",
+  },
+  "/signup": {
+    title: "Start Your RetainAI Trial — Customer Retention CRM",
+    description:
+      "Start a 14-day RetainAI trial and organize customer relationships, follow-ups, appointments, invoices, and retention opportunities.",
+  },
+  "/privacy-policy": {
+    title: "Privacy Policy — RetainAI",
+    description: "Learn how RetainAI protects customer and account information.",
+  },
+  "/terms-of-service": {
+    title: "Terms of Service — RetainAI",
+    description: "Review the terms governing use of the RetainAI customer retention CRM.",
+  },
+};
+
+function RouteMetadata() {
+  const { pathname } = useLocation();
+
+  useEffect(() => {
+    const privateRoute = pathname.startsWith("/app") || pathname === "/login";
+    const meta = ROUTE_META[pathname] || ROUTE_META["/"];
+    const canonicalPath = ROUTE_META[pathname] ? pathname : "/";
+    const canonicalUrl = `https://www.retainai.ca${canonicalPath === "/" ? "/" : canonicalPath}`;
+
+    document.title = meta.title;
+    const setMeta = (selector, attribute, value) => {
+      const element = document.head.querySelector(selector);
+      if (element) element.setAttribute(attribute, value);
+    };
+    setMeta('meta[name="description"]', "content", meta.description);
+    setMeta(
+      'meta[name="robots"]',
+      "content",
+      privateRoute ? "noindex,nofollow" : "index,follow,max-image-preview:large"
+    );
+    setMeta('meta[property="og:title"]', "content", meta.title);
+    setMeta('meta[property="og:description"]', "content", meta.description);
+    setMeta('meta[property="og:url"]', "content", canonicalUrl);
+    setMeta('meta[name="twitter:title"]', "content", meta.title);
+    setMeta('meta[name="twitter:description"]', "content", meta.description);
+    setMeta('link[rel="canonical"]', "href", canonicalUrl);
+  }, [pathname]);
+
+  return null;
+}
+
 function App() {
   return (
     <SettingsProvider>
       <Router>
+        <RouteMetadata />
         {/* Always mounted so we catch the popup postMessage */}
         <OAuthPopupBridge />
         <Routes>

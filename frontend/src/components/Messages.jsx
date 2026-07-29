@@ -895,7 +895,14 @@ export default function Messages({ user, leads = [], defaultTemplate = "", langu
       )}&lead_id=${encodeURIComponent(lead.id)}&template_name=${encodeURIComponent(tpl)}&language_code=${encodeURIComponent(
         langApi
       )}${force ? "&force=1" : ""}`;
-      const r = await fetch(url);
+      const r = await fetch(url, {
+        credentials: "include",
+        cache: "no-store",
+        headers: {
+          Accept: "application/json",
+          "X-User-Email": String(user.email || "").toLowerCase(),
+        },
+      });
       const d = await r.json();
       setGate({
         inside24h: !!d.inside24h,

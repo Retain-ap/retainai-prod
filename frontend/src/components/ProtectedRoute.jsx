@@ -1,10 +1,11 @@
-import React, { useEffect, useState } from "react";
+import React, { cloneElement, useEffect, useState } from "react";
 import { Navigate, useLocation } from "react-router-dom";
 import { apiUrl } from "../apiBase";
 
 export default function ProtectedRoute({ children }) {
   const location = useLocation();
   const [status, setStatus] = useState("checking");
+  const [authenticatedUser, setAuthenticatedUser] = useState(null);
 
   useEffect(() => {
     let active = true;
@@ -29,7 +30,10 @@ export default function ProtectedRoute({ children }) {
         if (!data?.authenticated || !data?.user) {
           throw new Error("not_authenticated");
         }
-        if (data?.user) localStorage.setItem("user", JSON.stringify(data.user));
+        if (data?.user) {
+          localStorage.setItem("user", JSON.stringify(data.user));
+          setAuthenticatedUser(data.user);
+        }
         setStatus("authenticated");
       })
       .catch(() => {
@@ -54,5 +58,5 @@ export default function ProtectedRoute({ children }) {
   if (status !== "authenticated") {
     return <Navigate to="/login" state={{ from: location }} replace />;
   }
-  return children;
+  return cloneElement(children, { authenticatedUser });
 }

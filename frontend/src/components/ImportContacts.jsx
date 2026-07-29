@@ -1,14 +1,11 @@
 // src/components/ImportContacts.jsx
 import React, { useEffect, useMemo, useRef, useState } from "react";
-import { API_BASE } from "../config";
+import { API_BASE, apiUrl } from "../apiBase";
 
 
 export default function ImportContacts({ user }) {
   // Use the SAME env var the rest of the app uses
-  const API =
-    process.env.REACT_APP_API_URL ||
-    process.env.REACT_APP_API_BASE || // fallback if you had older builds
-    "API_BASE";
+  const API = API_BASE;
 
   // ---------- CSV state ----------
   const [file, setFile] = useState(null);
@@ -33,6 +30,7 @@ export default function ImportContacts({ user }) {
     form.append("file", file);
     const res = await fetch(`${API}/api/import/csv/preview`, {
       method: "POST",
+      credentials: "include",
       headers: { "X-User-Email": userEmail },
       body: form,
     });
@@ -64,6 +62,7 @@ export default function ImportContacts({ user }) {
     };
     const res = await fetch(`${API}/api/import/csv/commit`, {
       method: "POST",
+      credentials: "include",
       headers: {
         "Content-Type": "application/json",
         "X-User-Email": userEmail,
@@ -79,7 +78,10 @@ export default function ImportContacts({ user }) {
   async function refreshGoogleStatus() {
     if (!userEmail) return;
     try {
-      const res = await fetch(`${API}/api/google/status?userEmail=${encodeURIComponent(userEmail)}`);
+      const res = await fetch(
+        apiUrl(`google/status/${encodeURIComponent(userEmail)}`),
+        { credentials: "include", cache: "no-store" }
+      );
       const data = await res.json();
       setGStatus(data);
     } catch (e) {
@@ -136,6 +138,7 @@ export default function ImportContacts({ user }) {
     try {
       const res = await fetch(`${API}/api/google/import-now`, {
         method: "POST",
+        credentials: "include",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ userEmail }),
       });

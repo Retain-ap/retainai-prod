@@ -85,7 +85,9 @@ if not SESSION_SECRET:
         print("[SECURITY] WARNING: Configure SESSION_SECRET before running multiple workers.")
 app.config.update(
     SECRET_KEY=SESSION_SECRET,
-    SESSION_COOKIE_NAME="retainai_session",
+    # Version the cookie name so pre-hardening Domain cookies cannot collide
+    # with the current host-only production session.
+    SESSION_COOKIE_NAME="retainai_v2_session",
     SESSION_COOKIE_HTTPONLY=True,
     PERMANENT_SESSION_LIFETIME=datetime.timedelta(days=30),
 )
@@ -208,7 +210,21 @@ def require_authenticated_api_session():
         if "email" in str(key).lower():
             claimed.append(value)
 
-    allowed = {actor, org}
+    # Resolve the current account from the signed cookie on every request.
+    # This also supports team members whose browser may still have old local
+    # profile data from before they switched accounts.
+    users = load_users() or {}
+    actor_record = users.get(actor) if isinstance(users, dict) else None
+    if isinstance(actor_record, dict):
+        stored_org = str(
+            actor_record.get("org_id")
+            or actor_record.get("orgOwnerEmail")
+            or ""
+        ).strip().lower()
+        if stored_org:
+            org = stored_org
+
+    allowed = {value for value in {actor, org} if value}
     for value in claimed:
         normalized = str(value or "").strip().lower()
         if normalized and normalized not in allowed:

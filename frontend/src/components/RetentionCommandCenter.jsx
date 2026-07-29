@@ -100,6 +100,9 @@ export default function RetentionCommandCenter({ leads = [], appointments = [], 
   const pulse = leads.length
     ? Math.round(enriched.reduce((sum, item) => sum + item.health.score, 0) / enriched.length)
     : 0;
+  const firstName = String(user?.name || user?.firstName || "")
+    .trim()
+    .split(/\s+/)[0];
 
   const upcoming = (appointments || []).filter((item) => {
     const raw = item.appointment_time || item.start || item.date;
@@ -118,12 +121,13 @@ export default function RetentionCommandCenter({ leads = [], appointments = [], 
   ];
 
   return (
-    <div className="product-page">
+    <div className="product-page retention-overview">
       <header className="product-hero">
         <div>
-          <div className="product-eyebrow">Retention intelligence</div>
-          <h1>Good morning. Here’s what needs attention.</h1>
-          <p>RetainAI has prioritized your customer relationships, upcoming revenue and important follow-ups.</p>
+          <div className="overview-live"><span /> Workspace intelligence live</div>
+          <div className="product-eyebrow">Your daily command center</div>
+          <h1>Good morning{firstName ? `, ${firstName}` : ""}.</h1>
+          <p>Here is the clearest path to stronger relationships and more repeat revenue today.</p>
         </div>
         <button className="product-button primary" onClick={() => onOpenMessages?.()}>
           <FaInbox /> Open messages
@@ -139,10 +143,10 @@ export default function RetentionCommandCenter({ leads = [], appointments = [], 
       </div>
 
       <div className="metric-grid">
-        <div className="metric-card"><span>Business pulse</span><strong>{pulse || "—"}</strong><small>Average relationship health</small></div>
-        <div className="metric-card"><span>Needs attention</span><strong>{atRisk.length + needsAttention.length}</strong><small>Relationships to protect</small></div>
-        <div className="metric-card"><span>Potential revenue</span><strong>{money(opportunityValue)}</strong><small>Estimated rebooking value</small></div>
-        <div className="metric-card"><span>Next 7 days</span><strong>{upcoming.length}</strong><small>Upcoming appointments</small></div>
+        <div className="metric-card"><div className="metric-icon"><FaHeartbeat /></div><span>Business pulse</span><strong>{pulse || "—"}</strong><small>Average relationship health</small></div>
+        <div className="metric-card"><div className="metric-icon attention"><FaUsers /></div><span>Needs attention</span><strong>{atRisk.length + needsAttention.length}</strong><small>Relationships to protect</small></div>
+        <div className="metric-card"><div className="metric-icon opportunity"><FaChartLine /></div><span>Potential revenue</span><strong>{money(opportunityValue)}</strong><small>Estimated rebooking value</small></div>
+        <div className="metric-card"><div className="metric-icon schedule"><FaRegClock /></div><span>Next 7 days</span><strong>{upcoming.length}</strong><small>Upcoming appointments</small></div>
       </div>
 
       {tab === "briefing" && (

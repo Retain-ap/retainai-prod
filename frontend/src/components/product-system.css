@@ -21,6 +21,48 @@
   color: var(--ra-text);
 }
 
+.retention-overview {
+  position: relative;
+  isolation: isolate;
+  max-width: 1500px;
+  margin: 0 auto;
+}
+
+.retention-overview::before {
+  content: "";
+  position: absolute;
+  z-index: -1;
+  top: -24px;
+  right: -24px;
+  left: -24px;
+  height: 260px;
+  border-radius: 24px;
+  background:
+    radial-gradient(circle at 82% 12%, rgba(247, 203, 83, 0.13), transparent 34%),
+    linear-gradient(145deg, rgba(23, 26, 33, 0.9), rgba(9, 10, 13, 0.12));
+  pointer-events: none;
+}
+
+.overview-live {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  margin-bottom: 15px;
+  color: var(--ra-muted);
+  font-size: 0.72rem;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.overview-live span {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--ra-green);
+  box-shadow: 0 0 0 5px rgba(78, 211, 138, 0.1);
+}
+
 .product-hero {
   display: flex;
   align-items: flex-end;
@@ -100,7 +142,38 @@
   box-shadow: var(--ra-shadow);
 }
 
-.metric-card { padding: 18px; }
+.metric-card {
+  position: relative;
+  min-height: 142px;
+  padding: 20px;
+  overflow: hidden;
+}
+.metric-card::after {
+  content: "";
+  position: absolute;
+  right: -24px;
+  bottom: -38px;
+  width: 110px;
+  height: 110px;
+  border-radius: 50%;
+  background: rgba(247, 203, 83, 0.035);
+}
+.metric-icon {
+  position: absolute;
+  top: 16px;
+  right: 16px;
+  display: grid;
+  place-items: center;
+  width: 34px;
+  height: 34px;
+  border: 1px solid rgba(78, 211, 138, 0.2);
+  border-radius: 10px;
+  color: var(--ra-green);
+  background: rgba(78, 211, 138, 0.08);
+}
+.metric-icon.attention { color: var(--ra-red); border-color: rgba(255, 107, 117, 0.2); background: rgba(255, 107, 117, 0.08); }
+.metric-icon.opportunity { color: var(--ra-gold); border-color: rgba(247, 203, 83, 0.22); background: rgba(247, 203, 83, 0.08); }
+.metric-icon.schedule { color: var(--ra-blue); border-color: rgba(102, 165, 255, 0.2); background: rgba(102, 165, 255, 0.08); }
 .metric-card span { color: var(--ra-muted); font-size: 0.78rem; font-weight: 800; }
 .metric-card strong { display: block; margin-top: 9px; font-size: 1.65rem; }
 .metric-card small { display: block; margin-top: 6px; color: var(--ra-muted); }

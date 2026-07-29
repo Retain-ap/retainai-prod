@@ -106,7 +106,7 @@ function makeId() {
   return `lead_${Date.now()}_${Math.random().toString(16).slice(2)}`;
 }
 
-function CrmDashboard() {
+function CrmDashboard({ authenticatedUser }) {
   const navigate = useNavigate();
   const location = useLocation();
   const { settings, setUser } = useSettings();
@@ -125,6 +125,7 @@ function CrmDashboard() {
 
   // user state (single source of truth)
   const [user, setUserState] = useState(() => {
+    if (authenticatedUser?.email) return authenticatedUser;
     const stored = safeParseJSON(localStorage.getItem("user"), null);
     if (stored && typeof stored === "object") {
       return {
@@ -138,9 +139,27 @@ function CrmDashboard() {
     return null;
   });
 
+  // The signed server session is the only authority for account identity.
+  // Local storage and SettingsContext may contain profile data, but can never
+  // switch the active account behind the session.
+  useEffect(() => {
+    if (!authenticatedUser?.email) return;
+    setUserState((current) => ({
+      ...(current || {}),
+      ...authenticatedUser,
+      lineOfBusiness:
+        authenticatedUser.lineOfBusiness ||
+        authenticatedUser.businessType ||
+        authenticatedUser.business ||
+        "",
+    }));
+    setUser?.(authenticatedUser);
+    localStorage.setItem("user", JSON.stringify(authenticatedUser));
+  }, [authenticatedUser, setUser]);
+
   // Sync from SettingsContext if it changes
   useEffect(() => {
-    if (settings?.user && settings.user.email) {
+    if (settings?.user && settings.user.email && !authenticatedUser?.email) {
       const next = settings.user;
       if (!user || normEmail(next.email) !== normEmail(user.email)) {
         setUserState({
@@ -469,7 +488,13 @@ function CrmDashboard() {
     } catch {}
   };
 
-  const handleLogout = () => {
+  const handleLogout = async () => {
+    try {
+      await fetch(apiUrl("logout"), {
+        method: "POST",
+        credentials: "include",
+      });
+    } catch {}
     setUser(null);
     setUserState(null);
     localStorage.removeItem("user");

@@ -1,4 +1,5 @@
 import React, { createContext, useContext, useEffect, useState, useCallback } from "react";
+import { apiUrl } from "../apiBase";
 
 // --- Default Settings State ---
 const defaultSettings = {
@@ -44,7 +45,10 @@ export function SettingsProvider({ children }) {
     try {
       const email = settings.user?.email || localStorage.getItem("email");
       if (!email) return;
-      const res = await fetch(`/api/user/${encodeURIComponent(email)}`);
+      const res = await fetch(apiUrl(`user/${encodeURIComponent(email)}`), {
+        credentials: "include",
+        cache: "no-store",
+      });
       if (!res.ok) throw new Error("User fetch failed");
       const data = await res.json();
       setSettings((prev) => ({
@@ -80,8 +84,10 @@ export function SettingsProvider({ children }) {
     setSettings((s) => ({ ...s, accent }));
 
   // --- User helpers ---
-  const setUser = (user) =>
-    setSettings((s) => ({ ...s, user }));
+  const setUser = useCallback(
+    (user) => setSettings((s) => ({ ...s, user })),
+    []
+  );
 
   // --- Notification helpers ---
   const setNotifications = (notifications) =>
