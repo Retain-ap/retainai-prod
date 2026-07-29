@@ -4,6 +4,7 @@ import { useNavigate, Link } from "react-router-dom";
 import { GoogleLogin } from "@react-oauth/google";
 import logo from "../assets/logo.png";
 import defaultAvatar from "../assets/default-avatar.png";
+import { API_BASE, apiUrl } from "../apiBase";
 
 // ---- Theme ----
 const BG = {
@@ -17,11 +18,6 @@ const BG = {
 };
 
 const SUPPORT_EMAIL = "owner@retainai.ca";
-
-// ---- API base (works for localhost and production) ----
-const API_BASE =
-  (process.env.REACT_APP_API_BASE && process.env.REACT_APP_API_BASE.trim()) ||
-  window.location.origin.replace(/\/$/, "");
 
 // Small input
 function Input({
@@ -109,6 +105,11 @@ function normalizeUserForStorage(u = {}, fallbackEmail = "") {
     canInviteTeam: Boolean(u.canInviteTeam),
     canEditBusiness: Boolean(u.canEditBusiness),
     canManageBilling: Boolean(u.canManageBilling),
+    platformOwner: Boolean(u.platformOwner),
+    trialActive: Boolean(u.trialActive),
+    trialDaysRemaining: Number(u.trialDaysRemaining || 0),
+    trialEndsAt: u.trialEndsAt || "",
+    billingRequired: Boolean(u.billingRequired),
   };
 }
 
@@ -133,7 +134,28 @@ export default function Login() {
   const [remember, setRemember] = useState(true);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState("");
+  const [mfaRequired, setMfaRequired] = useState(false);
+  const [mfaCode, setMfaCode] = useState("");
+  const [billingState, setBillingState] = useState(null);
   const navigate = useNavigate();
+
+  async function enterWorkspace(user, fallbackEmail = "") {
+    const sessionResponse = await fetch(apiUrl("session"), {
+      credentials: "include",
+      cache: "no-store",
+    });
+    const sessionData = await sessionResponse.json().catch(() => ({}));
+    if (!sessionResponse.ok || !sessionData?.authenticated || !sessionData?.user) {
+      throw new Error(
+        "Your sign-in was accepted, but the secure session was not established. Please wait for the service to finish restarting and try again."
+      );
+    }
+    persistUser(
+      normalizeUserForStorage(sessionData.user || user || {}, fallbackEmail),
+      remember
+    );
+    navigate("/app", { replace: true });
+  }
 
   // Prefill remembered email
   useEffect(() => {
@@ -172,6 +194,11 @@ export default function Login() {
 
       const data = await res.json();
 
+      if (res.status === 202 && data.mfaRequired) {
+        setMfaRequired(true);
+        setSubmitting(false);
+        return;
+      }
       if (!res.ok) {
         if (res.status === 404) {
           setError("No account found for this Google email. Please sign up first.");
@@ -184,11 +211,9 @@ export default function Login() {
         return;
       }
 
-      const u = data.user || {};
-      persistUser(u, remember);
-      navigate("/app");
-    } catch {
-      setError("Google login error.");
+      await enterWorkspace(data.user || {}, data.user?.email || "");
+    } catch (requestError) {
+      setError(requestError.message || "Google login error.");
       setSubmitting(false);
     }
   };
@@ -199,6 +224,7 @@ export default function Login() {
     if (submitting) return;
 
     setError("");
+    setBillingState(null);
 
     if (!email || !password) {
       setError("All fields required.");
@@ -219,17 +245,47 @@ export default function Login() {
 
       const data = await res.json();
 
+      if (res.status === 202 && data.mfaRequired) {
+        setMfaRequired(true);
+        setSubmitting(false);
+        return;
+      }
+      if (res.status === 402 && data.code === "billing_required") {
+        setBillingState(data.account || {});
+        setError(data.error || "Your trial has ended.");
+        setSubmitting(false);
+        return;
+      }
       if (!res.ok) {
         setError(data.error || "Login failed.");
         setSubmitting(false);
         return;
       }
 
-      const u = normalizeUserForStorage(data.user || {}, cleanedEmail);
-      persistUser(u, remember);
-      navigate("/app");
-    } catch {
-      setError("Login error.");
+      await enterWorkspace(data.user || {}, cleanedEmail);
+    } catch (requestError) {
+      setError(requestError.message || "Login error.");
+      setSubmitting(false);
+    }
+  }
+
+  async function handleMfa(e) {
+    e.preventDefault();
+    if (submitting || !mfaCode.trim()) return;
+    setSubmitting(true);
+    setError("");
+    try {
+      const response = await fetch(apiUrl("auth/2fa/verify-login"), {
+        method: "POST",
+        credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ code: mfaCode.trim() }),
+      });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(data.error || "Verification failed.");
+      await enterWorkspace(data.user || {}, email);
+    } catch (requestError) {
+      setError(requestError.message || "Verification failed.");
       setSubmitting(false);
     }
   }
@@ -403,8 +459,23 @@ export default function Login() {
             Welcome back
           </h2>
 
-          <form onSubmit={handleLogin}>
+          <form onSubmit={mfaRequired ? handleMfa : handleLogin}>
             <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
+              {mfaRequired ? (
+                <>
+                  <div style={{ color: BG.text80, lineHeight: 1.6 }}>
+                    Enter the current code from your authenticator app, or use
+                    one of your RetainAI recovery codes.
+                  </div>
+                  <Input
+                    value={mfaCode}
+                    onChange={(e) => setMfaCode(e.target.value)}
+                    placeholder="Six-digit or recovery code"
+                    autoComplete="one-time-code"
+                  />
+                </>
+              ) : (
+                <>
               <Input
                 type="email"
                 value={email}
@@ -480,6 +551,8 @@ export default function Login() {
                   Forgot password?
                 </button>
               </div>
+                </>
+              )}
 
               {error && (
                 <div
@@ -496,9 +569,51 @@ export default function Login() {
                 </div>
               )}
 
+              {billingState && (
+                <div
+                  style={{
+                    border: `1px solid ${BG.goldDeep}`,
+                    borderRadius: 12,
+                    padding: 14,
+                    background: "rgba(245,216,126,.08)",
+                  }}
+                >
+                  <strong style={{ color: BG.gold }}>Your data is safe.</strong>
+                  <p style={{ color: BG.text80, margin: "8px 0 12px", lineHeight: 1.5 }}>
+                    Choose a plan to restore your workspace and continue where
+                    you left off.
+                  </p>
+                  {billingState.checkoutUrl ? (
+                    <a
+                      href={billingState.checkoutUrl}
+                      style={{
+                        display: "block",
+                        textAlign: "center",
+                        background: BG.gold,
+                        color: "#0B0B0C",
+                        borderRadius: 10,
+                        padding: "11px 14px",
+                        fontWeight: 900,
+                        textDecoration: "none",
+                      }}
+                    >
+                      Continue to secure checkout
+                    </a>
+                  ) : (
+                    <small style={{ color: BG.text60 }}>
+                      {billingState.billingError ||
+                        "Contact support to reactivate your account."}
+                    </small>
+                  )}
+                </div>
+              )}
+
               <button
                 type="submit"
-                disabled={submitting || !email || !password}
+                disabled={
+                  submitting ||
+                  (mfaRequired ? !mfaCode.trim() : !email || !password)
+                }
                 style={{
                   background: BG.gold,
                   color: "#0B0B0C",
@@ -508,7 +623,11 @@ export default function Login() {
                   padding: "12px 0",
                   fontSize: 16,
                   cursor: submitting ? "not-allowed" : "pointer",
-                  opacity: submitting || !email || !password ? 0.7 : 1,
+                  opacity:
+                    submitting ||
+                    (mfaRequired ? !mfaCode.trim() : !email || !password)
+                      ? 0.7
+                      : 1,
                 }}
               >
                 {submitting ? "Signing in…" : "Login"}

@@ -118,6 +118,14 @@ export default function OwnerConsole() {
     }
   }
 
+  async function permanentlyDeleteAccount(email) {
+    const confirmation = window.prompt(
+      `Permanent deletion removes the account, team access, and CRM contacts. Type ${email} to confirm.`
+    );
+    if (confirmation !== email) return;
+    await accountAction(email, "delete", { confirmation });
+  }
+
   async function toggleFeature(key, enabled) {
     setBusy(`feature:${key}`);
     try {
@@ -222,6 +230,8 @@ export default function OwnerConsole() {
                           <button className="product-button danger" disabled={Boolean(busy)} onClick={() => accountAction(account.email, "suspend")}>Suspend</button>
                         )}
                         <button className="product-button" disabled={Boolean(busy)} onClick={() => accountAction(account.email, "extend_trial", { days: 7 })}>+7 trial days</button>
+                        <button className="product-button" disabled={Boolean(busy)} onClick={() => accountAction(account.email, "archive")}>Archive</button>
+                        <button className="product-button danger" disabled={Boolean(busy)} onClick={() => permanentlyDeleteAccount(account.email)}>Delete</button>
                       </div>
                     </td>
                   </tr>

@@ -7,7 +7,7 @@ from uuid import uuid4
 
 from flask import Blueprint, jsonify, request, session
 
-from storage import DATA_ROOT, load_leads, load_users, save_users
+from storage import DATA_ROOT, delete_users, load_leads, load_users, save_leads, save_users
 
 
 owner_bp = Blueprint("owner_bp", __name__)
@@ -218,8 +218,15 @@ def owner_account_action(email):
         return jsonify({"error": "account_not_found"}), 404
 
     details = {}
+    if is_platform_owner(target):
+        return jsonify({"error": "platform_owner_account_locked"}), 403
     if action == "suspend":
         account["status"] = "suspended"
+    elif action == "archive":
+        account["status"] = "archived"
+        account["archived_at"] = (
+            datetime.datetime.now(datetime.timezone.utc).isoformat().replace("+00:00", "Z")
+        )
     elif action == "reactivate":
         account["status"] = "active"
     elif action == "extend_trial":
@@ -233,6 +240,25 @@ def owner_account_action(email):
         note = str(data.get("note") or "").strip()[:1000]
         account["platform_support_note"] = note
         details["note_length"] = len(note)
+    elif action == "delete":
+        confirmation = _norm(data.get("confirmation"))
+        if confirmation != target:
+            return jsonify({"error": "email_confirmation_required"}), 400
+        removed_keys = []
+        for key, record in list(users.items()):
+            if key == target or (
+                isinstance(record, dict) and _norm(record.get("org_id")) == target
+            ):
+                removed_keys.append(key)
+                users.pop(key, None)
+        leads = load_leads() or {}
+        if isinstance(leads, dict):
+            leads.pop(target, None)
+            save_leads(leads)
+        delete_users(removed_keys)
+        details["records_removed"] = len(removed_keys)
+        _audit(actor, action, target, details)
+        return jsonify({"ok": True, "deleted": True}), 200
     else:
         return jsonify({"error": "unsupported_action"}), 400
 

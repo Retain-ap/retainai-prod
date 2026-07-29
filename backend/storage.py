@@ -261,6 +261,32 @@ def save_users(users_map: Dict[str, Dict[str, Any]]) -> None:
         s.commit()
 
 
+def delete_users(emails: List[str]) -> None:
+    """Permanently remove users (and their related SQLite leads) by email."""
+    normalized = {
+        str(email or "").strip().lower()
+        for email in (emails or [])
+        if str(email or "").strip()
+    }
+    if not normalized:
+        return
+
+    if not USE_SQLITE:
+        users = load_users()
+        for email in normalized:
+            users.pop(email, None)
+        _write_json(USERS_JSON, users)
+        return
+
+    _ensure_sqlite()
+    with SessionLocal() as s:
+        for email in normalized:
+            row = s.get(UserRow, email)
+            if row:
+                s.delete(row)
+        s.commit()
+
+
 def get_user(email: str) -> Optional[Dict[str, Any]]:
     email = (email or "").strip().lower()
     if not email:

@@ -7,6 +7,8 @@ import base64
 import hmac
 import hashlib
 import datetime
+import secrets
+import struct
 import urllib.parse
 from uuid import uuid4
 from typing import Any, Dict, Optional, List, Tuple
@@ -24,6 +26,7 @@ from flask_cors import CORS
 from dotenv import load_dotenv
 from flask_apscheduler import APScheduler
 from werkzeug.security import check_password_hash, generate_password_hash
+from cryptography.fernet import Fernet, InvalidToken
 
 from sendgrid import SendGridAPIClient
 from sendgrid.helpers.mail import Mail, Email
@@ -65,13 +68,21 @@ SESSION_SECRET = (
     os.getenv("SESSION_SECRET")
     or os.getenv("FLASK_SECRET_KEY")
     or os.getenv("APP_SECRET")
-    or os.getenv("META_APP_SECRET")
 )
 if not SESSION_SECRET:
-    # Keeps local development usable. Production must configure SESSION_SECRET so
-    # every worker can validate the same cookie after a restart.
-    SESSION_SECRET = os.urandom(32).hex()
-    print("[SECURITY] WARNING: SESSION_SECRET is not configured; sessions will not survive restarts.")
+    # Keep sessions stable across every production worker. The dedicated owner
+    # secret is a safe deterministic recovery source until SESSION_SECRET is set.
+    owner_secret = str(os.getenv("PLATFORM_OWNER_PASSWORD") or "").strip()
+    if owner_secret:
+        SESSION_SECRET = hashlib.sha256(
+            f"retainai-session:{owner_secret}".encode("utf-8")
+        ).hexdigest()
+        print("[SECURITY] SESSION_SECRET is derived from the configured owner secret.")
+    else:
+        # Local development remains usable, but production is made deliberately
+        # obvious instead of silently creating mutually incompatible workers.
+        SESSION_SECRET = os.urandom(32).hex()
+        print("[SECURITY] WARNING: Configure SESSION_SECRET before running multiple workers.")
 app.config.update(
     SECRET_KEY=SESSION_SECRET,
     SESSION_COOKIE_NAME="retainai_session",
@@ -112,15 +123,18 @@ CORS(
     expose_headers=["Content-Type"],
 )
 
-# Cookies: secure in prod (Render/https), relax in local dev
+# Cookies must remain Secure in production. Allowed origins often contain
+# localhost for developer convenience and must never determine cookie security.
+IS_RENDER = bool(os.getenv("RENDER") or os.getenv("RENDER_SERVICE_ID"))
 IS_LOCAL = (
-    os.getenv("FLASK_ENV", "").lower() == "development"
-    or any("localhost" in origin for origin in ALLOWED)
+    not IS_RENDER
+    and os.getenv("FLASK_ENV", "").lower() == "development"
 )
 
 app.config.update(
     SESSION_COOKIE_SAMESITE="None",
     SESSION_COOKIE_SECURE=not IS_LOCAL,
+    SESSION_COOKIE_DOMAIN=os.getenv("SESSION_COOKIE_DOMAIN") or None,
 )
 
 _PUBLIC_API_PATHS = {
@@ -132,6 +146,7 @@ _PUBLIC_API_PATHS = {
     "/api/signup",
     "/api/auth/signup",
     "/api/oauth/google",
+    "/api/auth/2fa/verify-login",
     "/api/stripe/webhook",
     "/api/stripe/oauth/callback",
     "/api/stripe/verify",
@@ -211,6 +226,90 @@ def _password_matches(stored: str, supplied: str) -> bool:
         except Exception:
             return False
     return hmac.compare_digest(stored, supplied)
+
+
+_LOGIN_ATTEMPTS = {}
+LOGIN_WINDOW_SECONDS = 15 * 60
+LOGIN_MAX_ATTEMPTS = 8
+
+
+def _login_attempt_key(email: str) -> str:
+    forwarded = str(request.headers.get("X-Forwarded-For") or "").split(",")[0].strip()
+    return f"{_norm_email(email)}:{forwarded or request.remote_addr or 'unknown'}"
+
+
+def _login_is_limited(email: str) -> bool:
+    key = _login_attempt_key(email)
+    now = time.time()
+    attempts = [value for value in _LOGIN_ATTEMPTS.get(key, []) if now - value < LOGIN_WINDOW_SECONDS]
+    _LOGIN_ATTEMPTS[key] = attempts
+    return len(attempts) >= LOGIN_MAX_ATTEMPTS
+
+
+def _record_login_failure(email: str) -> None:
+    key = _login_attempt_key(email)
+    _LOGIN_ATTEMPTS.setdefault(key, []).append(time.time())
+
+
+def _clear_login_failures(email: str) -> None:
+    _LOGIN_ATTEMPTS.pop(_login_attempt_key(email), None)
+
+
+def _mfa_cipher() -> Fernet:
+    key = base64.urlsafe_b64encode(hashlib.sha256(str(SESSION_SECRET).encode("utf-8")).digest())
+    return Fernet(key)
+
+
+def _encrypt_mfa_secret(secret: str) -> str:
+    return _mfa_cipher().encrypt(str(secret).encode("utf-8")).decode("utf-8")
+
+
+def _decrypt_mfa_secret(value: str) -> str:
+    try:
+        return _mfa_cipher().decrypt(str(value).encode("utf-8")).decode("utf-8")
+    except (InvalidToken, ValueError, TypeError):
+        return ""
+
+
+def _new_totp_secret() -> str:
+    return base64.b32encode(secrets.token_bytes(20)).decode("ascii").rstrip("=")
+
+
+def _totp_at(secret: str, timestamp: float) -> str:
+    padding = "=" * ((8 - len(secret) % 8) % 8)
+    key = base64.b32decode((secret + padding).upper())
+    counter = int(timestamp // 30)
+    digest = hmac.new(key, struct.pack(">Q", counter), hashlib.sha1).digest()
+    offset = digest[-1] & 0x0F
+    value = struct.unpack(">I", digest[offset : offset + 4])[0] & 0x7FFFFFFF
+    return f"{value % 1_000_000:06d}"
+
+
+def _verify_totp_secret(secret: str, code: str) -> bool:
+    normalized = re.sub(r"\s+", "", str(code or ""))
+    if not re.fullmatch(r"\d{6}", normalized):
+        return False
+    now = time.time()
+    return any(
+        hmac.compare_digest(_totp_at(secret, now + window * 30), normalized)
+        for window in (-1, 0, 1)
+    )
+
+
+def _verify_mfa_code(user: dict, code: str) -> bool:
+    normalized = re.sub(r"\s+", "", str(code or ""))
+    if not normalized:
+        return False
+    secret = _decrypt_mfa_secret((user or {}).get("totp_secret", ""))
+    if secret and _verify_totp_secret(secret, normalized):
+        return True
+    for index, stored_hash in enumerate(list((user or {}).get("backup_code_hashes") or [])):
+        if check_password_hash(stored_hash, normalized.upper()):
+            remaining = list(user.get("backup_code_hashes") or [])
+            remaining.pop(index)
+            user["backup_code_hashes"] = remaining
+            return True
+    return False
 
 def _cors_preflight_response():
     resp = current_app.make_response(("", 204))
@@ -1452,14 +1551,28 @@ def send_birthday_greetings():
 TRIAL_DAYS = 14
 
 def _within_trial(user: dict, days: int = TRIAL_DAYS) -> bool:
-    ts = user.get("trial_start")
+    return _trial_details(user, days)["active"]
+
+def _trial_details(user: dict, days: int = TRIAL_DAYS) -> dict:
+    ts = str((user or {}).get("trial_start") or "")
     if not ts:
-        return False
+        return {"active": False, "daysRemaining": 0, "endsAt": None}
     try:
-        t0 = datetime.datetime.fromisoformat(ts.replace("Z", "+00:00"))
+        started = datetime.datetime.fromisoformat(ts.replace("Z", "+00:00"))
+        if started.tzinfo is None:
+            started = started.replace(tzinfo=datetime.timezone.utc)
+        ends = started + datetime.timedelta(days=days)
+        remaining_seconds = (
+            ends - datetime.datetime.now(datetime.timezone.utc)
+        ).total_seconds()
+        days_remaining = max(0, int((remaining_seconds + 86399) // 86400))
+        return {
+            "active": remaining_seconds > 0,
+            "daysRemaining": days_remaining,
+            "endsAt": ends.isoformat().replace("+00:00", "Z"),
+        }
     except Exception:
-        return False
-    return (datetime.datetime.utcnow() - t0) <= datetime.timedelta(days=days)
+        return {"active": False, "daysRemaining": 0, "endsAt": None}
 
 def send_trial_ending_email(user_email, user_name, business_name, trial_end_date):
     send_email_with_template(
@@ -2632,6 +2745,7 @@ def _user_payload(email: str, user: dict) -> dict:
         display_name = base.get("name", "")
 
     logo = base.get("logo") or base.get("picture") or ""
+    trial = _trial_details(base)
 
     return {
         "email": email,
@@ -2650,6 +2764,15 @@ def _user_payload(email: str, user: dict) -> dict:
         "gcal_calendars": base.get("gcal_calendars", []),
 
         "status": base.get("status", ""),
+        "trialActive": trial["active"],
+        "trialDaysRemaining": trial["daysRemaining"],
+        "trialEndsAt": trial["endsAt"],
+        "billingRequired": not _is_platform_owner(email) and not (
+            base.get("status") == "active" or trial["active"]
+        ),
+        "hasBillingProfile": bool(
+            base.get("stripe_customer_id") or base.get("stripe_subscription_id")
+        ),
         "role": role or user.get("role"),
         "org_id": org_email or user.get("org_id"),
         "orgOwnerEmail": org_email,
@@ -2700,6 +2823,24 @@ def _bootstrap_platform_owner() -> None:
 
 
 _bootstrap_platform_owner()
+
+
+def _complete_login_response(email: str, user: dict, payload: dict, remember: bool, message: str):
+    _clear_login_failures(email)
+    if bool((user or {}).get("totp_enabled")):
+        session.clear()
+        session.permanent = False
+        session["mfa_pending_email"] = _norm_email(email)
+        session["mfa_pending_remember"] = bool(remember)
+        session["mfa_pending_at"] = int(time.time())
+        return jsonify({
+            "message": "Two-factor verification required",
+            "mfaRequired": True,
+            "emailHint": _norm_email(email),
+        }), 202
+    _start_user_session(email, payload, remember)
+    return jsonify({"message": message, "user": payload}), 200
+
 
 @app.route("/api/signup", methods=["POST", "OPTIONS"])
 @app.route("/api/auth/signup", methods=["POST", "OPTIONS"])
@@ -2802,6 +2943,11 @@ def login():
 
     if not email or not password:
         return jsonify({"error": "Invalid credentials or account not active"}), 401
+    if _login_is_limited(email):
+        return jsonify({
+            "error": "Too many login attempts. Please wait 15 minutes and try again.",
+            "code": "rate_limited",
+        }), 429
 
     users = load_users() or {}
     if not isinstance(users, dict):
@@ -2822,6 +2968,7 @@ def login():
                 "error": "Owner login is not configured. Add PLATFORM_OWNER_PASSWORD to the backend service in Render."
             }), 503
         if not hmac.compare_digest(configured_owner_password, password):
+            _record_login_failure(email)
             return jsonify({"error": "Incorrect owner password"}), 401
 
         owner = users.get(email)
@@ -2845,8 +2992,9 @@ def login():
         users[email] = owner
         save_users(users)
         payload = _user_payload(email, owner)
-        _start_user_session(email, payload, remember)
-        return jsonify({"message": "Owner login successful", "user": payload}), 200
+        return _complete_login_response(
+            email, owner, payload, remember, "Owner login successful"
+        )
 
     # Team membership takes priority over a teammate's top-level login record.
     # This prevents a teammate from being mistaken for an organization owner.
@@ -2898,15 +3046,18 @@ def login():
                 "org_id": owner_email,
             }
             payload = _user_payload(email, member_user)
-            _start_user_session(email, payload, remember)
-            return jsonify({"message": "Login successful", "user": payload}), 200
+            return _complete_login_response(
+                email, member_login, payload, remember, "Login successful"
+            )
 
+        _record_login_failure(email)
         return jsonify({"error": "Invalid credentials or account not active"}), 401
 
     # Organization owner login.
     user = users.get(email)
     if isinstance(user, dict):
-        allowed = _password_matches(user.get("password", ""), password) and (
+        password_valid = _password_matches(user.get("password", ""), password)
+        allowed = password_valid and (
             _is_platform_owner(email)
             or (user.get("status") == "active")
             or _within_trial(user, TRIAL_DAYS)
@@ -2927,9 +3078,42 @@ def login():
 
             save_users(users)
             payload = _user_payload(email, user)
-            _start_user_session(email, payload, remember)
-            return jsonify({"message": "Login successful", "user": payload}), 200
+            return _complete_login_response(
+                email, user, payload, remember, "Login successful"
+            )
+        if password_valid:
+            checkout_url = None
+            checkout_error = None
+            try:
+                checkout_args = {
+                    "mode": "subscription",
+                    "line_items": [{"price": STRIPE_PRICE_ID, "quantity": 1}],
+                    "success_url": f"{FRONTEND_URL}/login?paid=1&session_id={{CHECKOUT_SESSION_ID}}",
+                    "cancel_url": f"{FRONTEND_URL}/login?billing=canceled",
+                    "metadata": {"user_email": email, "recovery": "true"},
+                }
+                if user.get("stripe_customer_id"):
+                    checkout_args["customer"] = user["stripe_customer_id"]
+                else:
+                    checkout_args["customer_email"] = email
+                checkout = stripe.checkout.Session.create(**checkout_args)
+                checkout_url = checkout.url
+            except Exception:
+                checkout_error = "Billing is temporarily unavailable. Please contact support."
+            trial = _trial_details(user)
+            return jsonify({
+                "error": "Your trial has ended. Choose a plan to continue.",
+                "code": "billing_required",
+                "account": {
+                    "email": email,
+                    "trialDaysRemaining": trial["daysRemaining"],
+                    "trialEndsAt": trial["endsAt"],
+                    "checkoutUrl": checkout_url,
+                    "billingError": checkout_error,
+                },
+            }), 402
 
+    _record_login_failure(email)
     return jsonify({"error": "Invalid credentials or account not active"}), 401
 
 
@@ -2937,6 +3121,176 @@ def login():
 def logout():
     session.clear()
     return jsonify({"ok": True}), 200
+
+
+@app.post("/api/auth/2fa/verify-login")
+def verify_two_factor_login():
+    email = _norm_email(session.get("mfa_pending_email"))
+    pending_at = int(session.get("mfa_pending_at") or 0)
+    if not email or not pending_at or time.time() - pending_at > 10 * 60:
+        session.clear()
+        return jsonify({"error": "Your verification session expired. Please sign in again."}), 401
+    if _login_is_limited(email):
+        return jsonify({"error": "Too many verification attempts. Please try again later."}), 429
+
+    users = load_users() or {}
+    user = users.get(email) if isinstance(users, dict) else None
+    if not isinstance(user, dict) or not bool(user.get("totp_enabled")):
+        session.clear()
+        return jsonify({"error": "Two-factor verification is unavailable."}), 401
+
+    code = str((request.get_json(silent=True) or {}).get("code") or "")
+    if not _verify_mfa_code(user, code):
+        _record_login_failure(email)
+        return jsonify({"error": "That verification code is not valid."}), 401
+
+    remember = bool(session.get("mfa_pending_remember", True))
+    users[email] = user
+    save_users(users)
+    payload = _user_payload(email, user)
+    _start_user_session(email, payload, remember)
+    _clear_login_failures(email)
+    return jsonify({"message": "Login successful", "user": payload}), 200
+
+
+@app.get("/api/auth/2fa/status")
+def two_factor_status():
+    email = _session_email()
+    users = load_users() or {}
+    user = users.get(email) if isinstance(users, dict) else {}
+    return jsonify({
+        "enabled": bool((user or {}).get("totp_enabled")),
+        "backupCodesRemaining": len((user or {}).get("backup_code_hashes") or []),
+        "required": _is_platform_owner(email),
+    }), 200
+
+
+@app.post("/api/auth/2fa/setup")
+def two_factor_setup():
+    email = _session_email()
+    users = load_users() or {}
+    user = users.get(email) if isinstance(users, dict) else None
+    if not isinstance(user, dict):
+        return jsonify({"error": "Account not found"}), 404
+
+    secret = _new_totp_secret()
+    user["totp_pending_secret"] = _encrypt_mfa_secret(secret)
+    users[email] = user
+    save_users(users)
+    uri = (
+        "otpauth://totp/"
+        + urllib.parse.quote(f"RetainAI:{email}", safe="")
+        + "?"
+        + urllib.parse.urlencode(
+            {
+                "secret": secret,
+                "issuer": "RetainAI",
+                "algorithm": "SHA1",
+                "digits": 6,
+                "period": 30,
+            }
+        )
+    )
+    return jsonify({"secret": secret, "uri": uri}), 200
+
+
+@app.post("/api/auth/2fa/confirm")
+def two_factor_confirm():
+    email = _session_email()
+    users = load_users() or {}
+    user = users.get(email) if isinstance(users, dict) else None
+    if not isinstance(user, dict):
+        return jsonify({"error": "Account not found"}), 404
+    encrypted_secret = user.get("totp_pending_secret", "")
+    secret = _decrypt_mfa_secret(encrypted_secret)
+    code = str((request.get_json(silent=True) or {}).get("code") or "")
+    if not secret or not _verify_totp_secret(secret, code):
+        return jsonify({"error": "That verification code is not valid."}), 400
+
+    backup_codes = [
+        f"{secrets.token_hex(2).upper()}-{secrets.token_hex(2).upper()}"
+        for _ in range(10)
+    ]
+    user["totp_secret"] = encrypted_secret
+    user["totp_enabled"] = True
+    user["backup_code_hashes"] = [
+        generate_password_hash(value) for value in backup_codes
+    ]
+    user.pop("totp_pending_secret", None)
+    users[email] = user
+    save_users(users)
+    return jsonify({"enabled": True, "backupCodes": backup_codes}), 200
+
+
+@app.post("/api/auth/2fa/disable")
+def two_factor_disable():
+    email = _session_email()
+    users = load_users() or {}
+    user = users.get(email) if isinstance(users, dict) else None
+    if not isinstance(user, dict):
+        return jsonify({"error": "Account not found"}), 404
+    code = str((request.get_json(silent=True) or {}).get("code") or "")
+    if not _verify_mfa_code(user, code):
+        return jsonify({"error": "Enter a valid authenticator or recovery code."}), 400
+    user["totp_enabled"] = False
+    user.pop("totp_secret", None)
+    user.pop("totp_pending_secret", None)
+    user.pop("backup_code_hashes", None)
+    users[email] = user
+    save_users(users)
+    return jsonify({"enabled": False}), 200
+
+
+@app.post("/api/billing/checkout")
+def billing_checkout():
+    email = _session_org_email()
+    users = load_users() or {}
+    user = users.get(email) if isinstance(users, dict) else None
+    if not isinstance(user, dict):
+        return jsonify({"error": "Account not found"}), 404
+    if not STRIPE_SECRET_KEY or not STRIPE_PRICE_ID:
+        return jsonify({"error": "Billing is not configured."}), 503
+
+    trial = _trial_details(user)
+    args = {
+        "mode": "subscription",
+        "line_items": [{"price": STRIPE_PRICE_ID, "quantity": 1}],
+        "success_url": f"{FRONTEND_URL}/login?paid=1&session_id={{CHECKOUT_SESSION_ID}}",
+        "cancel_url": f"{FRONTEND_URL}/app?billing=canceled",
+        "metadata": {"user_email": email},
+    }
+    if user.get("stripe_customer_id"):
+        args["customer"] = user["stripe_customer_id"]
+    else:
+        args["customer_email"] = email
+    if trial["active"] and trial["daysRemaining"] > 0:
+        args["subscription_data"] = {
+            "trial_period_days": trial["daysRemaining"],
+            "metadata": {"user_email": email},
+        }
+    try:
+        checkout = stripe.checkout.Session.create(**args)
+        return jsonify({"url": checkout.url}), 200
+    except Exception:
+        return jsonify({"error": "Could not open secure checkout."}), 502
+
+
+@app.post("/api/billing/portal")
+def billing_portal():
+    email = _session_org_email()
+    users = load_users() or {}
+    user = users.get(email) if isinstance(users, dict) else None
+    customer_id = (user or {}).get("stripe_customer_id")
+    if not customer_id:
+        return jsonify({"error": "No billing profile exists yet. Choose a plan first."}), 409
+    try:
+        portal = stripe.billing_portal.Session.create(
+            customer=customer_id,
+            return_url=f"{FRONTEND_URL}/app/settings?tab=billing",
+        )
+        return jsonify({"url": portal.url}), 200
+    except Exception:
+        return jsonify({"error": "Could not open the billing portal."}), 502
 
 
 @app.route("/api/session", methods=["GET"])
@@ -2996,8 +3350,13 @@ def google_oauth():
             return jsonify({"error": "Account not active. Please complete payment to activate."}), 403
 
         payload = _user_payload(email, user)
-        _start_user_session(email, payload, bool(data.get("remember", True)))
-        return jsonify({"message": "Google login successful", "user": payload}), 200
+        return _complete_login_response(
+            email,
+            user,
+            payload,
+            bool(data.get("remember", True)),
+            "Google login successful",
+        )
 
     except Exception as e:
         print("[GOOGLE OAUTH ERROR]", e)

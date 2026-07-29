@@ -50,7 +50,12 @@ function healthFor(lead) {
   else if (score < 46) { label = "At risk"; kind = "risk"; }
   else if (score < 70) { label = "Needs attention"; kind = "attention"; }
   if (spend >= 1000 && score >= 70) { label = "VIP"; kind = "vip"; }
-  return { score, label, kind, days, last, spend };
+  const reasons = [];
+  reasons.push(last ? `${days} days since the last recorded activity` : "No recent activity is recorded");
+  if (!lead.email && !(lead.phone || lead.phone_number)) reasons.push("Contact information is incomplete");
+  if (String(lead.status || "").toLowerCase().includes("vip")) reasons.push("Marked as a high-value relationship");
+  if (spend > 0) reasons.push(`${money(spend)} in recorded relationship value`);
+  return { score, label, kind, days, last, spend, reasons };
 }
 
 function leadName(lead) {
@@ -65,7 +70,7 @@ function HealthPill({ health }) {
   return <span className={`health-pill ${health.kind}`}>{health.label} · {health.score}</span>;
 }
 
-export default function RetentionCommandCenter({ leads = [], appointments = [], onOpenAutomations, onOpenMessages }) {
+export default function RetentionCommandCenter({ leads = [], appointments = [], user, onOpenAutomations, onOpenMessages }) {
   const [tab, setTab] = useState("briefing");
   const [timelineLead, setTimelineLead] = useState(null);
 
@@ -84,6 +89,14 @@ export default function RetentionCommandCenter({ leads = [], appointments = [], 
       value: Number(item.lead.next_value || item.lead.average_sale || item.lead.value || 75),
     }));
   const opportunityValue = opportunities.reduce((sum, item) => sum + item.value, 0);
+  const protectedValue = atRisk.reduce(
+    (sum, item) => sum + Number(item.lead.value || item.lead.average_sale || 75),
+    0
+  );
+  const estimatedHoursSaved = Math.max(
+    1,
+    Math.round((leads.length * 4 + appointments.length * 6) / 60)
+  );
   const pulse = leads.length
     ? Math.round(enriched.reduce((sum, item) => sum + item.health.score, 0) / enriched.length)
     : 0;
@@ -101,6 +114,7 @@ export default function RetentionCommandCenter({ leads = [], appointments = [], 
     ["customers", "Customer Health", <FaUsers />],
     ["playbooks", "Playbooks", <FaMagic />],
     ["pulse", "Business Pulse", <FaChartLine />],
+    ["value", "Value Receipt", <FaHeartbeat />],
   ];
 
   return (
@@ -232,6 +246,38 @@ export default function RetentionCommandCenter({ leads = [], appointments = [], 
         </div>
       )}
 
+      {tab === "value" && (
+        <div className="product-grid">
+          <section className="product-card" style={{ gridColumn: "1 / -1" }}>
+            <div className="product-eyebrow">Your RetainAI value receipt</div>
+            <h2 style={{ marginTop: 10 }}>
+              RetainAI is protecting relationships worth {money(protectedValue)}.
+            </h2>
+            <p className="product-card-copy">
+              A transparent estimate based on your current customer records,
+              follow-up opportunities, and upcoming bookings.
+            </p>
+          </section>
+          <section className="product-card">
+            <div className="insight-list">
+              <div className="insight-row"><span>Revenue opportunities identified</span><strong>{money(opportunityValue)}</strong></div>
+              <div className="insight-row"><span>Relationships being monitored</span><strong>{leads.length}</strong></div>
+              <div className="insight-row"><span>Priority actions surfaced</span><strong>{atRisk.length + needsAttention.length}</strong></div>
+              <div className="insight-row"><span>Estimated admin time saved</span><strong>{estimatedHoursSaved}h</strong></div>
+            </div>
+          </section>
+          <section className="product-card">
+            <h3>Recommended next win</h3>
+            <p className="product-card-copy">
+              {opportunities.length
+                ? `Contact your top ${Math.min(3, opportunities.length)} rebooking opportunities. Their estimated combined value is ${money(opportunities.slice(0, 3).reduce((sum, item) => sum + item.value, 0))}.`
+                : `Your ${user?.businessType || "business"} relationships look current. Activate review requests to build referral momentum.`}
+            </p>
+            <button className="product-button primary" onClick={() => setTab("opportunities")}>Open next opportunities</button>
+          </section>
+        </div>
+      )}
+
       {timelineLead && (
         <div className="command-overlay" onMouseDown={() => setTimelineLead(null)}>
           <section className="command-panel" style={{ maxHeight: "74vh", overflow: "auto" }} onMouseDown={(event) => event.stopPropagation()}>
@@ -243,6 +289,20 @@ export default function RetentionCommandCenter({ leads = [], appointments = [], 
             <p style={{ color: "var(--ra-muted)", lineHeight: 1.65 }}>
               {leadName(timelineLead.lead)} has {timelineLead.health.days >= 120 ? "no recent recorded activity" : `not had recorded activity for approximately ${timelineLead.health.days} days`}. Their preferred contact information is {timelineLead.lead.phone || timelineLead.lead.email || "not complete"}.
             </p>
+            <div className="account-detail-box" style={{ marginTop: 14 }}>
+              <strong>Why this score</strong>
+              <ul>
+                {timelineLead.health.reasons.map((reason) => <li key={reason}>{reason}</li>)}
+              </ul>
+            </div>
+            <div className="account-detail-box" style={{ marginTop: 14 }}>
+              <strong>Relationship memory</strong>
+              <p>
+                {timelineLead.lead.notes ||
+                  timelineLead.lead.summary ||
+                  `${leadName(timelineLead.lead)} is best reached through ${timelineLead.lead.phone ? "phone or WhatsApp" : "email"}. RetainAI will expand this memory as conversations, appointments, preferences, and outcomes are recorded.`}
+              </p>
+            </div>
             <div className="timeline">
               {[
                 ["Customer added", timelineLead.lead.createdAt || timelineLead.lead.created_at],

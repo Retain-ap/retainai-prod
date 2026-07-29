@@ -4,6 +4,7 @@ import { useLocation, useNavigate } from "react-router-dom";
 import GoogleCalendarEvents from "./GoogleCalendarEvents";
 import StripeConnectCard from "./StripeConnectCard";
 import WhatsAppHealthCard from "./WhatsAppHealthCard";
+import TwoFactorSettings from "./TwoFactorSettings";
 import {
   FaUser,
   FaPlug,
@@ -531,6 +532,26 @@ export default function Settings({
     }
   }, []);
 
+  const openSubscriptionBilling = async () => {
+    setInfo("Opening secure billing…");
+    try {
+      const endpoint = profile?.hasBillingProfile
+        ? "billing/portal"
+        : "billing/checkout";
+      const response = await fetch(apiUrl(endpoint), {
+        method: "POST",
+        credentials: "include",
+      });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok || !data.url) {
+        throw new Error(data.error || "Billing is unavailable.");
+      }
+      window.location.assign(data.url);
+    } catch (error) {
+      setInfo(error.message || "Billing is unavailable.");
+    }
+  };
+
   const MAX_W = 1120;
 
   if (!profile?.email) {
@@ -825,9 +846,16 @@ export default function Settings({
                   <p>Your workspace remains protected by server-verified account and billing status.</p>
                 </div>
                 <div className="account-card-content">
-                  <div className="account-detail-box">For plan changes, invoices, or billing assistance, contact owner@retainai.ca.</div>
+                  <div className="account-detail-box">
+                    {profile?.trialActive
+                      ? `${profile.trialDaysRemaining || 0} days remain in your trial.`
+                      : "Manage your plan, invoices, and payment method securely through Stripe."}
+                  </div>
                 </div>
                 <div className="account-card-actions">
+                  <button className="account-primary-btn" onClick={openSubscriptionBilling}>
+                    {profile?.hasBillingProfile ? "Manage subscription" : "Choose a plan"}
+                  </button>
                   <a className="account-primary-btn" href={supportTopicMailto("billing and subscription")}>Contact billing support</a>
                 </div>
               </article>
@@ -880,6 +908,7 @@ export default function Settings({
               <div><span>Session storage</span><strong className="ready">HttpOnly cookie</strong></div>
             </div>
             <div className="connected-accounts-grid">
+              <TwoFactorSettings />
               <article className="account-card">
                 <div className="account-card-copy"><h3>Password assistance</h3><p>Request a secure password reset through RetainAI support.</p></div>
                 <div className="account-card-actions"><a className="account-primary-btn" href={supportTopicMailto("password reset")}>Request reset</a></div>

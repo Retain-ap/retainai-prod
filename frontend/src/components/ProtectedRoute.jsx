@@ -8,11 +8,22 @@ export default function ProtectedRoute({ children }) {
 
   useEffect(() => {
     let active = true;
-    fetch(apiUrl("session"), { credentials: "include", cache: "no-store" })
-      .then((response) => {
-        if (!response.ok) throw new Error("not_authenticated");
-        return response.json();
-      })
+    const verify = async () => {
+      let response;
+      for (let attempt = 0; attempt < 2; attempt += 1) {
+        response = await fetch(apiUrl("session"), {
+          credentials: "include",
+          cache: "no-store",
+        });
+        if (response.ok) break;
+        if (attempt === 0 && response.status >= 500) {
+          await new Promise((resolve) => setTimeout(resolve, 350));
+        }
+      }
+      if (!response?.ok) throw new Error("not_authenticated");
+      return response.json();
+    };
+    verify()
       .then((data) => {
         if (!active) return;
         if (!data?.authenticated || !data?.user) {
@@ -31,7 +42,15 @@ export default function ProtectedRoute({ children }) {
     };
   }, []);
 
-  if (status === "checking") return null;
+  if (status === "checking") {
+    return (
+      <div className="auth-gate">
+        <div className="auth-gate-mark">RetainAI</div>
+        <div className="auth-gate-spinner" aria-label="Checking your secure session" />
+        <p>Securing your workspace…</p>
+      </div>
+    );
+  }
   if (status !== "authenticated") {
     return <Navigate to="/login" state={{ from: location }} replace />;
   }

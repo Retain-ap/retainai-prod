@@ -252,3 +252,169 @@
   .system-check-grid { grid-template-columns: 1fr; }
   .insight-row { align-items: flex-start; flex-direction: column; }
 }
+.auth-gate {
+  min-height: 100vh;
+  display: grid;
+  place-content: center;
+  justify-items: center;
+  gap: 14px;
+  color: rgba(255, 255, 255, 0.68);
+  background: #0b0c0e;
+}
+
+.auth-gate-mark {
+  color: #f5d87e;
+  font-size: 28px;
+  font-weight: 900;
+}
+
+.auth-gate-spinner {
+  width: 30px;
+  height: 30px;
+  border: 3px solid rgba(245, 216, 126, 0.16);
+  border-top-color: #f5d87e;
+  border-radius: 50%;
+  animation: retainai-spin 0.8s linear infinite;
+}
+
+@keyframes retainai-spin {
+  to { transform: rotate(360deg); }
+}
+
+.two-factor-card { grid-column: 1 / -1; }
+.two-factor-setup {
+  display: flex;
+  gap: 20px;
+  align-items: center;
+  margin: 16px 0;
+}
+.two-factor-qr {
+  background: white;
+  padding: 12px;
+  border-radius: 14px;
+}
+.two-factor-setup code,
+.backup-code-grid code {
+  color: #f5d87e;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+}
+.backup-code-panel {
+  margin-top: 14px;
+  padding: 14px;
+  border-radius: 12px;
+  background: rgba(245, 216, 126, 0.08);
+  border: 1px solid rgba(245, 216, 126, 0.25);
+}
+.backup-code-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+  margin-top: 12px;
+}
+@media (max-width: 680px) {
+  .two-factor-setup { flex-direction: column; align-items: flex-start; }
+  .backup-code-grid { grid-template-columns: 1fr; }
+}
+
+.trial-command-bar {
+  position: fixed;
+  z-index: 45;
+  top: 14px;
+  left: 50%;
+  transform: translateX(-50%);
+  width: min(720px, calc(100vw - 32px));
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 18px;
+  padding: 12px 14px 12px 18px;
+  border: 1px solid rgba(245, 216, 126, 0.35);
+  border-radius: 15px;
+  background: rgba(18, 19, 22, 0.96);
+  box-shadow: 0 18px 60px rgba(0, 0, 0, 0.34);
+  backdrop-filter: blur(16px);
+}
+.trial-command-bar div { display: grid; gap: 2px; }
+.trial-command-bar strong { color: #f5d87e; }
+.trial-command-bar span,
+.trial-command-bar small { color: rgba(255, 255, 255, 0.66); }
+.trial-command-bar button {
+  flex: 0 0 auto;
+  border: 0;
+  border-radius: 10px;
+  padding: 10px 15px;
+  color: #0b0c0e;
+  background: #f5d87e;
+  font-weight: 900;
+  cursor: pointer;
+}
+.trial-command-bar.urgent { border-color: #ffb36b; }
+@media (max-width: 760px) {
+  .trial-command-bar {
+    position: relative;
+    top: auto;
+    left: auto;
+    transform: none;
+    width: auto;
+    margin: 10px 12px;
+    align-items: flex-start;
+  }
+}
+
+.onboarding-guide {
+  position: fixed;
+  z-index: 35;
+  right: 18px;
+  bottom: 18px;
+  width: min(360px, calc(100vw - 36px));
+  padding: 14px;
+  border: 1px solid var(--ra-line);
+  border-radius: 16px;
+  background: rgba(18, 19, 22, 0.97);
+  box-shadow: 0 22px 70px rgba(0, 0, 0, 0.38);
+}
+.onboarding-guide-head {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 10px;
+}
+.onboarding-guide-head div { display: grid; gap: 3px; }
+.onboarding-guide-head span { color: #f5d87e; font-size: 12px; font-weight: 800; }
+.onboarding-guide-head strong { color: white; }
+.onboarding-guide-head button {
+  border: 0;
+  background: transparent;
+  color: var(--ra-muted);
+  cursor: pointer;
+}
+.onboarding-progress {
+  height: 5px;
+  background: rgba(255, 255, 255, 0.08);
+  border-radius: 999px;
+  overflow: hidden;
+  margin-bottom: 10px;
+}
+.onboarding-progress span {
+  display: block;
+  height: 100%;
+  background: #f5d87e;
+}
+.onboarding-guide > button {
+  width: 100%;
+  display: grid;
+  grid-template-columns: 18px 1fr 14px;
+  align-items: center;
+  gap: 9px;
+  padding: 9px 4px;
+  border: 0;
+  border-top: 1px solid rgba(255, 255, 255, 0.06);
+  color: rgba(255, 255, 255, 0.84);
+  background: transparent;
+  text-align: left;
+  cursor: pointer;
+}
+.onboarding-guide > button svg:first-child { color: rgba(255, 255, 255, 0.22); }
+.onboarding-guide > button.done { color: var(--ra-muted); text-decoration: line-through; }
+.onboarding-guide > button.done svg:first-child { color: #57d38c; }

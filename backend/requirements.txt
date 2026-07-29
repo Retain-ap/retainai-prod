@@ -10,3 +10,4 @@ requests==2.32.3
 waitress==2.1.2
 gunicorn==21.2.0
 SQLAlchemy==2.0.35
+cryptography==43.0.3

@@ -22,6 +22,8 @@ import { FaBars } from "react-icons/fa";
 import RetentionCommandCenter from "./RetentionCommandCenter";
 import OwnerConsole from "./OwnerConsole";
 import CommandPalette from "./CommandPalette";
+import TrialCommandBar from "./TrialCommandBar";
+import OnboardingGuide from "./OnboardingGuide";
 
 const SECTION_LABELS = {
   overview: "Overview",
@@ -135,13 +137,6 @@ function CrmDashboard() {
     }
     return null;
   });
-
-  // If no user, redirect
-  useEffect(() => {
-    const stored = safeParseJSON(localStorage.getItem("user"), null);
-    if (!stored) navigate("/login", { replace: true });
-    // eslint-disable-next-line
-  }, []);
 
   // Sync from SettingsContext if it changes
   useEffect(() => {
@@ -762,6 +757,13 @@ function CrmDashboard() {
           <span>{SECTION_LABELS[section] || "CRM"}</span>
         </div>
       </header>
+      <TrialCommandBar user={user} />
+      <OnboardingGuide
+        user={user}
+        leads={leads}
+        setSection={setSection}
+        openImports={openImports}
+      />
 
       {mobileNavOpen && (
         <button
@@ -810,6 +812,7 @@ function CrmDashboard() {
           <RetentionCommandCenter
             leads={leads}
             appointments={crmAppointments}
+            user={user}
             onOpenMessages={() => setSection("messages")}
             onOpenAutomations={(playbook) => {
               try {

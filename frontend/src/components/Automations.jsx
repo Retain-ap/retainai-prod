@@ -1692,6 +1692,7 @@ export default function Automations({ user }) {
 
         try {
           const requested = localStorage.getItem("retainai:selected-playbook") || "";
+          if (requested) localStorage.setItem("retainai:onboarding-playbook", "1");
           const keywords = {
             winback: ["inactive", "win"],
             rebook: ["rebook", "follow"],
