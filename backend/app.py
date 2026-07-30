@@ -3909,6 +3909,27 @@ def _wa_message_text(message: dict) -> str:
     return f"[{message_type} message received]"
 
 
+def _wa_readable_text(value: Any) -> str:
+    """Normalize legacy/object-shaped message values without leaking Python dicts to the UI."""
+    if value is None:
+        return ""
+    if isinstance(value, str):
+        return value.strip()
+    if isinstance(value, (int, float, bool)):
+        return str(value)
+    if isinstance(value, dict):
+        for key in ("body", "text", "message", "title", "description", "caption", "value"):
+            candidate = value.get(key)
+            if candidate is not None:
+                text = _wa_readable_text(candidate)
+                if text:
+                    return text
+        return ""
+    if isinstance(value, list):
+        return " ".join(filter(None, (_wa_readable_text(item) for item in value))).strip()
+    return str(value).strip()
+
+
 def _wa_store_unmatched(sender_waid: str, message: dict, text_value: str, phone_number_id: str = "", profile_name: str = ""):
     try:
         unmatched = load_wa_unmatched()
@@ -4401,10 +4422,40 @@ def whatsapp_health():
     unmatched = load_wa_unmatched()
     last_webhook = events[0].get("created_at") if events else None
     last_inbound = next((event.get("created_at") for event in events if event.get("kind") == "inbound_matched"), None)
+    last_rejected = next((event.get("created_at") for event in events if event.get("kind") == "signature_rejected"), None)
+    graph_ok = False
+    graph_status = None
+    graph_error = ""
+    phone_display = ""
+    verified_name = ""
+    if WHATSAPP_TOKEN and WHATSAPP_PHONE_ID:
+        try:
+            version = os.getenv("WHATSAPP_API_VERSION", "v24.0")
+            check = pyrequests.get(
+                f"https://graph.facebook.com/{version}/{WHATSAPP_PHONE_ID}",
+                headers={"Authorization": f"Bearer {WHATSAPP_TOKEN}"},
+                params={"fields": "id,display_phone_number,verified_name,quality_rating"},
+                timeout=10,
+            )
+            graph_status = check.status_code
+            body = check.json() if check.content else {}
+            graph_ok = bool(check.ok and body.get("id"))
+            phone_display = str(body.get("display_phone_number") or "")
+            verified_name = str(body.get("verified_name") or "")
+            if not graph_ok:
+                error = body.get("error") or {}
+                graph_error = str(error.get("message") or f"Meta returned {check.status_code}")[:240]
+        except Exception as exc:
+            graph_error = f"Could not reach Meta: {exc}"[:240]
     return jsonify({
-        "ok": True,
-        "has_token": bool(os.getenv("WHATSAPP_TOKEN")),
-        "has_phone_id": bool(os.getenv("WHATSAPP_PHONE_ID")),
+        "ok": bool(graph_ok),
+        "graph_ok": bool(graph_ok),
+        "graph_status": graph_status,
+        "graph_error": graph_error,
+        "phone_display": phone_display,
+        "verified_name": verified_name,
+        "has_token": bool(WHATSAPP_TOKEN),
+        "has_phone_id": bool(WHATSAPP_PHONE_ID),
         "has_waba_id": bool(os.getenv("WHATSAPP_WABA_ID") or os.getenv("WHATSAPP_BUSINESS_ID")),
         "has_verify_token": bool(os.getenv("WHATSAPP_VERIFY_TOKEN")),
         "has_app_secret": bool(os.getenv("APP_SECRET") or os.getenv("META_APP_SECRET")),
@@ -4413,6 +4464,7 @@ def whatsapp_health():
         "default_lang_api": wa_normalize_lang(os.getenv("WHATSAPP_TEMPLATE_LANG", "en")),
         "webhook_last_seen_at": last_webhook,
         "last_matched_inbound_at": last_inbound,
+        "last_signature_rejected_at": last_rejected,
         "unmatched_inbound_count": len(unmatched),
     }), 200
 
@@ -4681,7 +4733,7 @@ def send_whatsapp_message():
 
     def clean(v):
         try:
-            return str(v).strip() if v is not None else ""
+            return _wa_readable_text(v)
         except Exception:
             return ""
 

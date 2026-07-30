@@ -26,7 +26,24 @@ const PANEL_H = "calc(100vh - 210px)";
 
 /** ===== HELPERS ===== */
 function cleanAIText(t) {
-  let s = String(t || "");
+  const readable = (value) => {
+    if (value == null) return "";
+    if (typeof value === "string") return value;
+    if (typeof value === "number" || typeof value === "boolean") return String(value);
+    if (Array.isArray(value)) return value.map(readable).filter(Boolean).join(" ");
+    if (typeof value === "object") {
+      for (const key of ["body", "text", "message", "title", "description", "caption", "value"]) {
+        const candidate = readable(value?.[key]);
+        if (candidate) return candidate;
+      }
+      return "";
+    }
+    return String(value);
+  };
+  let s = readable(t);
+  if (s.trim() === "[object Object]") {
+    return "Legacy message details were not stored correctly.";
+  }
 
   s = s
     .replace(/^(Subject|Lead Name|Recipient):.*(\n|$)/gi, "")
@@ -862,7 +879,11 @@ export default function Messages({ user, leads = [], defaultTemplate = "", langu
     if (!API) return;
     (async () => {
       try {
-        const r = await fetch(`${API}/api/whatsapp/health`);
+        const r = await fetch(`${API}/api/whatsapp/health`, {
+          credentials: "include",
+          cache: "no-store",
+          headers: { Accept: "application/json" },
+        });
         const j = await r.json();
         setHealth(j);
       } catch {}
@@ -1615,8 +1636,14 @@ export default function Messages({ user, leads = [], defaultTemplate = "", langu
 
             <div style={{ marginLeft: "auto", display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap", justifyContent: "flex-end" }}>
               <Pill
-                color={threadSync.ok ? C.wa : "#ff8a8a"}
-                text={threadSync.ok ? "Live sync" : "Sync issue"}
+                color={threadSync.ok && health?.graph_ok ? C.wa : "#ff8a8a"}
+                text={
+                  !threadSync.ok
+                    ? "RetainAI sync issue"
+                    : health?.graph_ok
+                    ? "Meta connected"
+                    : "Meta action needed"
+                }
               />
 
               <button
@@ -1661,6 +1688,54 @@ export default function Messages({ user, leads = [], defaultTemplate = "", langu
               }}
             >
               WhatsApp replies are not syncing right now: {threadSync.error}
+            </div>
+          )}
+
+          {threadSync.ok && health && !health.graph_ok && (
+            <div
+              style={{
+                padding: "9px 12px",
+                background: "rgba(255, 96, 96, 0.10)",
+                borderBottom: "1px solid rgba(255, 96, 96, 0.24)",
+                color: "#ffb1b1",
+                fontSize: 12,
+                fontWeight: 700,
+              }}
+            >
+              RetainAI is online, but Meta rejected the WhatsApp connection.{" "}
+              {health.graph_error || "Check WHATSAPP_TOKEN and WHATSAPP_PHONE_ID in Render, then redeploy."}
+            </div>
+          )}
+
+          {threadSync.ok && health?.graph_ok && !health?.webhook_last_seen_at && (
+            <div
+              style={{
+                padding: "9px 12px",
+                background: "rgba(247, 203, 83, 0.09)",
+                borderBottom: "1px solid rgba(247, 203, 83, 0.22)",
+                color: "#f7d978",
+                fontSize: 12,
+                fontWeight: 700,
+              }}
+            >
+              Sending is connected, but Meta has not delivered a webhook yet. Confirm the callback URL and the
+              WhatsApp messages subscription in Meta Developer settings.
+            </div>
+          )}
+
+          {threadSync.ok && health?.graph_ok && (!health?.has_app_secret || health?.last_signature_rejected_at) && (
+            <div
+              style={{
+                padding: "9px 12px",
+                background: "rgba(255, 96, 96, 0.10)",
+                borderBottom: "1px solid rgba(255, 96, 96, 0.24)",
+                color: "#ffb1b1",
+                fontSize: 12,
+                fontWeight: 700,
+              }}
+            >
+              Incoming replies are being blocked by webhook security. Ensure META_APP_SECRET is the Meta app secret
+              for this WhatsApp app, then redeploy the backend.
             </div>
           )}
 
