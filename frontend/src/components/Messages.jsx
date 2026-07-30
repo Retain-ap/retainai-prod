@@ -258,6 +258,17 @@ function inferParamKindsFromBody(bodyText, count, templateName = "") {
   const body = String(bodyText || "");
   const nameLower = LOWER(templateName);
 
+  // Approved templates have an explicit field contract. Apply it before
+  // prose heuristics so nearby words such as "from" cannot misclassify {{2}}.
+  if (/outreach|welcome|intro/.test(nameLower)) {
+    return kinds.map((_, i) =>
+      i === 0 ? "lead_name" :
+      i === 1 ? "user_name" :
+      i === 2 ? "business" :
+      "details"
+    );
+  }
+
   for (let i = 1; i <= count; i++) {
     const re = new RegExp(`\\{\\{\\s*${i}\\s*\\}\\}`, "g");
     const m = re.exec(body);
@@ -750,6 +761,7 @@ export default function Messages({ user, leads = [], defaultTemplate = "", langu
   const [thread, setThread] = useState([]);
   const [conversationSummaries, setConversationSummaries] = useState({});
   const [unmatchedCount, setUnmatchedCount] = useState(0);
+  const [reconciling, setReconciling] = useState(false);
   const [loading, setLoading] = useState(false);
   const [threadSync, setThreadSync] = useState({ ok: true, lastAt: null, error: "" });
   const chatRef = useRef(null);
@@ -877,7 +889,8 @@ export default function Messages({ user, leads = [], defaultTemplate = "", langu
   const [health, setHealth] = useState(null);
   useEffect(() => {
     if (!API) return;
-    (async () => {
+    let stop = false;
+    const loadHealth = async () => {
       try {
         const r = await fetch(`${API}/api/whatsapp/health`, {
           credentials: "include",
@@ -885,9 +898,15 @@ export default function Messages({ user, leads = [], defaultTemplate = "", langu
           headers: { Accept: "application/json" },
         });
         const j = await r.json();
-        setHealth(j);
+        if (!stop) setHealth(j);
       } catch {}
-    })();
+    };
+    loadHealth();
+    const timer = setInterval(loadHealth, 15000);
+    return () => {
+      stop = true;
+      clearInterval(timer);
+    };
   }, [API]);
 
   useEffect(() => {
@@ -1033,7 +1052,14 @@ export default function Messages({ user, leads = [], defaultTemplate = "", langu
           if (typeof count === "number" && count > 0) {
             const inferred = inferParamKindsFromBody(bodyText || "", count, name);
             setParamKinds(inferred);
-            setParamValues((prev) => Array.from({ length: count }, (_, i) => prev?.[i] ?? ""));
+            setParamValues(
+              buildSmartAutofillValues(count, inferred, {
+                user,
+                lead,
+                input: "",
+                suggestion: null,
+              })
+            );
           } else {
             setParamKinds([]);
             setParamValues([]);
@@ -1057,7 +1083,17 @@ export default function Messages({ user, leads = [], defaultTemplate = "", langu
         setTemplateInfoLoading(false);
       }
     })();
-  }, [API, templateName, templateLangUI]);
+  }, [
+    API,
+    templateName,
+    templateLangUI,
+    lead?.id,
+    lead?.name,
+    lead?.email,
+    user?.name,
+    user?.business,
+    user?.businessType,
+  ]);
 
   /** --- composer --- */
   const [input, setInput] = useState("");
@@ -1084,6 +1120,33 @@ export default function Messages({ user, leads = [], defaultTemplate = "", langu
   const conversationHistory = useMemo(() => buildConversationHistory(thread, 8), [thread]);
 
   const canSendBase = Boolean(API && user?.email && lead?.id && toE164);
+
+  const reconcileReplies = async () => {
+    if (!API || !lead?.id || reconciling) return;
+    setReconciling(true);
+    setBanner(null);
+    try {
+      const response = await fetch(`${API}/api/whatsapp/reconcile`, {
+        method: "POST",
+        credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ lead_id: lead.id }),
+      });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data?.error || "Could not match replies");
+      if (data.matched_count > 0) {
+        setBanner(`${data.matched_count} client ${data.matched_count === 1 ? "reply was" : "replies were"} restored.`);
+        setUnmatchedCount((count) => Math.max(0, count - data.matched_count));
+        setThreadSync((current) => ({ ...current, lastAt: null }));
+      } else {
+        setBanner("No quarantined reply matches this contact's phone number.");
+      }
+    } catch (error) {
+      setBanner(error?.message || "Could not match replies.");
+    } finally {
+      setReconciling(false);
+    }
+  };
 
   /** ---- appointment suggestion state (+ persistence) ---- */
   const [suggestion, setSuggestion] = useState(null);
@@ -1499,7 +1562,24 @@ export default function Messages({ user, leads = [], defaultTemplate = "", langu
                 }}
               >
                 {unmatchedCount} inbound WhatsApp {unmatchedCount === 1 ? "reply needs" : "replies need"} contact matching.
-                Add the sender as a contact with the same phone number, then ask support to reconcile the reply.
+                <button
+                  type="button"
+                  onClick={reconcileReplies}
+                  disabled={!lead?.id || reconciling}
+                  style={{
+                    display: "block",
+                    marginTop: 8,
+                    padding: "7px 9px",
+                    borderRadius: 8,
+                    border: "1px solid rgba(247, 203, 83, 0.4)",
+                    background: "rgba(247, 203, 83, 0.12)",
+                    color: "#f7d978",
+                    fontWeight: 800,
+                    cursor: "pointer",
+                  }}
+                >
+                  {reconciling ? "Matching…" : "Match replies to open contact"}
+                </button>
               </div>
             )}
             {filteredLeads.map((ld) => {
@@ -2041,10 +2121,12 @@ export default function Messages({ user, leads = [], defaultTemplate = "", langu
             )}
             {thread.map((m, i) => (
               <Bubble
-                key={i}
+                key={m.id || m.message_id || i}
                 from={m.from}
+                direction={m.direction}
                 text={m.text}
                 time={m.time}
+                status={m.status}
                 renderedTemplate={m._rendered_template}
               />
             ))}
@@ -2220,8 +2302,8 @@ function btn(kind, disabled = false) {
   };
 }
 
-function Bubble({ from, text, time, renderedTemplate }) {
-  const you = from === "user";
+function Bubble({ from, direction, text, time, status, renderedTemplate }) {
+  const you = direction === "outbound" || from === "user";
   const safe = cleanAIText(text);
 
   if (!safe) return null;
@@ -2245,6 +2327,18 @@ function Bubble({ from, text, time, renderedTemplate }) {
           boxShadow: "0 1px 1px rgba(0,0,0,0.25)",
         }}
       >
+        <div
+          style={{
+            fontSize: 10,
+            fontWeight: 900,
+            color: you ? "#b8decf" : "#f7d978",
+            marginBottom: 5,
+            textTransform: "uppercase",
+            letterSpacing: 0.5,
+          }}
+        >
+          {you ? "You" : "Client"}
+        </div>
         {renderedTemplate && (
           <div
             style={{
@@ -2267,6 +2361,7 @@ function Bubble({ from, text, time, renderedTemplate }) {
                 minute: "2-digit",
               })
             : ""}
+          {you && status ? ` · ${String(status).replaceAll("_", " ")}` : ""}
         </div>
       </div>
     </div>

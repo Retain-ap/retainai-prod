@@ -3930,6 +3930,37 @@ def _wa_readable_text(value: Any) -> str:
     return str(value).strip()
 
 
+def _wa_render_template(body_text: str, values: List[Any], param_keys: Optional[List[str]] = None) -> str:
+    rendered = str(body_text or "")
+    clean_values = [_wa_readable_text(value) for value in (values or [])]
+    keys = [str(key or "").strip() for key in (param_keys or [])]
+    for index, value in enumerate(clean_values, start=1):
+        rendered = re.sub(r"\{\{\s*" + str(index) + r"\s*\}\}", value, rendered)
+        if index - 1 < len(keys) and keys[index - 1]:
+            rendered = re.sub(
+                r"\{\{\s*" + re.escape(keys[index - 1]) + r"\s*\}\}",
+                value,
+                rendered,
+            )
+    return rendered.strip()
+
+
+def _normalize_stored_chat_row(value: Any) -> dict:
+    if isinstance(value, dict):
+        row = dict(value)
+        row["text"] = _wa_readable_text(row.get("text") or row.get("message") or row.get("body"))
+        row["from"] = row.get("from") or ("user" if row.get("direction") == "outbound" else "lead")
+        row["direction"] = row.get("direction") or ("outbound" if row.get("from") == "user" else "inbound")
+        return row
+    return {
+        "id": f"legacy_{uuid4().hex[:12]}",
+        "from": "user",
+        "direction": "outbound",
+        "text": _wa_readable_text(value) or "Legacy message details were not stored correctly.",
+        "time": None,
+    }
+
+
 def _wa_store_unmatched(sender_waid: str, message: dict, text_value: str, phone_number_id: str = "", profile_name: str = ""):
     try:
         unmatched = load_wa_unmatched()
@@ -4624,7 +4655,11 @@ def _get_thread_cached(user_email: str, lead_id: str):
         return cached["data"], True
 
     chats = load_chats()
-    msgs = (chats.get(user_email, {}) or {}).get(str(lead_id), []) or []
+    user_chats = chats.get(user_email, {}) if isinstance(chats, dict) else {}
+    raw_msgs = (user_chats or {}).get(str(lead_id), []) or []
+    if not isinstance(raw_msgs, list):
+        raw_msgs = [raw_msgs]
+    msgs = [_normalize_stored_chat_row(item) for item in raw_msgs]
     _MSG_CACHE[key] = {"at": now, "data": msgs}
     return msgs, False
 
@@ -4637,6 +4672,15 @@ def get_whatsapp_messages():
         return jsonify({"error": "user_email and lead_id are required", "messages": []}), 400
 
     msgs, cached = _get_thread_cached(user_email, lead_id)
+    statuses = load_statuses() or {}
+    enriched = []
+    for item in msgs:
+        row = dict(item)
+        message_id = str(row.get("message_id") or row.get("id") or "")
+        if message_id and isinstance(statuses.get(message_id), dict):
+            row["status"] = statuses[message_id].get("status") or row.get("status")
+        enriched.append(row)
+    msgs = enriched
     payload = {
         "ok": True,
         "messages": msgs,
@@ -4661,7 +4705,8 @@ def get_whatsapp_conversations():
     statuses = load_statuses() or {}
     summaries = {}
     for lead_id, raw_messages in user_chats.items():
-        messages = raw_messages if isinstance(raw_messages, list) else []
+        source_messages = raw_messages if isinstance(raw_messages, list) else [raw_messages]
+        messages = [_normalize_stored_chat_row(item) for item in source_messages if item is not None]
         last = messages[-1] if messages else {}
         unread = 1 if (
             messages
@@ -4684,9 +4729,67 @@ def get_whatsapp_conversations():
     return jsonify({
         "ok": True,
         "conversations": summaries,
-        "unmatched_count": len(load_wa_unmatched() or []) if _is_platform_owner(_session_email()) else 0,
+        # Count only: useful diagnostics without exposing another workspace's
+        # sender number, profile, or message contents.
+        "unmatched_count": len(load_wa_unmatched() or []),
         "server_time": datetime.datetime.utcnow().isoformat() + "Z",
     }), 200
+
+
+@app.route("/api/whatsapp/reconcile", methods=["POST"])
+def reconcile_whatsapp_replies():
+    """Safely attach quarantined replies to a selected contact by exact phone match."""
+    data = request.get_json(silent=True) or {}
+    user_email = _session_org_email()
+    lead_id = str(data.get("lead_id") or "").strip()
+    if not lead_id:
+        return jsonify({"ok": False, "error": "lead_id is required"}), 400
+
+    leads_by_user = load_leads() or {}
+    owner_leads = leads_by_user.get(user_email, []) or []
+    lead = next((item for item in owner_leads if str((item or {}).get("id") or "") == lead_id), None)
+    if not isinstance(lead, dict):
+        return jsonify({"ok": False, "error": "Contact not found in this workspace"}), 404
+
+    unmatched = load_wa_unmatched() or []
+    matched = []
+    remaining = []
+    for item in unmatched:
+        if lead_matches_wa(lead, str((item or {}).get("sender") or "")):
+            matched.append(item)
+        else:
+            remaining.append(item)
+
+    for item in reversed(matched):
+        row = {
+            "id": str(item.get("message_id") or item.get("id") or f"wain_{uuid4().hex[:16]}"),
+            "message_id": str(item.get("message_id") or ""),
+            "from": "lead",
+            "direction": "inbound",
+            "text": _wa_readable_text(item.get("text")) or "[message received]",
+            "type": str(item.get("type") or "unknown"),
+            "phone": wa_norm_number(item.get("sender") or ""),
+            "profile_name": str(item.get("profile_name") or ""),
+            "time": item.get("received_at") or datetime.datetime.utcnow().isoformat() + "Z",
+            "reconciled": True,
+        }
+        append_chat_message(user_email, lead_id, row)
+
+    if matched:
+        save_wa_unmatched(remaining)
+        newest = matched[0]
+        for item in owner_leads:
+            if str((item or {}).get("id") or "") == lead_id:
+                item["last_reply_at"] = newest.get("received_at")
+                item["last_inbound_at"] = newest.get("received_at")
+                item["last_message"] = _wa_readable_text(newest.get("text"))
+                item["last_message_direction"] = "inbound"
+                break
+        leads_by_user[user_email] = owner_leads
+        save_leads(leads_by_user)
+        _MSG_CACHE.pop((user_email, lead_id), None)
+
+    return jsonify({"ok": True, "matched_count": len(matched)}), 200
 
 
 @app.get("/api/whatsapp/status")
@@ -4910,7 +5013,13 @@ def send_whatsapp_message():
                 preview_parts.append(raw_msg)
             preview = " — ".join([p for p in preview_parts if p]).strip()
 
-            sent_text = f"[template:{template_name}/{used_lang}] {preview}".strip()
+            sent_text = _wa_render_template(
+                template_meta.get("body_text") or "",
+                provided_params,
+                template_meta.get("body_param_keys") or [],
+            )
+            if not sent_text:
+                sent_text = f"Template sent: {template_name}"
             mode = "template"
 
         try:
