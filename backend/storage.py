@@ -18,6 +18,7 @@ Env:
 
 import os
 import json
+import uuid
 from pathlib import Path
 from typing import List, Dict, Any, Optional
 
@@ -53,7 +54,7 @@ def _read_json(path: str, default):
 
 
 def _write_json(path: str, data) -> None:
-    tmp = path + ".tmp"
+    tmp = f"{path}.{os.getpid()}.{uuid.uuid4().hex}.tmp"
     with open(tmp, "w", encoding="utf-8") as f:
         json.dump(data, f, indent=2, ensure_ascii=False)
     os.replace(tmp, path)

@@ -219,7 +219,8 @@ export default function Sidebar({
       </div>
 
       {/* Nav */}
-      <nav className="sidebar-nav">
+      <nav className="sidebar-nav" aria-label="Main navigation">
+        {!collapsed && <div className="sidebar-nav-label">Today</div>}
         <button
           type="button"
           className={section === "overview" ? "active" : ""}
@@ -236,13 +237,6 @@ export default function Sidebar({
         </button>
         <button
           type="button"
-          className={section === "analytics" ? "active" : ""}
-          onClick={() => goTo("analytics")}
-        >
-          <FaChartBar /> {!collapsed && "Analytics"}
-        </button>
-        <button
-          type="button"
           className={section === "calendar" ? "active" : ""}
           onClick={() => goTo("calendar")}
         >
@@ -254,6 +248,14 @@ export default function Sidebar({
           onClick={() => goTo("messages")}
         >
           <FaEnvelopeOpenText /> {!collapsed && "Messages"}
+        </button>
+        {!collapsed && <div className="sidebar-nav-label">Grow</div>}
+        <button
+          type="button"
+          className={section === "analytics" ? "active" : ""}
+          onClick={() => goTo("analytics")}
+        >
+          <FaChartBar /> {!collapsed && "Insights"}
         </button>
         <button
           type="button"
@@ -269,13 +271,7 @@ export default function Sidebar({
         >
           <FaRobot /> {!collapsed && "Automations"}
         </button>
-        <button
-          type="button"
-          className={section === "ai-prompts" ? "active" : ""}
-          onClick={() => goTo("ai-prompts")}
-        >
-          <FaRobot /> {!collapsed && "AI Prompts"}
-        </button>
+        {!collapsed && <div className="sidebar-nav-label">Business</div>}
         <button
           type="button"
           className={section === "invoices" ? "active" : ""}

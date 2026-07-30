@@ -1,5 +1,6 @@
 # app.py (CONSOLIDATED + PROD-SAFE) — PART 1/2
 import os
+import time
 import re
 import json
 import time
@@ -459,7 +460,9 @@ def _legacy_load_json(file_path: str):
         return {}
 
 def _legacy_save_json(file_path: str, data: Any):
-    tmp = file_path + ".tmp"
+    # A unique temporary name prevents concurrent webhook workers from
+    # replacing one another's in-flight files.
+    tmp = f"{file_path}.{os.getpid()}.{uuid4().hex}.tmp"
     with open(tmp, "w", encoding="utf-8") as f:
         json.dump(data, f, indent=2, ensure_ascii=False)
     os.replace(tmp, file_path)
@@ -481,6 +484,41 @@ def load_chats():
 
 def save_chats(data):
     _legacy_save_json(CHAT_FILE, data)
+
+
+def append_chat_message(user_email: str, lead_id: str, row: dict):
+    """Cross-worker atomic append for the webhook/send hot path."""
+    lock_path = CHAT_FILE + ".lock"
+    lock_fd = None
+    for _ in range(200):
+        try:
+            lock_fd = os.open(lock_path, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+            break
+        except FileExistsError:
+            time.sleep(0.01)
+    if lock_fd is None:
+        raise RuntimeError("WhatsApp chat store is busy")
+    try:
+        chats = load_chats() or {}
+        user_chats = chats.get(user_email, {}) or {}
+        thread = user_chats.get(str(lead_id), []) or []
+        row_id = str((row or {}).get("id") or (row or {}).get("message_id") or "")
+        if row_id and any(
+            str((item or {}).get("id") or (item or {}).get("message_id") or "") == row_id
+            for item in thread
+        ):
+            return thread
+        thread.append(row)
+        user_chats[str(lead_id)] = thread
+        chats[user_email] = user_chats
+        save_chats(chats)
+        return thread
+    finally:
+        os.close(lock_fd)
+        try:
+            os.remove(lock_path)
+        except FileNotFoundError:
+            pass
 
 def load_statuses():
     return _legacy_load_json(STATUS_FILE)
@@ -3871,7 +3909,7 @@ def _wa_message_text(message: dict) -> str:
     return f"[{message_type} message received]"
 
 
-def _wa_store_unmatched(sender_waid: str, message: dict, text_value: str, phone_number_id: str = ""):
+def _wa_store_unmatched(sender_waid: str, message: dict, text_value: str, phone_number_id: str = "", profile_name: str = ""):
     try:
         unmatched = load_wa_unmatched()
         message_id = str((message or {}).get("id") or "").strip()
@@ -3882,6 +3920,7 @@ def _wa_store_unmatched(sender_waid: str, message: dict, text_value: str, phone_
             "message_id": message_id,
             "sender": wa_norm_number(sender_waid),
             "sender_masked": _wa_mask_number(sender_waid),
+            "profile_name": str(profile_name or "").strip()[:120],
             "phone_number_id": str(phone_number_id or ""),
             "type": str((message or {}).get("type") or "unknown"),
             "text": str(text_value or "")[:500],
@@ -3919,10 +3958,7 @@ def _wa_append_inbound(user_email: str, lead_id: str, lead: dict, sender_waid: s
         "time": received_at,
         "context": _json_sanitize((message or {}).get("context") or {}),
     }
-    thread.append(row)
-    user_chats[str(lead_id)] = thread
-    chats[user_email] = user_chats
-    save_chats(chats)
+    thread = append_chat_message(user_email, str(lead_id), row)
 
     _MSG_CACHE[(str(user_email or ""), str(lead_id or ""))] = {
         "at": datetime.datetime.utcnow(),
@@ -4564,6 +4600,43 @@ def get_whatsapp_messages():
     return response, 200
 
 
+@app.route("/api/whatsapp/conversations", methods=["GET"])
+def get_whatsapp_conversations():
+    """Return lightweight previews for every contact in the signed-in workspace."""
+    user_email = _session_org_email()
+    chats = load_chats() or {}
+    user_chats = chats.get(user_email, {}) or {}
+    statuses = load_statuses() or {}
+    summaries = {}
+    for lead_id, raw_messages in user_chats.items():
+        messages = raw_messages if isinstance(raw_messages, list) else []
+        last = messages[-1] if messages else {}
+        unread = 1 if (
+            messages
+            and (
+                (last or {}).get("direction") == "inbound"
+                or (last or {}).get("from") == "lead"
+            )
+        ) else 0
+        message_id = str((last or {}).get("id") or (last or {}).get("message_id") or "")
+        summaries[str(lead_id)] = {
+            "count": len(messages),
+            "unread": unread,
+            "text": str((last or {}).get("text") or ""),
+            "time": (last or {}).get("time"),
+            "direction": (last or {}).get("direction") or (
+                "outbound" if (last or {}).get("from") == "user" else "inbound"
+            ),
+            "status": (statuses.get(message_id) or {}).get("status") if message_id else None,
+        }
+    return jsonify({
+        "ok": True,
+        "conversations": summaries,
+        "unmatched_count": len(load_wa_unmatched() or []) if _is_platform_owner(_session_email()) else 0,
+        "server_time": datetime.datetime.utcnow().isoformat() + "Z",
+    }), 200
+
+
 @app.get("/api/whatsapp/status")
 def get_message_status():
     mid = request.args.get("message_id")
@@ -4823,14 +4896,16 @@ def send_whatsapp_message():
                 chats = load_chats()
                 user_chats = (chats.get(user_email, {}) or {})
                 thread = (user_chats.get(str(lead_id), []) or [])
-                thread.append({
+                outbound_row = {
+                    "id": msg_id or f"waout_{uuid4().hex[:16]}",
+                    "message_id": msg_id,
                     "from": "user",
+                    "direction": "outbound",
                     "text": sent_text,
-                    "time": datetime.datetime.utcnow().isoformat() + "Z"
-                })
-                user_chats[str(lead_id)] = thread
-                chats[user_email] = user_chats
-                save_chats(chats)
+                    "time": datetime.datetime.utcnow().isoformat() + "Z",
+                    "status": "sent_request",
+                }
+                thread = append_chat_message(user_email, str(lead_id), outbound_row)
 
                 if msg_id:
                     statuses = load_statuses()
@@ -5010,7 +5085,10 @@ def whatsapp_webhook():
                     statuses = load_statuses() or {}
                     for status in status_rows:
                         status_id = str(status.get("id") or "unknown")
+                        # Preserve the thread metadata recorded when the message
+                        # was sent; Meta's status callback does not repeat it.
                         statuses[status_id] = {
+                            **(statuses.get(status_id) or {}),
                             "status": status.get("status"),
                             "timestamp": status.get("timestamp"),
                             "recipient": status.get("recipient_id"),
@@ -5029,6 +5107,7 @@ def whatsapp_webhook():
 
                 contacts = value.get("contacts", []) or []
                 contact_waid = str((contacts[0] or {}).get("wa_id") or "") if contacts else ""
+                contact_name = str((((contacts[0] or {}).get("profile") or {}).get("name")) or "") if contacts else ""
 
                 for message in value.get("messages", []) or []:
                     sender_waid = str(message.get("from") or contact_waid or "").strip()
@@ -5041,7 +5120,7 @@ def whatsapp_webhook():
 
                     user_email, lead_id, lead = resolve_whatsapp_lead(sender_waid)
                     if not user_email or not lead_id or not lead:
-                        _wa_store_unmatched(sender_waid, message, text_value, phone_number_id)
+                        _wa_store_unmatched(sender_waid, message, text_value, phone_number_id, contact_name)
                         _wa_event(
                             "inbound_unmatched",
                             message_id=message_id,

@@ -28,7 +28,7 @@ import OnboardingGuide from "./OnboardingGuide";
 const SECTION_LABELS = {
   overview: "Overview",
   dashboard: "Contacts",
-  analytics: "Analytics",
+  analytics: "Insights",
   calendar: "Calendar",
   messages: "Messages",
   notifications: "Notifications",

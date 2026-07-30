@@ -1,6 +1,7 @@
 // src/components/LandingPage.jsx
 import React, { useMemo, useState } from "react";
 import { motion } from "framer-motion";
+import brandLogo from "../assets/logo.png";
 
 /**
  * Booking link (Calendly popup + fallback)
@@ -23,11 +24,6 @@ const BG = {
 };
 
 // ---------- ASSETS ----------
-const brandLogos = [
-  "https://upload.wikimedia.org/wikipedia/commons/2/2f/Google_2015_logo.svg",
-  "https://upload.wikimedia.org/wikipedia/commons/0/08/Netflix_2015_logo.svg",
-  "https://upload.wikimedia.org/wikipedia/commons/5/51/IBM_logo.svg",
-];
 const DEMO_SRC = "/crm-demo.mp4"; // put your mp4 at public/crm-demo.mp4
 
 // ---------- MONDAY-STYLE TIP BAR ----------
@@ -173,7 +169,9 @@ export default function LandingPage() {
       {/* NAVBAR */}
       <nav className="sticky top-0 z-40 w-full" style={{ background: "#0C0D10", borderBottom: `1px solid ${BG.line}` }}>
         <div className="max-w-7xl mx-auto flex items-center justify-between px-6 py-3">
-          <span className="font-extrabold text-2xl tracking-tight" style={{ color: BG.gold }}>RetainAI</span>
+          <a href="/" aria-label="RetainAI home" className="flex items-center">
+            <img src={brandLogo} alt="RetainAI" className="h-10 w-auto rounded-lg" />
+          </a>
           <div className="hidden md:flex gap-7 text-sm font-medium">
             <a href="#features" className="hover:opacity-80 scroll-mt-24">Features</a>
             <a href="#how" className="hover:opacity-80 scroll-mt-24">How it works</a>
@@ -240,9 +238,9 @@ export default function LandingPage() {
               </span>
             </motion.div>
 
-            <div className="flex flex-wrap items-center gap-8 mt-8 opacity-70 hover:opacity-100 transition">
-              {brandLogos.map((logo, i) => (
-                <img key={i} src={logo} alt="Brand Logo" className="h-7 w-auto grayscale invert" />
+            <div className="flex flex-wrap items-center gap-2 mt-8" aria-label="Product capabilities">
+              {["WhatsApp inbox", "Human-sounding AI", "Follow-up automation", "Revenue insights"].map((item) => (
+                <Badge key={item}>{item}</Badge>
               ))}
             </div>
           </div>

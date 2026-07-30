@@ -2,26 +2,27 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { SiWhatsapp } from "react-icons/si";
 import { API_BASE } from "../config";
+import "./Messages.css";
 
 /** ===== THEME ===== */
 const C = {
-  bg: "#181a1b",
-  panel: "#232323",
-  header: "#1d1f20",
-  border: "#2b2f33",
+  bg: "#0f1115",
+  panel: "#171a1f",
+  header: "#12151a",
+  border: "#2a2f37",
   text: "#f3f4f5",
   sub: "#9aa3ab",
   accent: "#f7cb53",
   wa: "#25D366",
   danger: "#e66565",
   success: "#25D366",
-  in: "#202c33",
-  out: "#005c4b",
+  in: "#20252c",
+  out: "#1d5146",
   soft: "#1e2326",
   softer: "#15181a",
   mutedBlue: "#1e2a30",
 };
-const PANEL_H = "72vh";
+const PANEL_H = "calc(100vh - 210px)";
 
 /** ===== HELPERS ===== */
 function cleanAIText(t) {
@@ -569,7 +570,17 @@ function consumeTemplateRenderCache(userEmail, leadId, countNeeded) {
 }
 
 function normalizeThreadMessages(rawMessages, userEmail, leadId) {
-  const list = Array.isArray(rawMessages) ? rawMessages.map((m) => ({ ...m })) : [];
+  const list = Array.isArray(rawMessages)
+    ? rawMessages.map((m) => ({
+        ...m,
+        from:
+          m?.from ||
+          (m?.direction === "outbound" ? "user" : "lead"),
+        direction:
+          m?.direction ||
+          (m?.from === "user" ? "outbound" : "inbound"),
+      }))
+    : [];
   const payloadIndexes = [];
 
   list.forEach((m, idx) => {
@@ -720,6 +731,8 @@ export default function Messages({ user, leads = [], defaultTemplate = "", langu
 
   /** --- thread state --- */
   const [thread, setThread] = useState([]);
+  const [conversationSummaries, setConversationSummaries] = useState({});
+  const [unmatchedCount, setUnmatchedCount] = useState(0);
   const [loading, setLoading] = useState(false);
   const [threadSync, setThreadSync] = useState({ ok: true, lastAt: null, error: "" });
   const chatRef = useRef(null);
@@ -796,6 +809,34 @@ export default function Messages({ user, leads = [], defaultTemplate = "", langu
       if (pollTimer.current) clearTimeout(pollTimer.current);
     };
   }, [API, user?.email, lead?.id]);
+
+  useEffect(() => {
+    if (!API || !user?.email) return;
+    let stop = false;
+    const loadSummaries = async () => {
+      try {
+        const r = await fetch(`${API}/api/whatsapp/conversations?_=${Date.now()}`, {
+          credentials: "include",
+          cache: "no-store",
+          headers: { Accept: "application/json" },
+        });
+        const j = await r.json();
+        if (!r.ok) throw new Error(j?.error || "Conversation list unavailable");
+        if (!stop) {
+          setConversationSummaries(j?.conversations || {});
+          setUnmatchedCount(Number(j?.unmatched_count || 0));
+        }
+      } catch {
+        // The open-thread error state already gives the user an actionable warning.
+      }
+    };
+    loadSummaries();
+    const timer = setInterval(loadSummaries, 10000);
+    return () => {
+      stop = true;
+      clearInterval(timer);
+    };
+  }, [API, user?.email]);
 
   useEffect(() => {
     chatRef.current?.scrollTo({ top: 1e9, behavior: "smooth" });
@@ -1371,12 +1412,13 @@ export default function Messages({ user, leads = [], defaultTemplate = "", langu
   const lastPreview = getChatPreview(thread);
 
   return (
-    <div style={{ width: "100%", minHeight: "100vh", background: C.bg }}>
+    <div className="messages-page" style={{ width: "100%", minHeight: "100vh", background: C.bg }}>
       <Header />
 
-      <div style={{ display: "grid", gridTemplateColumns: "300px 1fr", gap: 18 }}>
+      <div className="messages-layout" style={{ display: "grid", gridTemplateColumns: "300px 1fr", gap: 18 }}>
         {/* LEFT – chat list */}
         <div
+          className="messages-contact-list"
           style={{
             background: C.panel,
             border: `1px solid ${C.border}`,
@@ -1422,9 +1464,28 @@ export default function Messages({ user, leads = [], defaultTemplate = "", langu
           </div>
 
           <div style={{ overflowY: "auto", flex: 1 }}>
+            {unmatchedCount > 0 && (
+              <div
+                style={{
+                  margin: 10,
+                  padding: "10px 11px",
+                  borderRadius: 10,
+                  color: "#f7d978",
+                  background: "rgba(247, 203, 83, 0.09)",
+                  border: "1px solid rgba(247, 203, 83, 0.25)",
+                  fontSize: 12,
+                  lineHeight: 1.45,
+                }}
+              >
+                {unmatchedCount} inbound WhatsApp {unmatchedCount === 1 ? "reply needs" : "replies need"} contact matching.
+                Add the sender as a contact with the same phone number, then ask support to reconcile the reply.
+              </div>
+            )}
             {filteredLeads.map((ld) => {
               const active = String(ld.id) === String(activeLeadId);
-              const preview = String(ld.id) === String(activeLeadId) ? lastPreview : "Open chat";
+              const summary = conversationSummaries[String(ld.id)] || {};
+              const preview = active ? lastPreview : cleanAIText(summary.text || "") || "No messages yet";
+              const unread = Number(summary.unread || 0);
               return (
                 <button
                   key={ld.id}
@@ -1460,15 +1521,22 @@ export default function Messages({ user, leads = [], defaultTemplate = "", langu
                     {initials(ld.name, ld.email)}
                   </div>
                   <div style={{ overflow: "hidden", minWidth: 0 }}>
-                    <div
-                      style={{
-                        fontWeight: 700,
-                        whiteSpace: "nowrap",
-                        overflow: "hidden",
-                        textOverflow: "ellipsis",
-                      }}
-                    >
-                      {ld.name || ld.email}
+                    <div style={{ display: "flex", alignItems: "center", gap: 7 }}>
+                      <div
+                        style={{
+                          fontWeight: 700,
+                          whiteSpace: "nowrap",
+                          overflow: "hidden",
+                          textOverflow: "ellipsis",
+                        }}
+                      >
+                        {ld.name || ld.email}
+                      </div>
+                      {unread > 0 && (
+                        <span style={{ background: C.wa, color: "#07130d", borderRadius: 999, padding: "1px 6px", fontSize: 10, fontWeight: 900 }}>
+                          {unread}
+                        </span>
+                      )}
                     </div>
                     <div style={{ fontSize: 12, color: C.sub }}>{fmtNA(ld.phone || ld.whatsapp)}</div>
                     <div
@@ -1492,6 +1560,7 @@ export default function Messages({ user, leads = [], defaultTemplate = "", langu
 
         {/* RIGHT – thread + composer */}
         <div
+          className="messages-thread"
           key={activeLeadId}
           style={{
             background: C.panel,

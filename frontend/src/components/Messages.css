@@ -1,0 +1,35 @@
+.messages-page {
+  box-sizing: border-box;
+  padding: 0 22px 24px;
+}
+
+.messages-layout {
+  max-width: 1500px;
+  margin: 0 auto;
+}
+
+.messages-contact-list,
+.messages-thread {
+  min-height: 560px;
+  box-shadow: 0 18px 48px rgba(0, 0, 0, .22);
+}
+
+@media (max-width: 900px) {
+  .messages-page {
+    padding: 0 12px 18px;
+  }
+
+  .messages-layout {
+    grid-template-columns: 1fr !important;
+  }
+
+  .messages-contact-list,
+  .messages-thread {
+    height: auto !important;
+    min-height: 420px;
+  }
+
+  .messages-contact-list {
+    max-height: 340px;
+  }
+}
