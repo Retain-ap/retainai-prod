@@ -18,6 +18,16 @@ export default function WhatsAppHealthCard({ user }) {
   const [inbound, setInbound] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
+  const [editing, setEditing] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [connection, setConnection] = useState(null);
+  const [form, setForm] = useState({
+    access_token: "",
+    phone_id: "",
+    waba_id: "",
+    business_number: "",
+  });
+  const canManage = user?.role === "owner" || user?.canEditBusiness || user?.platformOwner;
 
   const refresh = useCallback(async () => {
     setLoading(true);
@@ -44,7 +54,16 @@ export default function WhatsAppHealthCard({ user }) {
           )
         : Promise.resolve(null);
 
-      const [healthResponse, inboundResponse] = await Promise.all([healthRequest, inboundRequest]);
+      const connectionRequest = fetch(apiUrl("integrations/whatsapp"), {
+        credentials: "include",
+        cache: "no-store",
+        headers: { Accept: "application/json" },
+      });
+      const [healthResponse, inboundResponse, connectionResponse] = await Promise.all([
+        healthRequest,
+        inboundRequest,
+        connectionRequest,
+      ]);
       const healthData = await healthResponse.json().catch(() => ({}));
       if (!healthResponse.ok) {
         throw new Error(healthData?.error || `WhatsApp health failed (${healthResponse.status})`);
@@ -60,6 +79,16 @@ export default function WhatsAppHealthCard({ user }) {
 
       setHealth(healthData);
       setInbound(inboundData);
+      const connectionData = await connectionResponse.json().catch(() => ({}));
+      if (connectionResponse.ok) {
+        setConnection(connectionData);
+        setForm((current) => ({
+          ...current,
+          phone_id: connectionData.phone_id || "",
+          waba_id: connectionData.waba_id || "",
+          business_number: connectionData.business_number || "",
+        }));
+      }
     } catch (err) {
       setHealth(null);
       setInbound(null);
@@ -84,6 +113,51 @@ export default function WhatsAppHealthCard({ user }) {
   );
   const unmatchedCount = Number(inbound?.unmatched_count ?? health?.unmatched_inbound_count ?? 0);
   const ready = connected && webhookSeen && unmatchedCount === 0;
+
+  const saveConnection = async (event) => {
+    event.preventDefault();
+    setSaving(true);
+    setError("");
+    try {
+      const response = await fetch(apiUrl("integrations/whatsapp"), {
+        method: "POST",
+        credentials: "include",
+        headers: { "Content-Type": "application/json", Accept: "application/json" },
+        body: JSON.stringify(form),
+      });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(data?.error || "Could not connect WhatsApp.");
+      setForm((current) => ({ ...current, access_token: "" }));
+      setEditing(false);
+      await refresh();
+    } catch (err) {
+      setError(err?.message || "Could not connect WhatsApp.");
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const usePlatformDefault = async () => {
+    if (!window.confirm("Remove this workspace connection and return to the platform default?")) return;
+    setSaving(true);
+    setError("");
+    try {
+      const response = await fetch(apiUrl("integrations/whatsapp"), {
+        method: "DELETE",
+        credentials: "include",
+        headers: { Accept: "application/json" },
+      });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(data?.error || "Could not remove the connection.");
+      setEditing(false);
+      setForm({ access_token: "", phone_id: "", waba_id: "", business_number: "" });
+      await refresh();
+    } catch (err) {
+      setError(err?.message || "Could not remove the connection.");
+    } finally {
+      setSaving(false);
+    }
+  };
 
   return (
     <article className={`account-card account-card-whatsapp${ready ? " is-connected" : ""}`}>
@@ -138,6 +212,11 @@ export default function WhatsAppHealthCard({ user }) {
           </div>
         ) : null}
 
+        <div className="account-id-row">
+          <span>Credential scope</span>
+          <code>{health?.credential_source === "workspace" ? "This workspace" : "Platform default"}</code>
+        </div>
+
         {unmatchedCount > 0 ? (
           <div className="account-inline-message error">
             {unmatchedCount} inbound repl{unmatchedCount === 1 ? "y was" : "ies were"} received but could not be matched to a lead. Make sure the lead phone number includes the correct country code.
@@ -151,13 +230,70 @@ export default function WhatsAppHealthCard({ user }) {
         ) : null}
 
         {error ? <div className="account-inline-message error">{error}</div> : null}
+
+        {editing && canManage ? (
+          <form onSubmit={saveConnection} className="whatsapp-connection-form">
+            <label>
+              Meta access token
+              <input
+                type="password"
+                autoComplete="new-password"
+                value={form.access_token}
+                onChange={(event) => setForm({ ...form, access_token: event.target.value })}
+                placeholder={connection?.has_workspace_token ? "Leave blank to keep saved token" : "Permanent system-user token"}
+              />
+            </label>
+            <label>
+              Phone number ID
+              <input
+                value={form.phone_id}
+                onChange={(event) => setForm({ ...form, phone_id: event.target.value })}
+                required
+              />
+            </label>
+            <label>
+              WhatsApp business account ID
+              <input
+                value={form.waba_id}
+                onChange={(event) => setForm({ ...form, waba_id: event.target.value })}
+                placeholder="Detected automatically when possible"
+              />
+            </label>
+            <label>
+              Display phone number
+              <input
+                value={form.business_number}
+                onChange={(event) => setForm({ ...form, business_number: event.target.value })}
+                placeholder="+1 416 555 0123"
+              />
+            </label>
+            <div className="whatsapp-connection-actions">
+              <button className="account-primary-btn whatsapp" type="submit" disabled={saving}>
+                {saving ? "Validating..." : "Validate and save"}
+              </button>
+              <button className="account-secondary-btn" type="button" onClick={() => setEditing(false)}>
+                Cancel
+              </button>
+              {connection?.source === "workspace" ? (
+                <button className="account-secondary-btn" type="button" onClick={usePlatformDefault} disabled={saving}>
+                  Use platform default
+                </button>
+              ) : null}
+            </div>
+          </form>
+        ) : null}
       </div>
 
       <div className="account-card-actions">
         <button className="account-primary-btn whatsapp" onClick={refresh} disabled={loading}>
           <FaSyncAlt className={loading ? "account-spin" : ""} />
-          {loading ? "Checking…" : "Run connection check"}
+          {loading ? "Checking..." : "Run connection check"}
         </button>
+        {canManage ? (
+          <button className="account-secondary-btn" onClick={() => setEditing((value) => !value)}>
+            {editing ? "Close setup" : "Manage workspace connection"}
+          </button>
+        ) : null}
       </div>
     </article>
   );

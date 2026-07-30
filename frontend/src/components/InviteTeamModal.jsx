@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from "react";
+import { apiUrl } from "../apiBase";
 
 export default function InviteTeamModal({ user, onClose }) {
   const [email, setEmail] = useState("");
@@ -6,6 +7,7 @@ export default function InviteTeamModal({ user, onClose }) {
   const [loading, setLoading] = useState(false);
   const [result, setResult] = useState(null); // { accept_url, token }
   const [error, setError] = useState("");
+  const [copyStatus, setCopyStatus] = useState("");
 
   async function createInvite(e) {
     e.preventDefault();
@@ -16,8 +18,9 @@ export default function InviteTeamModal({ user, onClose }) {
     }
     setLoading(true);
     try {
-      const res = await fetch((process.env.REACT_APP_API_BASE || "") + "/api/team/invite", {
+      const res = await fetch(apiUrl("team/invite"), {
         method: "POST",
+        credentials: "include",
         headers: {
           "Content-Type": "application/json",
           "X-User-Email": user?.email || ""
@@ -28,7 +31,8 @@ export default function InviteTeamModal({ user, onClose }) {
       if (!res.ok || !data.ok) {
         throw new Error(data.error || "Failed to create invite.");
       }
-      setResult({ accept_url: data.accept_url, token: data.token });
+      const invite = data.invite || data;
+      setResult({ accept_url: invite.accept_url, token: invite.token });
     } catch (e) {
       setError(e.message || "Failed to create invite.");
     } finally {
@@ -40,9 +44,9 @@ export default function InviteTeamModal({ user, onClose }) {
     if (!result?.accept_url) return;
     try {
       await navigator.clipboard.writeText(result.accept_url);
-      alert("Invite link copied!");
+      setCopyStatus("Invite link copied.");
     } catch {
-      alert("Could not copy. Manually copy the link shown.");
+      setCopyStatus("Could not copy automatically. Select the link below.");
     }
   }
 
@@ -63,7 +67,7 @@ export default function InviteTeamModal({ user, onClose }) {
       <div style={styles.card} onClick={(e) => e.stopPropagation()}>
         <div style={styles.header}>
           <h3 style={styles.title}>Invite a teammate</h3>
-          <button style={styles.close} onClick={onClose} aria-label="Close">Ã—</button>
+          <button style={styles.close} onClick={onClose} aria-label="Close">×</button>
         </div>
 
         {!result && (
@@ -88,15 +92,14 @@ export default function InviteTeamModal({ user, onClose }) {
                 onChange={(e) => setRole(e.target.value)}
               >
                 <option value="member">Member</option>
-                <option value="admin">Admin</option>
-                <option value="owner">Owner</option>
+                <option value="manager">Manager</option>
               </select>
             </div>
 
             {error && <div style={styles.error}>{error}</div>}
 
             <button type="submit" style={styles.primary} disabled={loading}>
-              {loading ? "Creatingâ€¦" : "Create Invite"}
+              {loading ? "Creating..." : "Create Invite"}
             </button>
           </form>
         )}
@@ -105,7 +108,7 @@ export default function InviteTeamModal({ user, onClose }) {
           <div>
             <div style={styles.successBox}>
               <div style={{ color: "#f7cb53", fontWeight: 800, marginBottom: 6 }}>
-                Invite created âœ…
+                Invite created
               </div>
               <div style={{ color: "#ddd", fontSize: "0.98em" }}>
                 Share this link with your teammate:
@@ -114,6 +117,7 @@ export default function InviteTeamModal({ user, onClose }) {
                 <code style={styles.linkCode}>{result.accept_url}</code>
                 <button style={styles.secondary} onClick={copyLink}>Copy</button>
               </div>
+              {copyStatus ? <div style={{ color: "#9fd8b9", marginTop: 8 }}>{copyStatus}</div> : null}
             </div>
 
             <div style={{ display: "flex", gap: 10, marginTop: 10, flexWrap: "wrap" }}>

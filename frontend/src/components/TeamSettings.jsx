@@ -24,7 +24,7 @@ export default function TeamSettings({ user }) {
       body: JSON.stringify({ email, role })
     });
     const data = await res.json();
-    if (data.accept_url) setInviteLink(data.accept_url);
+    if (data?.invite?.accept_url) setInviteLink(data.invite.accept_url);
     setEmail("");
   }
 
@@ -37,7 +37,7 @@ export default function TeamSettings({ user }) {
         <input value={email} onChange={e=>setEmail(e.target.value)} placeholder="teammate@example.com" />
         <select value={role} onChange={e=>setRole(e.target.value)} style={{ marginLeft:8 }}>
           <option value="member">Member</option>
-          <option value="owner">Owner</option>
+          <option value="manager">Manager</option>
         </select>
         <button onClick={invite} style={{ marginLeft:8 }}>Invite</button>
         {inviteLink && (

@@ -1697,3 +1697,27 @@
     text-align: left;
   }
 }
+/* Workspace-scoped WhatsApp SaaS connection */
+.whatsapp-connection-form {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+  margin-top: 14px;
+  padding: 14px;
+  border: 1px solid var(--ra-border, rgba(255, 255, 255, 0.1));
+  border-radius: 14px;
+  background: rgba(5, 7, 10, 0.32);
+}
+.whatsapp-connection-form label { display: grid; gap: 6px; color: #aeb4c0; font-size: .76rem; font-weight: 800; }
+.whatsapp-connection-form input {
+  width: 100%;
+  padding: 10px 11px;
+  border: 1px solid rgba(255, 255, 255, 0.11);
+  border-radius: 9px;
+  outline: none;
+  color: #f7f8fb;
+  background: #11141a;
+}
+.whatsapp-connection-form input:focus { border-color: #25d366; box-shadow: 0 0 0 3px rgba(37, 211, 102, .1); }
+.whatsapp-connection-actions { grid-column: 1 / -1; display: flex; flex-wrap: wrap; gap: 8px; }
+@media (max-width: 680px) { .whatsapp-connection-form { grid-template-columns: 1fr; } }

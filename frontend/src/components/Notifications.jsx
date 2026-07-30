@@ -1,6 +1,7 @@
 // src/components/Notifications.jsx
 
 import React, { useEffect, useState } from "react";
+import { apiUrl } from "../apiBase";
 
 function formatTimeAgo(ts) {
   const diff = Math.floor((Date.now() - new Date(ts)) / 1000);
@@ -13,9 +14,9 @@ function formatTimeAgo(ts) {
 const NOTIF_ICONS = {
   reminder: "🔔",
   appointment: "📅",
-  ai: "🤖",
+  ai: "✨",
   info: "ℹ️",
-  cold: "❗",
+  cold: "!",
 };
 
 function NotificationCard({ notif, onMarkRead, onOpenLead }) {
@@ -95,15 +96,19 @@ export default function Notifications({ user, leads = [], setSection, afterSend 
 
   useEffect(() => {
     if (userEmail) {
-      fetch(`/api/notifications/${encodeURIComponent(userEmail)}`)
+      fetch(apiUrl(`notifications/${encodeURIComponent(userEmail)}`), {
+        credentials: "include",
+        cache: "no-store",
+      })
         .then((r) => r.json())
         .then((data) => setNotifs(data.notifications || []));
     }
   }, [userEmail]);
 
   function markAsRead(id) {
-    fetch(`/api/notifications/${encodeURIComponent(userEmail)}/read`, {
+    fetch(apiUrl(`notifications/${encodeURIComponent(userEmail)}/read`), {
       method: "POST",
+      credentials: "include",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ id }),
     })

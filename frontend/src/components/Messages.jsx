@@ -915,7 +915,11 @@ export default function Messages({ user, leads = [], defaultTemplate = "", langu
       setTemplatesLoading(true);
       setTemplatesError("");
       try {
-        const r = await fetch(`${API}/api/whatsapp/templates`);
+        const r = await fetch(`${API}/api/whatsapp/templates`, {
+          credentials: "include",
+          cache: "no-store",
+          headers: { Accept: "application/json" },
+        });
         const j = await r.json();
 
         const rows =
@@ -1032,7 +1036,8 @@ export default function Messages({ user, leads = [], defaultTemplate = "", langu
       setTemplateInfoError("");
       try {
         const r = await fetch(
-          `${API}/api/whatsapp/template-info?name=${encodeURIComponent(name)}&language_code=${encodeURIComponent(languageCode)}`
+          `${API}/api/whatsapp/template-info?name=${encodeURIComponent(name)}&language_code=${encodeURIComponent(languageCode)}`,
+          { credentials: "include", cache: "no-store", headers: { Accept: "application/json" } }
         );
         const j = await r.json();
         const t = (j.templates || [])[0];
@@ -1231,6 +1236,7 @@ export default function Messages({ user, leads = [], defaultTemplate = "", langu
 
       const res = await fetch(`${API}/api/appointments/${encodeURIComponent(user.email)}`, {
         method: "POST",
+        credentials: "include",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(payload),
       });
@@ -1351,6 +1357,7 @@ export default function Messages({ user, leads = [], defaultTemplate = "", langu
 
       const res = await fetch(`${API}/api/whatsapp/send`, {
         method: "POST",
+        credentials: "include",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(payload),
       });
@@ -1424,6 +1431,7 @@ export default function Messages({ user, leads = [], defaultTemplate = "", langu
 
       const r = await fetch(`${API}/api/generate-message`, {
         method: "POST",
+        credentials: "include",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(body),
       });

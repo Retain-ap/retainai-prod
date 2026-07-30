@@ -1,4 +1,4 @@
-# app.py (CONSOLIDATED + PROD-SAFE) — PART 1/2
+# app.py (CONSOLIDATED + PROD-SAFE) â€” PART 1/2
 import os
 import time
 import re
@@ -205,6 +205,15 @@ def require_authenticated_api_session():
         request.args.get("user_email"),
         request.args.get("owner_email"),
     ]
+    if request.is_json:
+        body = request.get_json(silent=True) or {}
+        if isinstance(body, dict):
+            claimed.extend((
+                body.get("user_email"),
+                body.get("owner_email"),
+                body.get("userEmail"),
+                body.get("ownerEmail"),
+            ))
     if request.endpoint in {"api_profile", "api_user"}:
         claimed.append(request.args.get("email"))
     for key, value in (request.view_args or {}).items():
@@ -985,7 +994,7 @@ def _build_upcoming_appointment_notifications(user_email: str) -> list:
 
     return out
 # ----------------------------
-# /api/profile (SINGLE SOURCE OF TRUTH) — FIXED (no duplicates)
+# /api/profile (SINGLE SOURCE OF TRUTH) â€” FIXED (no duplicates)
 # ----------------------------
 @app.route('/api/user/<path:email>', methods=['GET'])
 def api_get_user(email):
@@ -1380,17 +1389,6 @@ BUSINESS_TYPE_INTERVALS = {
     "accounting": 30,
 }
 
-def log_notification(user_email, subject, message, lead_email=None):
-    notifications = load_notifications()
-    notifications.setdefault(user_email, []).append({
-        "timestamp": datetime.datetime.utcnow().isoformat() + "Z",
-        "subject": subject,
-        "message": message,
-        "lead_email": lead_email,
-        "read": False
-    })
-    save_notifications(notifications)
-
 def send_warning_summary_email(user_email, warning_leads, interval):
     if not warning_leads:
         return
@@ -1431,7 +1429,7 @@ def send_warning_summary_email(user_email, warning_leads, interval):
         to_email=user_email,
         template_id=SG_TEMPLATE_FOLLOWUP_USER,
         dynamic_data=dynamic_data,
-        subject="⚠️ Leads Needing Attention",
+        subject="âš ï¸ Leads Needing Attention",
         from_email=SENDER_EMAIL
     )
 
@@ -1668,7 +1666,7 @@ def send_trial_ending_soon():
         save_users(users)
 
 # ----------------------------
-# LEADS API (PERSISTENT) — KEEP ONLY THIS
+# LEADS API (PERSISTENT) â€” KEEP ONLY THIS
 # - Frontend uses:
 #   GET  /api/leads   (with header X-User-Email)
 #   POST /api/leads   (with header X-User-Email, body {leads:[...]})
@@ -2388,7 +2386,7 @@ def serialize_invoice(inv):
         "number": getattr(inv, "number", None),
     }
 
-# app.py (CONSOLIDATED + PROD-SAFE) — PART 2/2 (CONTINUATION)
+# app.py (CONSOLIDATED + PROD-SAFE) â€” PART 2/2 (CONTINUATION)
 
 @app.route("/api/stripe/connect-url", methods=["GET"])
 def get_stripe_connect_url():
@@ -2700,7 +2698,7 @@ def resend_invoice_email():
           <p>Hi {inv.metadata.get("customer_name","")},</p>
           <p>Your invoice <strong>#{getattr(inv, "number", inv.id)}</strong> from <strong>{business}</strong> is now available.</p>
           <p><strong>Amount:</strong> {total:.2f} {inv.currency.upper()}</p>
-          <p><a href="{inv.hosted_invoice_url}">View &amp; pay your invoice →</a></p>
+          <p><a href="{inv.hosted_invoice_url}">View &amp; pay your invoice â†’</a></p>
           <br/>
           <p>Thanks for working with {business}!</p>
         """
@@ -3616,7 +3614,7 @@ def google_oauth_cb():
 
 @app.route("/api/google/status/<path:email>")
 def google_status(email):
-    email = _norm_email(email)
+    email = _session_org_email()
     users = load_users() or {}
     user = users.get(email) if isinstance(users, dict) else None
     if not user or not user.get("gcal_connected"):
@@ -3629,7 +3627,9 @@ def google_status(email):
 
 @app.route("/api/google/disconnect/<path:email>", methods=["POST"])
 def google_disconnect(email):
-    email = _norm_email(email)
+    if _session_email() != _session_org_email() and not _is_platform_owner(_session_email()):
+        return jsonify({"disconnected": False, "error": "owner_required"}), 403
+    email = _session_org_email()
     users = load_users() or {}
     if not isinstance(users, dict):
         return jsonify({"disconnected": False, "error": "storage_not_ready"}), 500
@@ -3647,7 +3647,7 @@ def google_disconnect(email):
 
 @app.route("/api/google/calendars/<path:email>")
 def google_calendars(email):
-    email = _norm_email(email)
+    email = _session_org_email()
     users = load_users() or {}
     user = users.get(email) if isinstance(users, dict) else None
     if not user or not user.get("gcal_access_token"):
@@ -3682,7 +3682,7 @@ def google_calendars(email):
 
 @app.route("/api/google/events/<path:email>")
 def google_events(email):
-    email = _norm_email(email)
+    email = _session_org_email()
     calendar_id = request.args.get("calendarId")
 
     users = load_users() or {}
@@ -3736,7 +3736,7 @@ def google_events(email):
 
 
 # ============================================================
-# WhatsApp Cloud API — 24h gate, templates, webhook, etc.
+# WhatsApp Cloud API â€” 24h gate, templates, webhook, etc.
 # ============================================================
 
 _TEMPLATE_CACHE: Dict[Tuple[str, str], Dict[str, Any]] = {}
@@ -3745,7 +3745,7 @@ _TEMPLATE_TTL_SECONDS = 300
 _MSG_CACHE: Dict[Tuple[str, str], Dict[str, Any]] = {}
 _MSG_CACHE_TTL_SECONDS = 2
 
-_WABA_RES = {"id": None, "checked_at": None}
+_WABA_RES: Dict[str, Dict[str, Any]] = {}
 _WABA_TTL_SECONDS = 300
 
 
@@ -3809,7 +3809,7 @@ def lead_matches_wa(lead: dict, wa_digits: str) -> bool:
     return any(_wa_numbers_equal(value, wa_digits) for value in _lead_phone_values(lead))
 
 
-def resolve_whatsapp_lead(wa_id: str):
+def resolve_whatsapp_lead(wa_id: str, workspace_email: str = ""):
     """Return one atomic owner/lead match so owner and lead can never come from different records."""
     wa = wa_norm_number(wa_id)
     if not wa:
@@ -4043,26 +4043,69 @@ def _wa_append_inbound(user_email: str, lead_id: str, lead: dict, sender_waid: s
     return thread, True
 
 
-def wa_env() -> Tuple[str, str]:
-    token = WHATSAPP_TOKEN
-    phone_id = WHATSAPP_PHONE_ID
+def _wa_workspace_email(explicit: str = "") -> str:
+    if explicit:
+        return _norm_email(explicit)
+    try:
+        return _session_org_email()
+    except RuntimeError:
+        return ""
+
+
+def _wa_workspace_record(workspace_email: str = "") -> dict:
+    workspace = _wa_workspace_email(workspace_email)
+    users = load_users() or {}
+    record = users.get(workspace) if workspace and isinstance(users, dict) else None
+    return record if isinstance(record, dict) else {}
+
+
+def wa_credentials(workspace_email: str = "") -> dict:
+    record = _wa_workspace_record(workspace_email)
+    encrypted = str(record.get("wa_access_token_encrypted") or "")
+    workspace_token = _decrypt_mfa_secret(encrypted) if encrypted else ""
+    return {
+        "workspace_email": _wa_workspace_email(workspace_email),
+        "token": workspace_token or WHATSAPP_TOKEN or "",
+        "phone_id": str(record.get("wa_phone_id") or WHATSAPP_PHONE_ID or ""),
+        "waba_id": str(record.get("wa_waba_id") or WHATSAPP_WABA_ID or ""),
+        "business_number": str(record.get("wa_business_number") or record.get("whatsapp") or ""),
+        "source": "workspace" if workspace_token and record.get("wa_phone_id") else "platform_default",
+    }
+
+
+def _wa_workspace_for_phone_id(phone_id: str) -> str:
+    target = str(phone_id or "").strip()
+    users = load_users() or {}
+    for email, record in (users.items() if isinstance(users, dict) else []):
+        if target and isinstance(record, dict) and str(record.get("wa_phone_id") or "").strip() == target:
+            return _norm_email(email)
+    return ""
+
+
+def wa_env(workspace_email: str = "") -> Tuple[str, str]:
+    config = wa_credentials(workspace_email)
+    token = config["token"]
+    phone_id = config["phone_id"]
     if not token or not phone_id:
         raise RuntimeError("WhatsApp credentials missing (WHATSAPP_TOKEN / WHATSAPP_PHONE_ID)")
     return token, phone_id
 
 
-def wa_resolve_waba_id(force: bool = False) -> str:
+def wa_resolve_waba_id(force: bool = False, workspace_email: str = "") -> str:
+    config = wa_credentials(workspace_email)
+    cache_key = config["phone_id"] or config["workspace_email"] or "platform"
     now = datetime.datetime.utcnow()
+    cached = _WABA_RES.get(cache_key) or {}
     if (
         not force
-        and _WABA_RES["id"]
-        and _WABA_RES["checked_at"]
-        and (now - _WABA_RES["checked_at"]).total_seconds() < _WABA_TTL_SECONDS
+        and cached.get("id")
+        and cached.get("checked_at")
+        and (now - cached["checked_at"]).total_seconds() < _WABA_TTL_SECONDS
     ):
-        return _WABA_RES["id"]
+        return cached["id"]
 
     try:
-        token, phone_id = wa_env()
+        token, phone_id = wa_env(workspace_email)
         url = f"https://graph.facebook.com/{os.getenv('WHATSAPP_API_VERSION', 'v24.0')}/{phone_id}"
         headers = {"Authorization": f"Bearer {token}"}
         params = {"fields": "whatsapp_business_account{id},display_phone_number"}
@@ -4073,10 +4116,9 @@ def wa_resolve_waba_id(force: bool = False) -> str:
             wid = (((r.json() or {}).get("whatsapp_business_account") or {}).get("id"))
 
         if not wid:
-            wid = os.getenv("WHATSAPP_WABA_ID") or os.getenv("WHATSAPP_BUSINESS_ID", "")
+            wid = config["waba_id"]
 
-        _WABA_RES["id"] = wid
-        _WABA_RES["checked_at"] = now
+        _WABA_RES[cache_key] = {"id": wid, "checked_at": now}
         return wid
 
     except Exception as e:
@@ -4084,30 +4126,32 @@ def wa_resolve_waba_id(force: bool = False) -> str:
             app.logger.warning("[WA WABA] resolve error: %s", e)
         except Exception:
             pass
-        return os.getenv("WHATSAPP_WABA_ID") or os.getenv("WHATSAPP_BUSINESS_ID", "")
+        return config["waba_id"]
 
 
-def wa_fetch_templates_for_waba(waba_id: str):
+def wa_fetch_templates_for_waba(waba_id: str, workspace_email: str = ""):
     if not waba_id:
         raise RuntimeError("WhatsApp WABA ID could not be resolved")
-    headers = {"Authorization": f"Bearer {WHATSAPP_TOKEN}"}
+    token, _ = wa_env(workspace_email)
+    headers = {"Authorization": f"Bearer {token}"}
     params = {"fields": "name,language,status,category,components", "limit": 200}
     url = f"https://graph.facebook.com/{os.getenv('WHATSAPP_API_VERSION', 'v24.0')}/{waba_id}/message_templates"
     return pyrequests.get(url, headers=headers, params=params, timeout=30)
 
 
-def wa_fetch_templates_raw():
-    waba_id = wa_resolve_waba_id()
-    return wa_fetch_templates_for_waba(waba_id)
+def wa_fetch_templates_raw(workspace_email: str = ""):
+    waba_id = wa_resolve_waba_id(workspace_email=workspace_email)
+    return wa_fetch_templates_for_waba(waba_id, workspace_email)
 
 
 def wa_lookup_template_status(name: str, lang_api: str, force: bool = False) -> str:
-    if not (WHATSAPP_TOKEN and (WHATSAPP_WABA_ID or WHATSAPP_PHONE_ID)):
+    config = wa_credentials()
+    if not (config["token"] and (config["waba_id"] or config["phone_id"])):
         return "UNKNOWN"
 
     normalized_name = (name or os.getenv("WHATSAPP_TEMPLATE_DEFAULT", "") or "").strip()
     lang_norm = wa_normalize_lang(lang_api or os.getenv("WHATSAPP_TEMPLATE_LANG", "en") or "")
-    key = (normalized_name, lang_norm)
+    key = (config["workspace_email"] or config["phone_id"] or "platform", normalized_name, lang_norm)
 
     now = datetime.datetime.utcnow()
     if not force:
@@ -4276,9 +4320,9 @@ def generate_message():
             pass
         return jsonify({"error": "Failed to get AI response"}), 500
         
-def wa_send_text(to_number: str, body: str):
+def wa_send_text(to_number: str, body: str, workspace_email: str = ""):
     to = wa_norm_number(to_number)
-    token, phone_id = wa_env()
+    token, phone_id = wa_env(workspace_email)
     ver = os.getenv("WHATSAPP_API_VERSION", "v20.0")
     url = f"https://graph.facebook.com/{ver}/{phone_id}/messages"
     headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
@@ -4395,9 +4439,10 @@ def wa_send_template(
     lang_code: str,
     parameters: Optional[List[Any]] = None,
     expected_body_param_count: Optional[int] = None,
+    workspace_email: str = "",
 ):
     to = wa_norm_number(to_number)
-    token, phone_id = wa_env()
+    token, phone_id = wa_env(workspace_email)
     ver = os.getenv("WHATSAPP_API_VERSION", "v20.0")
     url = f"https://graph.facebook.com/{ver}/{phone_id}/messages"
     headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
@@ -4449,22 +4494,38 @@ def wa_send_template(
 
 @app.get("/api/whatsapp/health")
 def whatsapp_health():
+    config = wa_credentials()
     events = load_wa_webhook_events()
-    unmatched = load_wa_unmatched()
+    workspace = _session_org_email()
+    phone_id = str(config.get("phone_id") or "")
+    can_view_default_diagnostics = (
+        config.get("source") == "workspace"
+        or _is_platform_owner(_session_email())
+    )
+    workspace_events = [
+        event for event in events
+        if event.get("user_email") == workspace
+        or (phone_id and str(event.get("phone_number_id") or "") == phone_id)
+    ]
+    unmatched = [
+        row for row in load_wa_unmatched()
+        if can_view_default_diagnostics
+        and (not phone_id or str(row.get("phone_number_id") or "") == phone_id)
+    ]
     last_webhook = events[0].get("created_at") if events else None
-    last_inbound = next((event.get("created_at") for event in events if event.get("kind") == "inbound_matched"), None)
+    last_inbound = next((event.get("created_at") for event in workspace_events if event.get("kind") == "inbound_matched"), None)
     last_rejected = next((event.get("created_at") for event in events if event.get("kind") == "signature_rejected"), None)
     graph_ok = False
     graph_status = None
     graph_error = ""
     phone_display = ""
     verified_name = ""
-    if WHATSAPP_TOKEN and WHATSAPP_PHONE_ID:
+    if config["token"] and config["phone_id"]:
         try:
             version = os.getenv("WHATSAPP_API_VERSION", "v24.0")
             check = pyrequests.get(
-                f"https://graph.facebook.com/{version}/{WHATSAPP_PHONE_ID}",
-                headers={"Authorization": f"Bearer {WHATSAPP_TOKEN}"},
+                f"https://graph.facebook.com/{version}/{config['phone_id']}",
+                headers={"Authorization": f"Bearer {config['token']}"},
                 params={"fields": "id,display_phone_number,verified_name,quality_rating"},
                 timeout=10,
             )
@@ -4485,9 +4546,11 @@ def whatsapp_health():
         "graph_error": graph_error,
         "phone_display": phone_display,
         "verified_name": verified_name,
-        "has_token": bool(WHATSAPP_TOKEN),
-        "has_phone_id": bool(WHATSAPP_PHONE_ID),
-        "has_waba_id": bool(os.getenv("WHATSAPP_WABA_ID") or os.getenv("WHATSAPP_BUSINESS_ID")),
+        "has_token": bool(config["token"]),
+        "has_phone_id": bool(config["phone_id"]),
+        "has_waba_id": bool(config["waba_id"]),
+        "credential_source": config["source"],
+        "workspace_connection": config["source"] == "workspace",
         "has_verify_token": bool(os.getenv("WHATSAPP_VERIFY_TOKEN")),
         "has_app_secret": bool(os.getenv("APP_SECRET") or os.getenv("META_APP_SECRET")),
         "default_template": os.getenv("WHATSAPP_TEMPLATE_DEFAULT"),
@@ -4500,9 +4563,98 @@ def whatsapp_health():
     }), 200
 
 
+@app.route("/api/integrations/whatsapp", methods=["GET", "POST", "DELETE"])
+def workspace_whatsapp_integration():
+    actor = _session_email()
+    workspace = _session_org_email()
+    if actor != workspace and not _is_platform_owner(actor):
+        return jsonify({"ok": False, "error": "Only the workspace owner can manage WhatsApp."}), 403
+
+    users = load_users() or {}
+    record = users.get(workspace) if isinstance(users, dict) else None
+    if not isinstance(record, dict):
+        return jsonify({"ok": False, "error": "Workspace not found"}), 404
+
+    if request.method == "GET":
+        config = wa_credentials(workspace)
+        return jsonify({
+            "ok": True,
+            "connected": bool(config["token"] and config["phone_id"]),
+            "source": config["source"],
+            "phone_id": config["phone_id"],
+            "waba_id": config["waba_id"],
+            "business_number": config["business_number"],
+            "has_workspace_token": bool(record.get("wa_access_token_encrypted")),
+        }), 200
+
+    if request.method == "DELETE":
+        for key in (
+            "wa_access_token_encrypted", "wa_phone_id", "wa_waba_id",
+            "wa_business_number", "wa_connected_at",
+        ):
+            record.pop(key, None)
+        users[workspace] = record
+        save_users(users)
+        _WABA_RES.clear()
+        return jsonify({"ok": True, "source": "platform_default"}), 200
+
+    data = request.get_json(silent=True) or {}
+    previous_record = dict(record)
+    access_token = str(data.get("access_token") or "").strip()
+    phone_id = str(data.get("phone_id") or "").strip()
+    waba_id = str(data.get("waba_id") or "").strip()
+    business_number = str(data.get("business_number") or "").strip()
+    if not phone_id or (not access_token and not record.get("wa_access_token_encrypted")):
+        return jsonify({"ok": False, "error": "Access token and phone number ID are required."}), 400
+    if access_token:
+        record["wa_access_token_encrypted"] = _encrypt_mfa_secret(access_token)
+    record["wa_phone_id"] = phone_id
+    record["wa_waba_id"] = waba_id
+    record["wa_business_number"] = business_number
+    record["wa_connected_at"] = datetime.datetime.utcnow().isoformat() + "Z"
+    users[workspace] = record
+    save_users(users)
+    _WABA_RES.clear()
+
+    # Validate before reporting success; never return the secret.
+    config = wa_credentials(workspace)
+    try:
+        version = os.getenv("WHATSAPP_API_VERSION", "v24.0")
+        check = pyrequests.get(
+            f"https://graph.facebook.com/{version}/{config['phone_id']}",
+            headers={"Authorization": f"Bearer {config['token']}"},
+            params={"fields": "id,display_phone_number,verified_name,whatsapp_business_account{id}"},
+            timeout=12,
+        )
+        body = check.json() if check.content else {}
+        if not check.ok or not body.get("id"):
+            users[workspace] = previous_record
+            save_users(users)
+            error = (body.get("error") or {}).get("message") or "Meta rejected these credentials."
+            return jsonify({"ok": False, "error": str(error)[:240]}), 422
+        if not record.get("wa_waba_id"):
+            record["wa_waba_id"] = str(((body.get("whatsapp_business_account") or {}).get("id")) or "")
+            users[workspace] = record
+            save_users(users)
+        return jsonify({
+            "ok": True,
+            "connected": True,
+            "source": "workspace",
+            "phone_id": config["phone_id"],
+            "waba_id": record.get("wa_waba_id") or "",
+            "business_number": body.get("display_phone_number") or business_number,
+            "verified_name": body.get("verified_name") or "",
+        }), 200
+    except Exception as exc:
+        users[workspace] = previous_record
+        save_users(users)
+        return jsonify({"ok": False, "error": f"Could not validate with Meta: {exc}"}), 502
+
+
 @app.get("/api/whatsapp/templates")
 def list_templates():
-    if not os.getenv("WHATSAPP_TOKEN") or not os.getenv("WHATSAPP_PHONE_ID"):
+    config = wa_credentials()
+    if not config["token"] or not config["phone_id"]:
         return jsonify({"error": "Missing token or phone id"}), 400
 
     try:
@@ -4726,12 +4878,23 @@ def get_whatsapp_conversations():
             ),
             "status": (statuses.get(message_id) or {}).get("status") if message_id else None,
         }
+    phone_id = str(wa_credentials(user_email).get("phone_id") or "")
+    config = wa_credentials(user_email)
+    can_view_default_diagnostics = (
+        config.get("source") == "workspace"
+        or _is_platform_owner(_session_email())
+    )
+    unmatched_count = sum(
+        1 for row in (load_wa_unmatched() or [])
+        if can_view_default_diagnostics
+        and (not phone_id or str((row or {}).get("phone_number_id") or "") == phone_id)
+    )
     return jsonify({
         "ok": True,
         "conversations": summaries,
         # Count only: useful diagnostics without exposing another workspace's
         # sender number, profile, or message contents.
-        "unmatched_count": len(load_wa_unmatched() or []),
+        "unmatched_count": unmatched_count,
         "server_time": datetime.datetime.utcnow().isoformat() + "Z",
     }), 200
 
@@ -4751,11 +4914,16 @@ def reconcile_whatsapp_replies():
     if not isinstance(lead, dict):
         return jsonify({"ok": False, "error": "Contact not found in this workspace"}), 404
 
+    phone_id = str(wa_credentials(user_email).get("phone_id") or "")
     unmatched = load_wa_unmatched() or []
     matched = []
     remaining = []
     for item in unmatched:
-        if lead_matches_wa(lead, str((item or {}).get("sender") or "")):
+        belongs_to_workspace = (
+            not phone_id
+            or str((item or {}).get("phone_number_id") or "") == phone_id
+        )
+        if belongs_to_workspace and lead_matches_wa(lead, str((item or {}).get("sender") or "")):
             matched.append(item)
         else:
             remaining.append(item)
@@ -4842,7 +5010,7 @@ def send_whatsapp_message():
 
     to_number = clean(data.get("to") or data.get("phone"))
     raw_msg = clean(data.get("message") or data.get("text"))
-    user_email = clean(data.get("user_email")).lower()
+    user_email = _session_org_email()
     lead_id = clean(data.get("lead_id"))
     template_name = clean(data.get("template_name") or (os.getenv("WHATSAPP_TEMPLATE_DEFAULT") or ""))
     language_code = clean(data.get("language_code") or (os.getenv("WHATSAPP_TEMPLATE_LANG") or "en"))
@@ -4869,14 +5037,14 @@ def send_whatsapp_message():
     primary = wa_primary_lang(requested)
     to_number = wa_norm_number(to_number)
 
-    waba_id = wa_resolve_waba_id()
+    waba_id = wa_resolve_waba_id(workspace_email=user_email)
 
     try:
         if inside24:
             if not raw_msg:
                 return jsonify({"ok": False, "error": "Message text required inside 24h"}), 400
 
-            resp = wa_send_text(to_number, raw_msg)
+            resp = wa_send_text(to_number, raw_msg, workspace_email=user_email)
             mode = "free_text"
             sent_text = raw_msg
             used_lang = None
@@ -4891,7 +5059,7 @@ def send_whatsapp_message():
                     "code": "TEMPLATE_REQUIRED_OUTSIDE_24H"
                 }), 422
 
-            r_list = wa_fetch_templates_for_waba(waba_id)
+            r_list = wa_fetch_templates_for_waba(waba_id, workspace_email=user_email)
             if not getattr(r_list, "ok", False):
                 try:
                     body = r_list.json()
@@ -5004,6 +5172,7 @@ def send_whatsapp_message():
                 used_lang,
                 provided_params if expected_count else None,
                 expected_body_param_count=expected_count,
+                workspace_email=user_email,
             )
 
             preview_parts = []
@@ -5180,12 +5349,20 @@ def _verify_meta_signature(raw_body: bytes, header_sig: str) -> bool:
 
 @app.get("/api/whatsapp/inbound-health")
 def whatsapp_inbound_health():
-    user_email = (request.args.get("user_email") or request.headers.get("X-User-Email") or "").strip().lower()
-    if not user_email:
-        return jsonify({"ok": False, "error": "user_email is required"}), 400
+    user_email = _session_org_email()
+    config = wa_credentials(user_email)
+    phone_id = str(config.get("phone_id") or "")
+    can_view_default_diagnostics = (
+        config.get("source") == "workspace"
+        or _is_platform_owner(_session_email())
+    )
 
     events = load_wa_webhook_events()
-    unmatched = load_wa_unmatched()
+    unmatched = [
+        row for row in load_wa_unmatched()
+        if can_view_default_diagnostics
+        and (not phone_id or str((row or {}).get("phone_number_id") or "") == phone_id)
+    ]
 
     matched_events = [event for event in events if event.get("kind") == "inbound_matched"]
     user_events = [event for event in matched_events if not user_email or event.get("user_email") == user_email]
@@ -5239,6 +5416,7 @@ def whatsapp_webhook():
                 value = change.get("value", {}) or {}
                 metadata = value.get("metadata", {}) or {}
                 phone_number_id = str(metadata.get("phone_number_id") or "")
+                workspace_email = _wa_workspace_for_phone_id(phone_number_id)
 
                 # Delivery/read/failure updates.
                 status_rows = value.get("statuses", []) or []
@@ -5262,6 +5440,8 @@ def whatsapp_webhook():
                             "status",
                             message_id=status_id,
                             status=status.get("status"),
+                            phone_number_id=phone_number_id,
+                            user_email=workspace_email,
                             recipient_masked=_wa_mask_number(status.get("recipient_id") or ""),
                         )
                     save_statuses(statuses)
@@ -5279,12 +5459,14 @@ def whatsapp_webhook():
                         _wa_event("inbound_invalid", message_id=message_id, reason="missing_sender")
                         continue
 
-                    user_email, lead_id, lead = resolve_whatsapp_lead(sender_waid)
+                    user_email, lead_id, lead = resolve_whatsapp_lead(sender_waid, workspace_email)
                     if not user_email or not lead_id or not lead:
                         _wa_store_unmatched(sender_waid, message, text_value, phone_number_id, contact_name)
                         _wa_event(
                             "inbound_unmatched",
                             message_id=message_id,
+                            phone_number_id=phone_number_id,
+                            user_email=workspace_email,
                             sender_masked=_wa_mask_number(sender_waid),
                             message_type=message.get("type"),
                             text=str(text_value or "")[:180],
@@ -5330,6 +5512,7 @@ def whatsapp_webhook():
                         "inbound_matched",
                         message_id=message_id,
                         user_email=user_email,
+                        phone_number_id=phone_number_id,
                         lead_id=lead_id,
                         sender_masked=_wa_mask_number(sender_waid),
                         message_type=message.get("type"),
@@ -5366,12 +5549,12 @@ def whatsapp_webhook():
                     # Compliance confirmation messages only.
                     if normalized_command in ("STOP", "UNSUBSCRIBE", "STOP ALL", "CANCEL"):
                         try:
-                            wa_send_text(sender_waid, "You have been unsubscribed. Reply START to opt back in.")
+                            wa_send_text(sender_waid, "You have been unsubscribed. Reply START to opt back in.", user_email)
                         except Exception:
                             pass
                     elif normalized_command in ("START", "UNSTOP", "SUBSCRIBE"):
                         try:
-                            wa_send_text(sender_waid, "You are now opted back in. Reply STOP anytime to opt out.")
+                            wa_send_text(sender_waid, "You are now opted back in. Reply STOP anytime to opt out.", user_email)
                         except Exception:
                             pass
 
@@ -5759,7 +5942,7 @@ def send_ai_message():
     }), 200
 
 # =================================================================
-# AUTOMATIONS (INLINE) — Blueprint + Engine (prod-ready routes)
+# AUTOMATIONS (INLINE) â€” Blueprint + Engine (prod-ready routes)
 # =================================================================
 CHANNEL_EMAIL = "email"
 CHANNEL_WHATSAPP = "whatsapp"
@@ -5925,7 +6108,7 @@ def cond_no_booking_since(lead: Dict[str, Any], days: int = 2) -> bool:
                 return False
     return True
 
-MISSING = "⛔"
+MISSING = "â›”"
 
 def render_text(tmpl: str, lead: Dict[str, Any], run: Dict[str, Any], profile: Dict[str, Any]) -> str:
     if not isinstance(tmpl, str):
@@ -5954,13 +6137,13 @@ def dedupe_ok(key: str) -> bool:
     _LAST_SEND_CACHE[key] = {"at": now}
     return True
 
-def choose_wa_template(preferred_name: Optional[str], preferred_lang: Optional[str]):
+def choose_wa_template(preferred_name: Optional[str], preferred_lang: Optional[str], workspace_email: str = ""):
     name = (preferred_name or os.getenv("WHATSAPP_TEMPLATE_DEFAULT", "")).strip()
     if not name:
         return None, None, 0, {}
 
-    waba_id = wa_resolve_waba_id()
-    r_list = wa_fetch_templates_for_waba(waba_id)
+    waba_id = wa_resolve_waba_id(workspace_email=workspace_email)
+    r_list = wa_fetch_templates_for_waba(waba_id, workspace_email)
     items = (r_list.json() or {}).get("data", []) if getattr(r_list, "ok", False) else []
 
     requested = wa_normalize_lang(preferred_lang or os.getenv("WHATSAPP_TEMPLATE_LANG", "en"))
@@ -6002,19 +6185,23 @@ def build_wa_params(count: int, lead: dict, profile: dict, run: dict, rendered_t
     vals = (vals + [""] * count)[:count]
     return vals
 
-def append_chat_message(user_email: str, lead_id: str, text: str):
+def append_automation_chat_message(user_email: str, lead_id: str, text: str):
     try:
         if not user_email or not lead_id:
             return
-        chats = load_chats()
-        user_chats = (chats.get(user_email, {}) or {})
-        lid = str(lead_id)
-        arr = (user_chats.get(lid, []) or [])
-        arr.append({"from": "user", "text": text, "time": now_utc().isoformat().replace("+00:00", "") + "Z"})
-        user_chats[lid] = arr
-        chats[user_email] = user_chats
-        save_chats(chats)
-        _MSG_CACHE[(str(user_email or ""), str(lead_id or ""))] = {"at": datetime.datetime.utcnow(), "data": arr}
+        row = {
+            "id": f"waauto_{uuid4().hex[:16]}",
+            "from": "user",
+            "direction": "outbound",
+            "text": _wa_readable_text(text),
+            "time": now_utc().isoformat().replace("+00:00", "") + "Z",
+            "status": "automation_sent",
+        }
+        arr = append_chat_message(user_email, str(lead_id), row)
+        _MSG_CACHE[(str(user_email or ""), str(lead_id or ""))] = {
+            "at": datetime.datetime.utcnow(),
+            "data": arr,
+        }
     except Exception as e:
         print("[Automations] append_chat_message error:", e)
 
@@ -6065,14 +6252,14 @@ def send_whatsapp_with_window(flow, step, lead, run, caps, profile) -> bool:
 
     if inside24:
         try:
-            resp = wa_send_text(to, body)
+            resp = wa_send_text(to, body, user_email)
             ok = getattr(resp, "status_code", 500) < 400
         except Exception as e:
             print("[Automations] WA free-text send error:", e)
             ok = False
         if ok:
             mark_sent(run, CHANNEL_WHATSAPP)
-            append_chat_message(user_email, lead_id, body)
+            append_automation_chat_message(user_email, lead_id, body)
             add_notification(
                 user_email=user_email,
                 subject="Automation WhatsApp sent",
@@ -6089,7 +6276,7 @@ def send_whatsapp_with_window(flow, step, lead, run, caps, profile) -> bool:
     template_cfg = step.get("template") or {}
     preferred_name = template_cfg.get("name") or step.get("template_name")
     preferred_lang = template_cfg.get("language") or os.getenv("WHATSAPP_TEMPLATE_LANG", "en")
-    tpl_name, used_lang, pcount, template_meta = choose_wa_template(preferred_name, preferred_lang)
+    tpl_name, used_lang, pcount, template_meta = choose_wa_template(preferred_name, preferred_lang, user_email)
     if not tpl_name or not used_lang:
         create_notification(user_email, "WhatsApp template unavailable",
                             "No approved template/locale available to send outside the 24h window.")
@@ -6140,6 +6327,7 @@ def send_whatsapp_with_window(flow, step, lead, run, caps, profile) -> bool:
             used_lang,
             params if pcount else None,
             expected_body_param_count=pcount,
+            workspace_email=user_email,
         )
         ok = getattr(resp, "status_code", 500) < 400
     except Exception as e:
@@ -6153,7 +6341,7 @@ def send_whatsapp_with_window(flow, step, lead, run, caps, profile) -> bool:
         ok = False
     if ok:
         mark_sent(run, CHANNEL_WHATSAPP)
-        append_chat_message(user_email, lead_id, shown)
+        append_automation_chat_message(user_email, lead_id, shown)
         add_notification(
             user_email=user_email,
             subject="Automation WhatsApp sent",
@@ -6234,7 +6422,7 @@ def ai_draft_message(context: Dict[str, Any]) -> str:
     booking = context.get("booking_link") or f"{MISSING} add your booking link in Automations > Settings"
     lead_name = (context.get("lead", {}).get("first_name") or context.get("lead", {}).get("name") or "there")
     if not os.getenv("OPENROUTER_API_KEY"):
-        return f"Hey {lead_name}, just checking in — want to grab a spot with {business_name}? Book here: {booking}."
+        return f"Hey {lead_name}, just checking in â€” want to grab a spot with {business_name}? Book here: {booking}."
     try:
         prompt = (
             "Write a short, friendly follow-up message (<= 45 words).\n"
@@ -6258,10 +6446,10 @@ def ai_draft_message(context: Dict[str, Any]) -> str:
         )
         data = r.json()
         txt = data.get("choices", [{}])[0].get("message", {}).get("content", "")
-        return (txt or f"Quick check-in — want to grab a spot with {business_name}? {booking}").strip()
+        return (txt or f"Quick check-in â€” want to grab a spot with {business_name}? {booking}").strip()
     except Exception as e:
         print("[Automations] AI draft error:", e)
-        return f"Quick check-in — want to grab a spot with {business_name}? {booking}"
+        return f"Quick check-in â€” want to grab a spot with {business_name}? {booking}"
 
 def execute_step(flow: Dict[str, Any], step: Dict[str, Any], lead: Dict[str, Any], run: Dict[str, Any],
                  caps: Dict[str, Any], profile: Dict[str, Any]) -> bool:
@@ -6809,7 +6997,7 @@ def builtin_templates() -> List[Dict[str, Any]]:
                 {"type": "send_whatsapp", "text": "{{last_ai_text}}"},
                 {"type": "wait", "days": 2},
                 {"type": "if_no_reply", "within_days": 2, "then": [
-                    {"type": "send_email", "subject": "We still here?", "html": "<p>Quick check-in — want to grab a spot with {{business_name}}? <a href='{{booking_link}}'>Book here</a>.</p>"}
+                    {"type": "send_email", "subject": "We still here?", "html": "<p>Quick check-in â€” want to grab a spot with {{business_name}}? <a href='{{booking_link}}'>Book here</a>.</p>"}
                 ]}
             ],
             "caps": {"per_lead_per_day": 1, "respect_quiet_hours": True},
@@ -6821,10 +7009,10 @@ def builtin_templates() -> List[Dict[str, Any]]:
             "enabled": False,
             "trigger": {"type": "appointment_no_show"},
             "steps": [
-                {"type": "send_whatsapp", "text": "Sorry we missed you — here’s 10% off to rebook: {{booking_link}}"},
+                {"type": "send_whatsapp", "text": "Sorry we missed you â€” hereâ€™s 10% off to rebook: {{booking_link}}"},
                 {"type": "wait", "hours": 48},
                 {"type": "if_no_booking", "within_days": 2, "then": [
-                    {"type": "send_email", "subject": "Ready to rebook?", "html": "<p>We saved you a spot — <a href='{{booking_link}}'>rebook here</a>.</p>"},
+                    {"type": "send_email", "subject": "Ready to rebook?", "html": "<p>We saved you a spot â€” <a href='{{booking_link}}'>rebook here</a>.</p>"},
                     {"type": "add_tag", "tag": "Needs Attention"}
                 ]}
             ],
@@ -6837,10 +7025,10 @@ def builtin_templates() -> List[Dict[str, Any]]:
             "enabled": False,
             "trigger": {"type": "new_lead", "within_hours": 24},
             "steps": [
-                {"type": "send_whatsapp", "text": "Welcome! I’m from {{business_name}} — can I help you book? {{booking_link}}"},
+                {"type": "send_whatsapp", "text": "Welcome! Iâ€™m from {{business_name}} â€” can I help you book? {{booking_link}}"},
                 {"type": "wait", "hours": 24},
                 {"type": "if_no_reply", "within_days": 2, "then": [
-                    {"type": "send_email", "subject": "Welcome!", "html": "<p>Quick intro — here’s the booking link: <a href='{{booking_link}}'>Book now</a>.</p>"}
+                    {"type": "send_email", "subject": "Welcome!", "html": "<p>Quick intro â€” hereâ€™s the booking link: <a href='{{booking_link}}'>Book now</a>.</p>"}
                 ]},
                 {"type": "wait", "hours": 48},
                 {"type": "push_owner", "title": "Give them a quick call", "message": "New lead may need a call"}
@@ -7346,7 +7534,7 @@ if "automations" not in getattr(app, "blueprints", {}):
     app.register_blueprint(automations_bp, url_prefix="/api/automations")
 
 # ----------------------------
-# VAPID Push — persisted subscriptions
+# VAPID Push â€” persisted subscriptions
 # ----------------------------
 @app.route("/api/vapid-public-key", methods=["GET"])
 def get_vapid_key():

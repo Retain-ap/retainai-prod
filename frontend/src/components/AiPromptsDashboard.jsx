@@ -1,5 +1,5 @@
 // src/components/AiPromptsDashboard.jsx
-import { API_BASE } from "../config";
+import { apiUrl } from "../apiBase";
 import React, { useState, useMemo } from "react";
 import "./AiPrompts.css";
 
@@ -51,8 +51,9 @@ export default function AiPromptsDashboard({
 
     const p = PROMPT_TYPES.find(pt => pt.key === type) || {};
     try {
-      const res = await fetch(`${API_BASE}/api/generate_prompt`, {
+      const res = await fetch(apiUrl("generate_prompt"), {
         method: "POST",
+        credentials: "include",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           userEmail:     user.email,            // let backend load saved brand
@@ -92,8 +93,9 @@ export default function AiPromptsDashboard({
     setNotifStatus(s => ({ ...s, [lead.id]: "sending" }));
     const subject = `${getUserName()} at ${getBrandName()}`;
     try {
-      const res = await fetch(`${API_BASE}/api/send-ai-message`, {
+      const res = await fetch(apiUrl("send-ai-message"), {
         method: "POST",
+        credentials: "include",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           leadEmail:    lead.email,

@@ -218,7 +218,11 @@ export default function NotificationsCenter({ user }) {
     setLoading(true);
 
     try {
-      const res = await fetch(`${API}/api/notifications/${encodeURIComponent(user.email)}`);
+      const res = await fetch(`${API}/api/notifications/${encodeURIComponent(user.email)}`, {
+        credentials: "include",
+        cache: "no-store",
+        headers: { Accept: "application/json" },
+      });
       const data = await res.json().catch(() => ({}));
       const rows = Array.isArray(data?.notifications) ? data.notifications : [];
       setNotifications(rows.map((n, idx) => normalizeNotification(n, idx)));
@@ -249,7 +253,7 @@ export default function NotificationsCenter({ user }) {
     try {
       await fetch(
         `${API}/api/notifications/${encodeURIComponent(user.email)}/${encodeURIComponent(idParam)}/mark_read`,
-        { method: "POST" }
+        { method: "POST", credentials: "include", headers: { Accept: "application/json" } }
       );
     } catch {
       // keep optimistic state
