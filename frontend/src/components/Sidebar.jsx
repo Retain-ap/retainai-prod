@@ -56,6 +56,10 @@ export default function Sidebar({
     };
   }, []);
 
+  useEffect(() => {
+    if (!mobileOpen) setProfileOpen(false);
+  }, [mobileOpen]);
+
   const handleAddToDesktop = useCallback(
     async (e) => {
       e.stopPropagation();
@@ -101,6 +105,7 @@ export default function Sidebar({
 
   const goTo = useCallback(
     (nextSection) => {
+      setProfileOpen(false);
       setSection(nextSection);
       if (isMobile && typeof onMobileClose === "function") onMobileClose();
     },
@@ -297,7 +302,7 @@ export default function Sidebar({
       {!collapsed && (
         <button
           type="button"
-          className="sidebar-invite-btn"
+          className="sidebar-quick-search-btn"
           onClick={() =>
             window.dispatchEvent(
               new KeyboardEvent("keydown", { key: "k", ctrlKey: true })

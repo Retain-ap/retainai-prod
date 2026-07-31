@@ -196,6 +196,23 @@
 }
 .sidebar-invite-btn:active { transform: translateY(1px); }
 
+.sidebar-quick-search-btn {
+  position: absolute;
+  left: 12px;
+  right: 12px;
+  bottom: 144px;
+  min-height: 40px;
+  border: 1px solid #30343b;
+  border-radius: 9px;
+  background: #1a1d21;
+  color: #cbd0d7;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-weight: 750;
+  cursor: pointer;
+}
+
 /* Settings Button (pinned bottom) */
 .sidebar-settings-btn {
   margin: auto 12px 24px 12px;
@@ -221,6 +238,7 @@
 
 /* Hide bottom buttons when collapsed (optional) */
 .sidebar.collapsed .sidebar-invite-btn,
+.sidebar.collapsed .sidebar-quick-search-btn,
 .sidebar.collapsed .sidebar-settings-btn { display: none; }
 
 /* Responsive navigation drawer */
@@ -271,10 +289,21 @@
 
   .sidebar-profile {
     width: auto;
-    margin: 12px 12px 4px;
-    padding-top: max(18px, env(safe-area-inset-top));
-    padding-right: 48px;
+    min-height: 56px;
+    margin: max(10px, env(safe-area-inset-top)) 10px 2px;
+    padding: 10px 48px 10px 10px;
+    gap: 10px;
   }
+
+  .sidebar-avatar,
+  .sidebar-avatar-initials {
+    width: 36px;
+    height: 36px;
+    flex: 0 0 36px;
+  }
+
+  .sidebar-profile-name { font-size: .95rem; }
+  .sidebar-profile-email { font-size: .78rem; }
 
   .sidebar-profile-name,
   .sidebar-profile-email {
@@ -282,16 +311,23 @@
   }
 
   .sidebar-nav {
-    margin-top: 8px;
-    padding-bottom: 190px;
+    margin-top: 5px;
+    padding-bottom: 142px;
+  }
+
+  .sidebar-nav-label {
+    padding: 11px 16px 4px;
+    font-size: 9px;
   }
 
   .sidebar-nav button {
     width: calc(100% - 20px);
-    min-height: 46px;
+    min-height: 42px;
     margin-right: 10px;
     margin-left: 10px;
-    padding-left: 18px;
+    padding: 8px 14px;
+    gap: 11px;
+    font-size: .92rem;
     border: 1px solid transparent;
   }
 
@@ -305,14 +341,43 @@
     display: flex !important;
   }
 
+  .sidebar-quick-search-btn { display: none; }
+
+  .sidebar-invite-btn {
+    bottom: 69px;
+    min-height: 44px;
+    padding: 10px 14px;
+    font-size: .95rem;
+  }
+
+  .sidebar-settings-btn {
+    bottom: 0;
+    min-height: 44px;
+    margin-bottom: 12px;
+    padding: 10px 14px;
+    font-size: .95rem;
+  }
+
   .sidebar-dropdown-card {
-    position: fixed;
-    top: 76px;
-    left: 12px;
-    width: calc(min(86vw, 320px) - 24px);
+    position: absolute;
+    top: 64px;
+    left: 0;
+    width: 100%;
     max-width: none;
     transform: none;
+    padding: 5px 0 9px;
+    border: 1px solid #353940;
+    border-radius: 12px;
   }
+
+  .dropdown-header { padding: 8px 14px; text-align: left; }
+  .dropdown-title,
+  .dropdown-email { max-width: 100%; text-align: left; margin: 0; }
+  .dropdown-email { display: none; }
+  .dropdown-brand { font-size: .82rem; color: #aeb5bd; }
+  .dropdown-row { padding: 6px 14px 2px; font-size: .85rem; }
+  .dropdown-btn { margin: 7px 12px 0; padding: 9px 12px; font-size: .88rem; }
+  .dropdown-btn.logout { margin-top: 8px; }
 
   @keyframes sidebarDropdownIn {
     from { opacity: 0; transform: translateY(-8px); }
@@ -331,4 +396,22 @@
   font-weight: 800;
   letter-spacing: .08em;
   text-transform: uppercase;
+}
+
+@media (max-width: 430px) {
+  .sidebar,
+  .sidebar.collapsed,
+  .sidebar.mobile {
+    width: min(82vw, 292px);
+    max-width: 292px;
+  }
+}
+
+@media (min-width: 601px) and (max-width: 900px) {
+  .sidebar,
+  .sidebar.collapsed,
+  .sidebar.mobile {
+    width: 300px;
+    max-width: 300px;
+  }
 }

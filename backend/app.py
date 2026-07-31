@@ -1719,7 +1719,7 @@ def send_post_appointment_update_email(user_email, user_name, lead_name, busines
     except Exception:
         pass
 
-    crm_link = f"{FRONTEND_URL}/app/dashboard"
+    crm_link = f"{FRONTEND_URL}/app?section=calendar&view=appointments&capture=1"
 
     return send_email_with_template(
         to_email=user_email,

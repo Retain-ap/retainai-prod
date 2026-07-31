@@ -128,9 +128,18 @@ function CrmDashboard({ authenticatedUser }) {
   const [section, setSection] = useState(
     authenticatedUser?.platformOwner ? "owner" : "overview"
   );
+  const [calendarView, setCalendarView] = useState("calendar");
 
   useEffect(() => {
     const params = new URLSearchParams(location.search);
+    const requestedSection = params.get("section");
+    if (requestedSection && Object.prototype.hasOwnProperty.call(SECTION_LABELS, requestedSection)) {
+      setSection(requestedSection);
+      if (requestedSection === "calendar" && params.get("view") === "appointments") {
+        setCalendarView("appointments");
+      }
+      return;
+    }
     const requestedSettingsTab = params.get("tab");
     if (requestedSettingsTab) {
       setSettingsTab(requestedSettingsTab);
@@ -225,7 +234,6 @@ function CrmDashboard({ authenticatedUser }) {
 
   const [showLeadModal, setShowLeadModal] = useState(false);
   const [editLead, setEditLead] = useState(null);
-  const [calendarView, setCalendarView] = useState("calendar");
   const [draftNotification, setDraftNotification] = useState(null);
   const [highlightLeadIds, setHighlightLeadIds] = useState([]);
   const [loadingLeads, setLoadingLeads] = useState(false);

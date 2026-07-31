@@ -11,6 +11,8 @@ import {
   FaCheckCircle,
   FaClock,
 } from "react-icons/fa";
+import { API_BASE } from "../apiBase";
+import "./Appointments.css";
 
 /* === THEME === */
 const BG = "#181a1b";
@@ -25,11 +27,6 @@ const GREEN = "#30b46c";
 const RED = "#e66565";
 
 /* === API === */
-const API_BASE =
-  (process.env.REACT_APP_API_BASE && process.env.REACT_APP_API_BASE.trim()) ||
-  (process.env.REACT_APP_API_URL && process.env.REACT_APP_API_URL.trim()) ||
-  window.location.origin.replace(/\/$/, "");
-
 /* === storage key for analytics/backend mirror === */
 const BACKEND_APPT_COUNTS_KEY = (email) =>
   `retainai_backend_appt_counts_${String(email || "").trim().toLowerCase() || "anon"}`;
@@ -284,6 +281,12 @@ function getLeadDisplayName(lead) {
   return lead?.name || lead?.email || "Lead";
 }
 
+function dateWeeksFromNow(weeks) {
+  const date = new Date();
+  date.setDate(date.getDate() + (weeks * 7));
+  return `${date.getFullYear()}-${pad2(date.getMonth() + 1)}-${pad2(date.getDate())}`;
+}
+
 export default function Appointments({ user, leads = [], setLeads }) {
   const [backendAppointments, setBackendAppointments] = useState([]);
   const [hiddenIds, setHiddenIds] = useState({});
@@ -291,6 +294,7 @@ export default function Appointments({ user, leads = [], setLeads }) {
   const [timeOverride, setTimeOverride] = useState({});
   const [slotMap, setSlotMap] = useState({});
   const slotMapRef = useRef({});
+  const capturedReminderRef = useRef(false);
 
   const [search, setSearch] = useState("");
   const [showCompleted, setShowCompleted] = useState(false);
@@ -298,6 +302,15 @@ export default function Appointments({ user, leads = [], setLeads }) {
 
   const [showModal, setShowModal] = useState(false);
   const [editing, setEditing] = useState(null);
+  const [noteAppointment, setNoteAppointment] = useState(null);
+  const [noteSaving, setNoteSaving] = useState(false);
+  const [visitNote, setVisitNote] = useState({
+    outcome: "Completed",
+    details: "",
+    preferences: "",
+    followUp: "",
+    rebook: "",
+  });
   const [form, setForm] = useState({
     leadId: "",
     title: "",
@@ -307,6 +320,13 @@ export default function Appointments({ user, leads = [], setLeads }) {
   });
 
   const userEmail = user?.org_id || user?.email || "";
+  const suggestedRebookWeeks = useMemo(() => {
+    const business = String(user?.businessType || user?.lineOfBusiness || user?.business || "").toLowerCase();
+    if (/barber|hair|nail|salon|beauty|spa/.test(business)) return 4;
+    if (/dental|chiro|physio|therapy|wellness/.test(business)) return 6;
+    if (/clean|hvac|maintenance|home service/.test(business)) return 12;
+    return 4;
+  }, [user?.businessType, user?.lineOfBusiness, user?.business]);
 
   useEffect(() => {
     const K = LS_KEYS(userEmail);
@@ -445,6 +465,22 @@ export default function Appointments({ user, leads = [], setLeads }) {
     () => getAppointments(leads, normalizedBackend),
     [leads, normalizedBackend]
   );
+
+  useEffect(() => {
+    if (capturedReminderRef.current || !allAppointments.length) return;
+    const params = new URLSearchParams(window.location.search);
+    if (params.get("capture") !== "1") return;
+    const now = Date.now();
+    const mostRecent = allAppointments
+      .filter((appointment) => !appointment.done && appointment.sortKey <= now)
+      .sort((a, b) => b.sortKey - a.sortKey)[0];
+    if (mostRecent) {
+      capturedReminderRef.current = true;
+      openVisitNote(mostRecent);
+    }
+    // The reminder should be evaluated only when the appointment collection changes.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [allAppointments]);
 
   const filtered = useMemo(() => {
     if (!search) return allAppointments;
@@ -626,8 +662,9 @@ export default function Appointments({ user, leads = [], setLeads }) {
   }
 
   async function toggleDone(appt) {
+    const markingComplete = !appt.done;
     if (isBackend(appt)) {
-      const newDone = !appt.done;
+      const newDone = markingComplete;
       updateDoneOverrides(appt, newDone);
 
       const ok = await apiUpdateBackend(appt, { done: newDone, title: appt.title });
@@ -637,6 +674,7 @@ export default function Appointments({ user, leads = [], setLeads }) {
 
       await fetchBackend();
       ping("appointments:changed");
+      if (newDone) openVisitNote(appt);
       return;
     }
 
@@ -656,6 +694,74 @@ export default function Appointments({ user, leads = [], setLeads }) {
     );
 
     ping("appointments:changed");
+    if (markingComplete) openVisitNote(appt);
+  }
+
+  function openVisitNote(appt) {
+    setNoteAppointment(appt);
+    setVisitNote({
+      outcome: "Completed",
+      details: "",
+      preferences: "",
+      followUp: "",
+      rebook: "",
+    });
+  }
+
+  async function saveVisitNote() {
+    if (!noteAppointment) return;
+    const capturedAt = new Date().toISOString();
+    const lines = [
+      `Visit outcome: ${visitNote.outcome}`,
+      visitNote.details && `Service notes: ${visitNote.details.trim()}`,
+      visitNote.preferences && `Customer preferences: ${visitNote.preferences.trim()}`,
+      visitNote.followUp && `Follow-up: ${visitNote.followUp.trim()}`,
+      visitNote.rebook && `Suggested rebook: ${visitNote.rebook}`,
+    ].filter(Boolean);
+    const summary = lines.join("\n");
+    if (!summary) return;
+
+    setNoteSaving(true);
+    try {
+      if (isBackend(noteAppointment)) {
+        const previous = String(noteAppointment.notes || "").trim();
+        await apiUpdateBackend(noteAppointment, {
+          done: true,
+          title: noteAppointment.title,
+          notes: [previous, summary].filter(Boolean).join("\n\n"),
+        });
+      }
+
+      updateLocalLeadAppointments((prev) =>
+        prev.map((lead) => {
+          if (String(lead.id) !== String(noteAppointment.lead?.id)) return lead;
+          const prior = String(lead.notes || "").trim();
+          const updated = {
+            ...lead,
+            notes: [prior, summary].filter(Boolean).join("\n\n"),
+            last_appointment_note: summary,
+            last_appointment_note_at: capturedAt,
+            rebook_recommended_for: visitNote.rebook || lead.rebook_recommended_for || "",
+          };
+          if (!isBackend(noteAppointment)) {
+            updated.appointments = (lead.appointments || []).map((item) => {
+              const localKey = item._localKey || `${lead.id}|${item.title}|${item.date}|${item.time || ""}`;
+              return String(localKey) === String(noteAppointment._localKey)
+                ? { ...item, done: true, notes: [item.notes, summary].filter(Boolean).join("\n\n") }
+                : item;
+            });
+          }
+          return updated;
+        })
+      );
+      await fetchBackend();
+      ping("appointments:changed");
+      setNoteAppointment(null);
+    } catch (error) {
+      alert(error?.message || "Could not save the visit note.");
+    } finally {
+      setNoteSaving(false);
+    }
   }
 
   async function reschedule(appt, days) {
@@ -882,6 +988,7 @@ export default function Appointments({ user, leads = [], setLeads }) {
 
   return (
     <div
+      className="appointments-page"
       style={{
         padding: "28px",
         background: BG,
@@ -890,6 +997,7 @@ export default function Appointments({ user, leads = [], setLeads }) {
       }}
     >
       <div
+        className="appointments-heading"
         style={{
           display: "grid",
           gridTemplateColumns: "1fr auto",
@@ -940,6 +1048,7 @@ export default function Appointments({ user, leads = [], setLeads }) {
       </div>
 
       <div
+        className="appointments-toolbar"
         style={{
           display: "flex",
           flexWrap: "wrap",
@@ -949,6 +1058,7 @@ export default function Appointments({ user, leads = [], setLeads }) {
         }}
       >
         <div
+          className="appointments-search"
           style={{
             display: "flex",
             alignItems: "center",
@@ -1013,6 +1123,7 @@ export default function Appointments({ user, leads = [], setLeads }) {
       </div>
 
       <div
+        className="appointments-stats"
         style={{
           display: "grid",
           gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))",
@@ -1124,6 +1235,7 @@ export default function Appointments({ user, leads = [], setLeads }) {
           }}
         >
           <div
+            className="appointments-modal-card"
             style={{
               background: CARD,
               borderRadius: 18,
@@ -1239,6 +1351,85 @@ export default function Appointments({ user, leads = [], setLeads }) {
           </div>
         </div>
       )}
+
+      {noteAppointment && (
+        <div className="visit-note-backdrop" role="dialog" aria-modal="true" aria-label="Add post-appointment note">
+          <div className="visit-note-sheet">
+            <div className="visit-note-handle" aria-hidden />
+            <div className="visit-note-kicker">Visit complete</div>
+            <h3>How did it go with {getLeadDisplayName(noteAppointment.lead)}?</h3>
+            <p>Capture the useful details now. They will be added to the customer record and appointment.</p>
+
+            <div className="visit-note-outcomes" aria-label="Visit outcome">
+              {["Completed", "Needs follow-up", "No-show"].map((outcome) => (
+                <button
+                  type="button"
+                  key={outcome}
+                  className={visitNote.outcome === outcome ? "active" : ""}
+                  onClick={() => setVisitNote((current) => ({ ...current, outcome }))}
+                >
+                  {outcome}
+                </button>
+              ))}
+            </div>
+
+            <label>
+              What was done?
+              <textarea
+                rows={3}
+                value={visitNote.details}
+                onChange={(event) => setVisitNote((current) => ({ ...current, details: event.target.value }))}
+                placeholder="Service provided, result, important context…"
+              />
+            </label>
+            <label>
+              Preferences to remember
+              <input
+                value={visitNote.preferences}
+                onChange={(event) => setVisitNote((current) => ({ ...current, preferences: event.target.value }))}
+                placeholder="Style, product, timing, communication preference…"
+              />
+            </label>
+            <div className="visit-note-grid">
+              <label>
+                Follow-up
+                <input
+                  value={visitNote.followUp}
+                  onChange={(event) => setVisitNote((current) => ({ ...current, followUp: event.target.value }))}
+                  placeholder="Call tomorrow, send care tips…"
+                />
+              </label>
+              <label>
+                Recommend rebooking
+                <input
+                  type="date"
+                  value={visitNote.rebook}
+                  onChange={(event) => setVisitNote((current) => ({ ...current, rebook: event.target.value }))}
+                />
+                <span className="visit-note-recommendation">
+                  Suggested for your business: {suggestedRebookWeeks} weeks
+                  <button
+                    type="button"
+                    onClick={() => setVisitNote((current) => ({
+                      ...current,
+                      rebook: dateWeeksFromNow(suggestedRebookWeeks),
+                    }))}
+                  >
+                    Use suggestion
+                  </button>
+                </span>
+              </label>
+            </div>
+
+            <div className="visit-note-actions">
+              <button type="button" className="secondary" onClick={() => setNoteAppointment(null)}>Skip for now</button>
+              <button type="button" className="primary" disabled={noteSaving} onClick={saveVisitNote}>
+                {noteSaving ? "Saving…" : "Save to customer"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -1286,6 +1477,7 @@ function Section({ title, color, subtitle, items, renderItem }) {
   return (
     <div style={{ marginTop: 16 }}>
       <div
+        className="appointments-card-grid"
         style={{
           display: "flex",
           alignItems: "baseline",
@@ -1331,6 +1523,7 @@ function AppointmentCard({ appt, onDone, onEdit, onDelete, onResched }) {
 
   return (
     <div
+      className="appointment-card"
       style={{
         background: CARD,
         border: `1px solid ${BORDER}`,
@@ -1441,7 +1634,7 @@ function AppointmentCard({ appt, onDone, onEdit, onDelete, onResched }) {
         )}
       </div>
 
-      <div style={{ display: "flex", gap: 8, flexWrap: "wrap", justifyContent: "flex-end" }}>
+      <div className="appointment-card-actions" style={{ display: "flex", gap: 8, flexWrap: "wrap", justifyContent: "flex-end" }}>
         <button
           onClick={onDone}
           style={{
