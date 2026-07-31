@@ -198,7 +198,7 @@ export default function Signup() {
   }
 
   return (
-    <div style={{ minHeight: "100vh", background: BG.page, color: "#fff" }}>
+    <div className="auth-page auth-signup-page" style={{ minHeight: "100vh", background: BG.page, color: "#fff" }}>
       {/* gold glows */}
       <div aria-hidden style={{ position: "fixed", inset: 0, pointerEvents: "none", zIndex: 0 }}>
         <div
@@ -231,8 +231,9 @@ export default function Signup() {
       </div>
 
       {/* top bar */}
-      <div style={{ position: "sticky", top: 0, zIndex: 5, background: "#0C0D10", borderBottom: `1px solid ${BG.line}` }}>
+      <div className="auth-topbar" style={{ position: "sticky", top: 0, zIndex: 5, background: "#0C0D10", borderBottom: `1px solid ${BG.line}` }}>
         <div
+          className="auth-topbar-inner"
           style={{
             maxWidth: 1120,
             margin: "0 auto",
@@ -257,6 +258,7 @@ export default function Signup() {
 
       {/* content (symmetrical spacing) */}
       <div
+        className="auth-layout auth-signup-layout"
         style={{
           position: "relative",
           zIndex: 1,
@@ -270,6 +272,7 @@ export default function Signup() {
       >
         {/* info/benefits card */}
         <aside
+          className="auth-brand-card auth-signup-brand"
           style={{
             borderRadius: 24,
             border: `1px solid ${BG.line}`,
@@ -304,6 +307,7 @@ export default function Signup() {
 
         {/* form card */}
         <main
+          className="auth-form-card auth-signup-card"
           style={{
             borderRadius: 24,
             border: `1px solid ${BG.line}`,
@@ -314,7 +318,7 @@ export default function Signup() {
             overflow: "hidden",
           }}
         >
-          <form onSubmit={handleSignup} autoComplete="on" style={{ position: "relative", minHeight: 460 }}>
+          <form className="auth-form auth-signup-form" onSubmit={handleSignup} autoComplete="on" style={{ position: "relative", minHeight: 460 }}>
             <Progress step={step} total={SLIDES.length} />
 
             <div style={{ position: "relative", marginTop: 16, minHeight: 360 }}>
@@ -341,14 +345,16 @@ export default function Signup() {
                     <div style={{ flex: 1, borderBottom: `1px solid ${BG.line}` }} />
                   </div>
 
-                  <GoogleLogin
-                    onSuccess={handleGoogleSuccess}
-                    onError={() => setError("Google Signup Failed")}
-                    width="100%"
-                    text="signup_with"
-                    theme="filled_black"
-                    shape="pill"
-                  />
+                  <div className="auth-google-button">
+                    <GoogleLogin
+                      onSuccess={handleGoogleSuccess}
+                      onError={() => setError("Google Signup Failed")}
+                      width="400"
+                      text="signup_with"
+                      theme="filled_black"
+                      shape="pill"
+                    />
+                  </div>
                   {googleProcessing && <div style={{ color: BG.gold, marginTop: 8 }}>Loading Google…</div>}
                 </div>
               </Slide>

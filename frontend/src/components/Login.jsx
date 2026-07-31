@@ -503,7 +503,7 @@ export default function Login() {
 
   // ---------- UI ----------
   return (
-    <div style={{ minHeight: "100vh", background: BG.page, color: "#fff" }}>
+    <div className="auth-page auth-login-page" style={{ minHeight: "100vh", background: BG.page, color: "#fff" }}>
       {/* gold glows */}
       <div
         aria-hidden
@@ -545,6 +545,7 @@ export default function Login() {
 
       {/* top bar */}
       <div
+        className="auth-topbar"
         style={{
           position: "sticky",
           top: 0,
@@ -554,6 +555,7 @@ export default function Login() {
         }}
       >
         <div
+          className="auth-topbar-inner"
           style={{
             maxWidth: 1120,
             margin: "0 auto",
@@ -588,6 +590,7 @@ export default function Login() {
 
       {/* content */}
       <div
+        className="auth-layout auth-login-layout"
         style={{
           position: "relative",
           zIndex: 1,
@@ -601,6 +604,7 @@ export default function Login() {
       >
         {/* left brand card */}
         <div
+          className="auth-brand-card"
           style={{
             display: "flex",
             alignItems: "center",
@@ -612,7 +616,7 @@ export default function Login() {
             minHeight: 520,
           }}
         >
-          <div style={{ display: "flex", alignItems: "center", gap: 18 }}>
+          <div className="auth-brand-lockup" style={{ display: "flex", alignItems: "center", gap: 18 }}>
             <img
               src={logo}
               alt="RetainAI"
@@ -644,6 +648,7 @@ export default function Login() {
 
         {/* right login card */}
         <div
+          className="auth-form-card auth-login-card"
           style={{
             borderRadius: 24,
             border: `1px solid ${BG.line}`,
@@ -666,7 +671,7 @@ export default function Login() {
             {resetToken ? "Choose a new password" : "Welcome back"}
           </h2>
 
-          <form onSubmit={resetToken ? handlePasswordReset : (mfaRequired ? handleMfa : handleLogin)}>
+          <form className="auth-form" onSubmit={resetToken ? handlePasswordReset : (mfaRequired ? handleMfa : handleLogin)}>
             <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
               {resetToken ? (
                 <>
@@ -950,14 +955,16 @@ export default function Login() {
                 <div style={{ flex: 1, borderBottom: `1px solid ${BG.line}` }} />
               </div>
 
-              <GoogleLogin
-                onSuccess={handleGoogleSuccess}
-                onError={() => setError("Google Login Failed")}
-                width="370"
-                shape="pill"
-                theme="filled_black"
-                text="signin_with"
-              />
+              <div className="auth-google-button">
+                <GoogleLogin
+                  onSuccess={handleGoogleSuccess}
+                  onError={() => setError("Google Login Failed")}
+                  width="370"
+                  shape="pill"
+                  theme="filled_black"
+                  text="signin_with"
+                />
+              </div>
                 </>
               )}
 

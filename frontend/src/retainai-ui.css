@@ -37,6 +37,12 @@ textarea {
   font: inherit;
 }
 
+input,
+select,
+textarea {
+  min-width: 0;
+}
+
 button,
 a,
 input,
@@ -863,5 +869,189 @@ video {
 
   .crm-main-content button {
     min-height: 42px;
+  }
+}
+
+/* Authentication and onboarding are intentionally independent of the app
+   shell, so their inline desktop presentation gets explicit device rules. */
+.auth-page {
+  width: 100%;
+  min-width: 0;
+  overflow-x: clip;
+}
+
+.auth-layout,
+.auth-topbar-inner,
+.auth-brand-card,
+.auth-form-card,
+.auth-form {
+  min-width: 0;
+}
+
+.auth-form input,
+.auth-form select,
+.auth-form textarea {
+  width: 100%;
+  max-width: 100%;
+  box-sizing: border-box;
+}
+
+.auth-google-button,
+.auth-google-button > div,
+.auth-google-button iframe {
+  width: 100% !important;
+  max-width: 100% !important;
+}
+
+@media (max-width: 900px) {
+  .auth-layout {
+    width: min(100%, 620px) !important;
+    grid-template-columns: minmax(0, 1fr) !important;
+    gap: 16px !important;
+    padding: 36px 18px 48px !important;
+  }
+
+  .auth-brand-card {
+    min-height: 0 !important;
+  }
+
+  .auth-login-page .auth-brand-card {
+    display: none !important;
+  }
+
+  .auth-signup-brand {
+    padding: 20px !important;
+  }
+
+  .auth-signup-brand > div:first-child,
+  .auth-signup-brand h1,
+  .auth-signup-brand ul {
+    margin-top: 8px !important;
+  }
+
+  .auth-signup-brand > div:last-child {
+    position: static !important;
+    margin-top: 14px;
+  }
+
+  .auth-form-card {
+    width: 100%;
+    min-height: 0 !important;
+    box-sizing: border-box;
+  }
+}
+
+@media (max-width: 620px) {
+  .auth-topbar-inner {
+    min-height: 58px;
+    gap: 12px;
+    padding: 10px 14px !important;
+  }
+
+  .auth-topbar-inner > div:last-child {
+    max-width: 52%;
+    text-align: right;
+    line-height: 1.35;
+  }
+
+  .auth-layout {
+    width: 100% !important;
+    padding: 18px 10px max(30px, env(safe-area-inset-bottom)) !important;
+  }
+
+  .auth-signup-brand {
+    display: none !important;
+  }
+
+  .auth-form-card {
+    padding: 20px 16px !important;
+    border-radius: 18px !important;
+  }
+
+  .auth-login-card {
+    justify-content: flex-start !important;
+  }
+
+  .auth-login-card h2 {
+    font-size: 1.55rem !important;
+  }
+
+  .auth-signup-form {
+    min-height: 470px !important;
+  }
+
+  .auth-form button,
+  .auth-form a[role="button"] {
+    min-height: 44px;
+  }
+
+  .auth-brand-lockup {
+    flex-direction: column;
+    text-align: center;
+  }
+
+  .auth-brand-lockup img {
+    width: 64px !important;
+    height: 64px !important;
+  }
+
+  .auth-brand-lockup > div > div:first-child {
+    font-size: 2rem !important;
+  }
+
+  /* Preserve data-rich sections on small screens without breaking the page. */
+  .product-page,
+  .retention-overview,
+  .messages-page,
+  .notif-root,
+  .settings-layout {
+    min-width: 0 !important;
+    max-width: 100% !important;
+  }
+
+  .product-tabs {
+    margin-inline: -2px;
+    scroll-snap-type: x proximity;
+  }
+
+  .product-tab {
+    min-height: 44px;
+    scroll-snap-align: start;
+  }
+
+  .product-card,
+  .owner-account-detail {
+    padding: 15px !important;
+    border-radius: 14px !important;
+  }
+
+  .owner-detail-grid {
+    grid-template-columns: minmax(0, 1fr) !important;
+  }
+
+  .owner-table-wrap {
+    margin-inline: -15px;
+    padding-inline: 15px;
+    scrollbar-gutter: stable;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  .owner-table {
+    min-width: 760px;
+  }
+
+  .app-section-hero h1,
+  .product-hero h1 {
+    overflow-wrap: anywhere;
+  }
+}
+
+@media (max-width: 380px) {
+  .auth-form-card {
+    padding: 18px 13px !important;
+  }
+
+  .auth-topbar-inner > div:last-child {
+    font-size: 12px !important;
   }
 }
