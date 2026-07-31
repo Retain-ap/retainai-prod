@@ -4104,22 +4104,17 @@ def wa_resolve_waba_id(force: bool = False, workspace_email: str = "") -> str:
     ):
         return cached["id"]
 
+    # The Cloud API phone-number object no longer exposes a
+    # `whatsapp_business_account` field. Use the WABA ID supplied by Meta's
+    # API Setup screen instead of requesting that invalid Graph field.
+    if config["waba_id"]:
+        _WABA_RES[cache_key] = {"id": config["waba_id"], "checked_at": now}
+        return config["waba_id"]
+
     try:
-        token, phone_id = wa_env(workspace_email)
-        url = f"https://graph.facebook.com/{os.getenv('WHATSAPP_API_VERSION', 'v24.0')}/{phone_id}"
-        headers = {"Authorization": f"Bearer {token}"}
-        params = {"fields": "whatsapp_business_account{id},display_phone_number"}
-        r = pyrequests.get(url, headers=headers, params=params, timeout=30)
-
-        wid = None
-        if r.ok:
-            wid = (((r.json() or {}).get("whatsapp_business_account") or {}).get("id"))
-
-        if not wid:
-            wid = config["waba_id"]
-
-        _WABA_RES[cache_key] = {"id": wid, "checked_at": now}
-        return wid
+        wa_env(workspace_email)
+        _WABA_RES[cache_key] = {"id": "", "checked_at": now}
+        return ""
 
     except Exception as e:
         try:
@@ -4604,8 +4599,11 @@ def workspace_whatsapp_integration():
     phone_id = str(data.get("phone_id") or "").strip()
     waba_id = str(data.get("waba_id") or "").strip()
     business_number = str(data.get("business_number") or "").strip()
-    if not phone_id or (not access_token and not record.get("wa_access_token_encrypted")):
-        return jsonify({"ok": False, "error": "Access token and phone number ID are required."}), 400
+    if not phone_id or not waba_id or (not access_token and not record.get("wa_access_token_encrypted")):
+        return jsonify({
+            "ok": False,
+            "error": "Access token, phone number ID, and WhatsApp business account ID are required.",
+        }), 400
     if access_token:
         record["wa_access_token_encrypted"] = _encrypt_mfa_secret(access_token)
     record["wa_phone_id"] = phone_id
@@ -4623,7 +4621,7 @@ def workspace_whatsapp_integration():
         check = pyrequests.get(
             f"https://graph.facebook.com/{version}/{config['phone_id']}",
             headers={"Authorization": f"Bearer {config['token']}"},
-            params={"fields": "id,display_phone_number,verified_name,whatsapp_business_account{id}"},
+            params={"fields": "id,display_phone_number,verified_name,quality_rating"},
             timeout=12,
         )
         body = check.json() if check.content else {}
@@ -4632,17 +4630,30 @@ def workspace_whatsapp_integration():
             save_users(users)
             error = (body.get("error") or {}).get("message") or "Meta rejected these credentials."
             return jsonify({"ok": False, "error": str(error)[:240]}), 422
-        if not record.get("wa_waba_id"):
-            record["wa_waba_id"] = str(((body.get("whatsapp_business_account") or {}).get("id")) or "")
-            users[workspace] = record
+
+        waba_check = pyrequests.get(
+            f"https://graph.facebook.com/{version}/{config['waba_id']}",
+            headers={"Authorization": f"Bearer {config['token']}"},
+            params={"fields": "id"},
+            timeout=12,
+        )
+        waba_body = waba_check.json() if waba_check.content else {}
+        if not waba_check.ok or str(waba_body.get("id") or "") != config["waba_id"]:
+            users[workspace] = previous_record
             save_users(users)
+            error = (waba_body.get("error") or {}).get("message") or "Meta could not validate this WhatsApp business account ID."
+            return jsonify({"ok": False, "error": str(error)[:240]}), 422
+
+        record["wa_business_number"] = body.get("display_phone_number") or business_number
+        users[workspace] = record
+        save_users(users)
         return jsonify({
             "ok": True,
             "connected": True,
             "source": "workspace",
             "phone_id": config["phone_id"],
             "waba_id": record.get("wa_waba_id") or "",
-            "business_number": body.get("display_phone_number") or business_number,
+            "business_number": record.get("wa_business_number") or "",
             "verified_name": body.get("verified_name") or "",
         }), 200
     except Exception as exc:

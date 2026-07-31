@@ -256,7 +256,8 @@ export default function WhatsAppHealthCard({ user }) {
               <input
                 value={form.waba_id}
                 onChange={(event) => setForm({ ...form, waba_id: event.target.value })}
-                placeholder="Detected automatically when possible"
+                placeholder="From Meta WhatsApp API Setup"
+                required
               />
             </label>
             <label>
