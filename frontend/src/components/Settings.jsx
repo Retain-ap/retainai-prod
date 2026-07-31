@@ -606,6 +606,40 @@ export default function Settings({
     }
   };
 
+  const deleteAccountNow = async () => {
+    const phrase = `DELETE ${profile.email}`;
+    const confirmation = window.prompt(
+      `This permanently deletes the workspace, team access, contacts, messages, appointments, automations, and account data. This cannot be undone.\n\nType ${phrase} to continue.`
+    );
+    if (confirmation !== phrase) return;
+    if (!window.confirm("Final confirmation: permanently delete this RetainAI workspace now?")) {
+      return;
+    }
+    setInfo("Cancelling billing and securely deleting the workspace…");
+    try {
+      const response = await fetch(apiUrl("account/deletion"), {
+        method: "POST",
+        credentials: "include",
+        headers: { "Content-Type": "application/json", Accept: "application/json" },
+        body: JSON.stringify({ action: "delete_now", confirmation }),
+      });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) {
+        throw new Error(
+          data.message ||
+          (data.error === "billing_cancellation_failed"
+            ? "Billing could not be cancelled safely. Open the billing portal or contact support before deleting."
+            : data.error) ||
+          "The workspace could not be deleted."
+        );
+      }
+      localStorage.clear();
+      window.location.assign("/login?account=deleted");
+    } catch (error) {
+      setInfo(error.message || "The workspace could not be deleted.");
+    }
+  };
+
   const MAX_W = 1120;
 
   if (!profile?.email) {
@@ -1037,6 +1071,27 @@ export default function Settings({
                     <button className="account-secondary-btn" onClick={scheduleAccountDeletion}>Schedule deletion</button>
                   )}
                   <a className="account-secondary-btn" href={supportTopicMailto("account closure")}>Get help</a>
+                </div>
+              </article>
+              <article className="account-card account-danger-card">
+                <div className="account-card-copy">
+                  <h3>Delete workspace now</h3>
+                  <p>
+                    Permanently remove the account and workspace immediately. RetainAI first attempts to cancel
+                    any active subscription so the customer cannot be billed after deletion.
+                  </p>
+                </div>
+                <div className="account-card-content">
+                  <div className="account-detail-box">
+                    This cannot be undone. Download the workspace export before continuing.
+                  </div>
+                </div>
+                <div className="account-card-actions">
+                  {profile.platformOwner ? (
+                    <button className="account-secondary-btn" disabled>Platform owner account protected</button>
+                  ) : (
+                    <button className="account-danger-btn" onClick={deleteAccountNow}>Delete now</button>
+                  )}
                 </div>
               </article>
             </div>

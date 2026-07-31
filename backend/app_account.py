@@ -4,6 +4,7 @@ import os
 import time
 from uuid import uuid4
 
+import stripe
 from flask import Blueprint, Response, jsonify, request, session
 
 from storage import DATA_ROOT, delete_users, load_leads, load_users, save_leads, save_users
@@ -92,6 +93,53 @@ def _purge_workspace_json(workspace):
             continue
 
 
+def _purge_workspace(workspace, users):
+    removed = [
+        key
+        for key, record in users.items()
+        if _norm(key) == workspace
+        or (isinstance(record, dict) and _norm(record.get("org_id")) == workspace)
+    ]
+    delete_users(removed)
+    leads = load_leads() or {}
+    if isinstance(leads, dict) and workspace in leads:
+        leads.pop(workspace, None)
+        save_leads(leads)
+    _purge_workspace_json(workspace)
+    return len(removed)
+
+
+def _cancel_workspace_subscriptions(owner):
+    subscription_id = str(owner.get("stripe_subscription_id") or "").strip()
+    customer_id = str(owner.get("stripe_customer_id") or "").strip()
+    if not subscription_id and not customer_id:
+        return 0
+    secret = str(os.getenv("STRIPE_SECRET_KEY") or "").strip()
+    if not secret:
+        raise RuntimeError("billing_cancellation_unavailable")
+    stripe.api_key = secret
+    subscriptions = []
+    if subscription_id:
+        subscriptions.append(subscription_id)
+    elif customer_id:
+        page = stripe.Subscription.list(customer=customer_id, status="all", limit=100)
+        subscriptions.extend(
+            item.get("id")
+            for item in page.auto_paging_iter()
+            if str(item.get("status") or "").lower()
+            in {"active", "trialing", "past_due", "unpaid"}
+        )
+    cancelled = 0
+    for current_id in filter(None, subscriptions):
+        cancel_method = getattr(stripe.Subscription, "cancel", None)
+        if callable(cancel_method):
+            cancel_method(current_id)
+        else:
+            stripe.Subscription.delete(current_id)
+        cancelled += 1
+    return cancelled
+
+
 def _purge_due_deletions():
     global _last_deletion_sweep
     now_epoch = time.time()
@@ -120,18 +168,14 @@ def _purge_due_deletions():
         if scheduled <= now:
             due.append(_norm(email))
     for workspace in due:
-        removed = [
-            key
-            for key, record in users.items()
-            if _norm(key) == workspace
-            or (isinstance(record, dict) and _norm(record.get("org_id")) == workspace)
-        ]
-        delete_users(removed)
-        leads = load_leads() or {}
-        if isinstance(leads, dict) and workspace in leads:
-            leads.pop(workspace, None)
-            save_leads(leads)
-        _purge_workspace_json(workspace)
+        owner = users.get(workspace) if isinstance(users.get(workspace), dict) else {}
+        try:
+            _cancel_workspace_subscriptions(owner)
+        except Exception:
+            # Never erase the account while its paid subscription might still
+            # renew. The next hourly sweep will retry after billing recovers.
+            continue
+        _purge_workspace(workspace, users)
 
 
 @account_bp.before_app_request
@@ -181,6 +225,13 @@ def account_deletion():
     data = request.get_json(silent=True) or {}
     action = str(data.get("action") or "").strip().lower()
     if action == "schedule":
+        if workspace in {
+            _norm(value)
+            for value in os.getenv(
+                "PLATFORM_OWNER_EMAILS", "owner@retainai.ca,mateo.zuf23@gmail.com"
+            ).split(",")
+        }:
+            return jsonify({"error": "platform_owner_account_locked"}), 403
         if _norm(data.get("confirmation")) != workspace:
             return jsonify({"error": "email_confirmation_required"}), 400
         now = datetime.datetime.now(datetime.timezone.utc)
@@ -194,6 +245,33 @@ def account_deletion():
         owner.pop("status_before_deletion", None)
         owner.pop("deletion_requested_at", None)
         owner.pop("deletion_scheduled_for", None)
+    elif action == "delete_now":
+        platform_owners = {
+            _norm(value)
+            for value in os.getenv(
+                "PLATFORM_OWNER_EMAILS", "owner@retainai.ca,mateo.zuf23@gmail.com"
+            ).split(",")
+        }
+        if workspace in platform_owners:
+            return jsonify({"error": "platform_owner_account_locked"}), 403
+        confirmation = str(data.get("confirmation") or "").strip()
+        if confirmation != f"DELETE {workspace}":
+            return jsonify({"error": "delete_confirmation_required"}), 400
+        try:
+            subscriptions_cancelled = _cancel_workspace_subscriptions(owner)
+        except Exception:
+            return jsonify({
+                "error": "billing_cancellation_failed",
+                "message": "RetainAI could not safely cancel the active subscription. Open the billing portal or contact support before deleting.",
+            }), 409
+        records_removed = _purge_workspace(workspace, users)
+        session.clear()
+        return jsonify({
+            "ok": True,
+            "deleted": True,
+            "records_removed": records_removed,
+            "subscriptions_cancelled": subscriptions_cancelled,
+        }), 200
     else:
         return jsonify({"error": "unsupported_action"}), 400
     users[workspace] = owner

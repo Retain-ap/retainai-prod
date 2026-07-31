@@ -524,6 +524,29 @@ video {
   color: #d4d7dc;
 }
 
+.account-danger-card {
+  border-color: rgba(255, 92, 92, 0.34) !important;
+  background: linear-gradient(145deg, rgba(120, 24, 24, 0.16), rgba(255,255,255,0.02)) !important;
+}
+
+.account-danger-btn {
+  min-height: 42px;
+  padding: 0 16px;
+  border: 1px solid rgba(255, 104, 104, 0.65);
+  border-radius: 10px;
+  background: #9f2929;
+  color: #fff;
+  font: inherit;
+  font-size: 13px;
+  font-weight: 850;
+  cursor: pointer;
+}
+
+.account-danger-btn:hover:not(:disabled) {
+  background: #bd3434;
+  transform: translateY(-1px);
+}
+
 .account-danger-btn {
   flex: 0 1 auto;
   border: 1px solid rgba(239, 106, 106, 0.35);

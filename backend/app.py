@@ -1064,6 +1064,7 @@ def api_get_user(email):
         "canInviteTeam": role == "owner",
         "canEditBusiness": role == "owner",
         "canManageBilling": role == "owner",
+        "platformOwner": _is_platform_owner(email),
     }
 
     return jsonify(out), 200
@@ -1131,6 +1132,7 @@ def api_profile():
             "canInviteTeam": role == "owner",
             "canEditBusiness": role == "owner",
             "canManageBilling": role == "owner",
+            "platformOwner": _is_platform_owner(email),
         }), 200
 
     # POST
