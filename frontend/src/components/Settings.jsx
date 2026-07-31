@@ -51,6 +51,7 @@ const TABS = [
   { key: "billing", label: "Billing", icon: <FaCreditCard /> },
   { key: "notifications", label: "Notifications", icon: <FaEnvelope /> },
   { key: "security", label: "Security", icon: <FaShieldAlt /> },
+  { key: "account", label: "Data & Account", icon: <FaTrash /> },
   { key: "help", label: "Help & Support", icon: <FaQuestionCircle /> },
 ];
 
@@ -594,6 +595,17 @@ export default function Settings({
     }
   };
 
+  const cancelAccountDeletion = async () => {
+    try {
+      await postJson("account/deletion", { action: "cancel" });
+      setInfo("Scheduled deletion cancelled. Your workspace will remain active.");
+      if (typeof refreshUser === "function") await refreshUser();
+      await syncProfileFromBackend(profile.email);
+    } catch (error) {
+      setInfo(error.message || "Could not cancel scheduled deletion.");
+    }
+  };
+
   const MAX_W = 1120;
 
   if (!profile?.email) {
@@ -959,17 +971,72 @@ export default function Settings({
                 <div className="account-card-copy"><h3>Security recommendation</h3><p>Use a unique password and remove team members as soon as they no longer need workspace access.</p></div>
                 <div className="account-card-content"><div className="account-detail-box">Sensitive integrations and platform-owner controls are verified by the backend, not by browser storage.</div></div>
               </article>
+            </div>
+          </div>
+        )}
+
+        {tab === "account" && (
+          <div className="integrations-page" style={{ maxWidth: MAX_W, margin: "0 auto" }}>
+            <div className="settings-page-heading">
+              <div>
+                <span className="settings-page-eyebrow">Ownership and privacy</span>
+                <h2>Data & Account</h2>
+                <p>Download your information, manage your subscription, or close your workspace without getting stuck.</p>
+              </div>
+              <div className="settings-page-security"><FaShieldAlt /> Owner protected</div>
+            </div>
+            <div className="integration-overview">
+              <div><span>Workspace</span><strong>{profile.business || profile.email}</strong></div>
+              <div><span>Account owner</span><strong>{profile.orgOwnerEmail || profile.email}</strong></div>
+              <div>
+                <span>Deletion status</span>
+                <strong className={profile.deletion_scheduled_for ? "muted" : "ready"}>
+                  {profile.deletion_scheduled_for ? "Scheduled" : "Not scheduled"}
+                </strong>
+              </div>
+            </div>
+            <div className="connected-accounts-grid">
               <article className="account-card">
-                <div className="account-card-copy"><h3>Download your data</h3><p>Export your workspace profile, team, and contacts before making account changes.</p></div>
+                <div className="account-card-copy">
+                  <h3>Download workspace data</h3>
+                  <p>Export your profile, team, and contacts. Credentials and integration tokens are always excluded.</p>
+                </div>
                 <div className="account-card-actions">
                   <button className="account-primary-btn" onClick={downloadWorkspaceData}>Download export</button>
                 </div>
               </article>
               <article className="account-card">
-                <div className="account-card-copy"><h3>Close workspace</h3><p>Workspace owners can schedule deletion with a 14-day recovery window. This never deletes immediately.</p></div>
-                <div className="account-card-content"><div className="account-detail-box">Download your data first. Billing should also be cancelled through the secure billing portal.</div></div>
+                <div className="account-card-copy">
+                  <h3>Subscription and invoices</h3>
+                  <p>Update your payment method, review invoices, change plans, or cancel billing through Stripe.</p>
+                </div>
                 <div className="account-card-actions">
-                  <button className="account-secondary-btn" onClick={scheduleAccountDeletion}>Schedule deletion</button>
+                  <button className="account-primary-btn" onClick={openSubscriptionBilling}>
+                    Open billing portal
+                  </button>
+                </div>
+              </article>
+              <article className="account-card">
+                <div className="account-card-copy">
+                  <h3>{profile.deletion_scheduled_for ? "Workspace deletion scheduled" : "Close workspace"}</h3>
+                  <p>
+                    {profile.deletion_scheduled_for
+                      ? `Your recovery window ends ${new Date(profile.deletion_scheduled_for).toLocaleString()}.`
+                      : "Schedule deletion with a 14-day recovery window. Your workspace stays accessible during that period."}
+                  </p>
+                </div>
+                <div className="account-card-content">
+                  <div className="account-detail-box">
+                    Download your data and cancel billing first. Only the workspace owner can make this change.
+                  </div>
+                </div>
+                <div className="account-card-actions">
+                  {profile.deletion_scheduled_for ? (
+                    <button className="account-primary-btn" onClick={cancelAccountDeletion}>Cancel deletion</button>
+                  ) : (
+                    <button className="account-secondary-btn" onClick={scheduleAccountDeletion}>Schedule deletion</button>
+                  )}
+                  <a className="account-secondary-btn" href={supportTopicMailto("account closure")}>Get help</a>
                 </div>
               </article>
             </div>

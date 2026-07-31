@@ -293,7 +293,7 @@ export default function NotificationsCenter({ user }) {
     return (
       <div className="notif-root">
         <div className="notif-header">
-          <h2 className="notif-title">Notifications</h2>
+          <h2 className="notif-title">Activity summary</h2>
           <p className="notif-subtitle">Please log in to view notifications.</p>
         </div>
       </div>

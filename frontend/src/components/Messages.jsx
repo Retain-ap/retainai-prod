@@ -1516,7 +1516,6 @@ export default function Messages({ user, leads = [], defaultTemplate = "", langu
   if (!Array.isArray(leads) || !leads.length) {
     return (
       <div style={{ width: "100%", minHeight: "100vh", background: C.bg }}>
-        <Header />
         <div style={{ color: C.sub, padding: 18 }}>Add a lead with a WhatsApp number to start chatting.</div>
       </div>
     );
@@ -1528,8 +1527,6 @@ export default function Messages({ user, leads = [], defaultTemplate = "", langu
 
   return (
     <div className="messages-page" style={{ width: "100%", minHeight: "100vh", background: C.bg }}>
-      <Header />
-
       <div className="messages-layout" style={{ display: "grid", gridTemplateColumns: "300px 1fr", gap: 18 }}>
         {/* LEFT – chat list */}
         <div
@@ -2246,31 +2243,6 @@ export default function Messages({ user, leads = [], defaultTemplate = "", langu
           </div>
         </div>
       </div>
-    </div>
-  );
-}
-
-/** ===== small UI atoms ===== */
-function Header() {
-  return (
-    <div
-      style={{
-        padding: "0 0 18px 0",
-        borderBottom: `1px solid ${C.border}`,
-        marginBottom: 18,
-      }}
-    >
-      <h2
-        style={{
-          color: C.text,
-          fontWeight: 900,
-          margin: 0,
-          letterSpacing: "-0.5px",
-          fontSize: 28,
-        }}
-      >
-        Messages
-      </h2>
     </div>
   );
 }

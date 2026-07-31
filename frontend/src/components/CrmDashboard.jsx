@@ -24,6 +24,7 @@ import OwnerConsole from "./OwnerConsole";
 import CommandPalette from "./CommandPalette";
 import TrialCommandBar from "./TrialCommandBar";
 import OnboardingGuide from "./OnboardingGuide";
+import "./AppSectionShell.css";
 
 const SECTION_LABELS = {
   overview: "Overview",
@@ -37,6 +38,17 @@ const SECTION_LABELS = {
   invoices: "Invoices",
   settings: "Settings",
   owner: "Owner Console",
+};
+
+const SECTION_META = {
+  dashboard: ["Customer workspace", "Contacts", "Search, organize, and act on every customer relationship."],
+  calendar: ["Schedule", "Calendar", "Keep appointments, availability, and customer follow-ups aligned."],
+  messages: ["Conversations", "Messages", "Manage WhatsApp conversations and thoughtful AI-assisted replies."],
+  notifications: ["Activity centre", "Notifications", "Review customer activity, reminders, and workflow updates."],
+  "notification-send": ["Customer outreach", "Send notification", "Send a clear, targeted update to the right contacts."],
+  "ai-prompts": ["AI workspace", "AI prompts", "Create relevant outreach using customer context and your brand voice."],
+  invoices: ["Revenue", "Invoices", "Create invoices, track payment status, and follow up without losing context."],
+  automations: ["Playbooks", "Automations", "Build reliable customer journeys with visible triggers and outcomes."],
 };
 
 const DEFAULT_TAGS = [
@@ -117,6 +129,12 @@ function CrmDashboard({ authenticatedUser }) {
 
   useEffect(() => {
     const params = new URLSearchParams(location.search);
+    const requestedSettingsTab = params.get("tab");
+    if (requestedSettingsTab) {
+      setSettingsTab(requestedSettingsTab);
+      setSection("settings");
+      return;
+    }
     if (location.pathname === "/app/import" || params.get("open") === "imports") {
       setSettingsTab("imports");
       setSection("settings");
@@ -844,6 +862,17 @@ function CrmDashboard({ authenticatedUser }) {
           boxSizing: "border-box",
         }}
       >
+        {SECTION_META[section] && (
+          <header className="app-section-hero">
+            <div>
+              <span className="app-section-eyebrow">{SECTION_META[section][0]}</span>
+              <h1>{SECTION_META[section][1]}</h1>
+              <p>{SECTION_META[section][2]}</p>
+            </div>
+            <span className="app-section-live"><i /> Workspace live</span>
+          </header>
+        )}
+
         {section === "overview" && (
           <RetentionCommandCenter
             leads={leads}

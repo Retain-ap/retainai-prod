@@ -1,12 +1,29 @@
 import datetime
 import json
+import os
+import time
+from uuid import uuid4
 
 from flask import Blueprint, Response, jsonify, request, session
 
-from storage import load_leads, load_users, save_users
+from storage import DATA_ROOT, delete_users, load_leads, load_users, save_leads, save_users
 
 
 account_bp = Blueprint("account_bp", __name__)
+_last_deletion_sweep = 0
+_WORKSPACE_JSON_FILES = (
+    "notifications.json",
+    "appointments.json",
+    "whatsapp_chats.json",
+    "whatsapp_status.json",
+    "whatsapp_webhook_events.json",
+    "whatsapp_unmatched.json",
+    "automations.json",
+    "automations_state.json",
+    "automation_users.json",
+    "subscriptions.json",
+    "invites.json",
+)
 
 
 def _norm(value):
@@ -35,6 +52,91 @@ def _clean(record):
         for key, value in record.items()
         if key not in blocked and "token" not in key.lower() and "secret" not in key.lower()
     }
+
+
+def _atomic_json(path, value):
+    temp_path = f"{path}.{uuid4().hex}.tmp"
+    with open(temp_path, "w", encoding="utf-8") as handle:
+        json.dump(value, handle, indent=2, ensure_ascii=False)
+    os.replace(temp_path, path)
+
+
+def _purge_workspace_json(workspace):
+    identity_fields = {"email", "user_email", "owner_email", "org_email", "org_id", "workspace"}
+    for filename in _WORKSPACE_JSON_FILES:
+        path = os.path.join(DATA_ROOT, filename)
+        if not os.path.isfile(path):
+            continue
+        try:
+            with open(path, "r", encoding="utf-8") as handle:
+                value = json.load(handle)
+            changed = False
+            if isinstance(value, dict):
+                for key in list(value):
+                    if _norm(key) == workspace:
+                        value.pop(key, None)
+                        changed = True
+            elif isinstance(value, list):
+                kept = []
+                for row in value:
+                    belongs = isinstance(row, dict) and any(
+                        _norm(row.get(field)) == workspace for field in identity_fields
+                    )
+                    changed = changed or belongs
+                    if not belongs:
+                        kept.append(row)
+                value = kept
+            if changed:
+                _atomic_json(path, value)
+        except Exception:
+            continue
+
+
+def _purge_due_deletions():
+    global _last_deletion_sweep
+    now_epoch = time.time()
+    if now_epoch - _last_deletion_sweep < 3600:
+        return
+    _last_deletion_sweep = now_epoch
+    users = load_users() or {}
+    if not isinstance(users, dict):
+        return
+    platform_owners = {
+        _norm(value)
+        for value in os.getenv(
+            "PLATFORM_OWNER_EMAILS", "owner@retainai.ca,mateo.zuf23@gmail.com"
+        ).split(",")
+    }
+    now = datetime.datetime.now(datetime.timezone.utc)
+    due = []
+    for email, record in users.items():
+        if _norm(email) in platform_owners or not isinstance(record, dict):
+            continue
+        raw_due = record.get("deletion_scheduled_for")
+        try:
+            scheduled = datetime.datetime.fromisoformat(str(raw_due).replace("Z", "+00:00"))
+        except Exception:
+            continue
+        if scheduled <= now:
+            due.append(_norm(email))
+    for workspace in due:
+        removed = [
+            key
+            for key, record in users.items()
+            if _norm(key) == workspace
+            or (isinstance(record, dict) and _norm(record.get("org_id")) == workspace)
+        ]
+        delete_users(removed)
+        leads = load_leads() or {}
+        if isinstance(leads, dict) and workspace in leads:
+            leads.pop(workspace, None)
+            save_leads(leads)
+        _purge_workspace_json(workspace)
+
+
+@account_bp.before_app_request
+def sweep_due_account_deletions():
+    _purge_due_deletions()
 
 
 @account_bp.get("/api/account/export")

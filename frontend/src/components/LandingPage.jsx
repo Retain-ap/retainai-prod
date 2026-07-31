@@ -196,21 +196,21 @@ export default function LandingPage() {
           {/* LEFT COPY */}
           <div className="min-w-[320px]">
             <div className="text-sm mb-3 font-semibold uppercase tracking-widest" style={{ color: BG.goldDeep }}>
-              Emotional-AI CRM
+              Customer retention command centre
             </div>
             <motion.h1
               className="text-5xl md:text-6xl font-extrabold leading-tight tracking-tight"
               style={{ color: "#ffffff" }}
               initial="hidden" whileInView="visible" viewport={{ once: true }} variants={fadeUp}
             >
-              The CRM that keeps clients coming back.
+              Turn customer conversations into lasting relationships.
             </motion.h1>
             <motion.p
               className="text-xl md:text-2xl mt-6 font-medium max-w-xl"
               style={{ color: BG.text80 }}
               initial="hidden" whileInView="visible" viewport={{ once: true }} custom={2} variants={fadeUp}
             >
-              <b>WhatsApp + AI replies that sound human</b> — so more leads say yes.
+              Bring WhatsApp, contacts, appointments, follow-ups, invoices, and retention insights into one clear workspace.
             </motion.p>
 
             {/* Trust bullets */}
@@ -219,9 +219,9 @@ export default function LandingPage() {
               initial="hidden" whileInView="visible" viewport={{ once: true }} custom={2.5} variants={fadeUp}
               style={{ color: BG.text60 }}
             >
-              <li>✓ Setup in &lt; 10 minutes</li>
-              <li>✓ Cancel anytime</li>
-              <li>✓ Guided onboarding</li>
+              <li>✓ 14-day guided trial</li>
+              <li>✓ Clear billing controls</li>
+              <li>✓ Export your workspace</li>
             </motion.ul>
 
             <motion.div className="flex flex-wrap items-center gap-3 mt-8"
@@ -265,13 +265,13 @@ export default function LandingPage() {
         </div>
       </section>
 
-      {/* OUTCOME STRIP */}
+      {/* PRODUCT VALUE STRIP */}
       <section className="border-t" style={{ borderColor: BG.line }}>
         <div className="max-w-7xl mx-auto px-6 py-10 md:py-14 grid grid-cols-1 sm:grid-cols-3 gap-6">
           {[
-            ["Avg reply time", "↓ 42%"],
-            ["No-response leads", "↓ 31%"],
-            ["Customer rating (NPS)", "4.7 / 5"],
+            ["Customer context", "One view"],
+            ["WhatsApp replies", "Live inbox"],
+            ["Retention priorities", "Daily"],
           ].map(([label, stat]) => (
             <div key={label} className="rounded-2xl p-7 border" style={{ background: BG.card, borderColor: BG.line }}>
               <div className="text-sm mb-2" style={{ color: BG.text60 }}>{label}</div>
@@ -297,8 +297,8 @@ export default function LandingPage() {
           </div>
           <div className="grid grid-cols-1 md:grid-cols-4 gap-8 mt-10">
             {[
-              ["Salon", "Rebook 2–3 extra clients/week."],
-              ["Coaching", "Shorter time-to-yes with warm prompts."],
+              ["Salon", "Organize rebooking, reminders, and personal follow-ups."],
+              ["Coaching", "Keep warm leads moving with consistent, relevant outreach."],
               ["Home services", "Fewer missed jobs. Faster follow-ups."],
               ["Real estate", "Human replies that drive showings."],
             ].map(([title, desc]) => (

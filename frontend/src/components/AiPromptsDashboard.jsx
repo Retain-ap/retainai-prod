@@ -137,7 +137,7 @@ export default function AiPromptsDashboard({
       {!focusedLead ? (
         <>
           <div className="ai-header">
-            <h2>AI Smart Prompts & Retention Messaging</h2>
+            <h2>Customer prompt workspace</h2>
             <input
               className="ai-search"
               placeholder="Search leads by name, email, or tag…"

@@ -202,8 +202,9 @@ export default function Login() {
       if (!res.ok) {
         if (res.status === 404) {
           setError("No account found for this Google email. Please sign up first.");
-        } else if (res.status === 403) {
-          setError("Your account is not active yet. Please complete payment to activate.");
+        } else if ((res.status === 402 || res.status === 403) && (data.code === "billing_required" || data.account)) {
+          setBillingState(data.account || {});
+          setError(data.error || "Your trial has ended. Choose a plan to restore access.");
         } else {
           setError(data.error || "Google login failed.");
         }
@@ -265,6 +266,31 @@ export default function Login() {
       await enterWorkspace(data.user || {}, cleanedEmail);
     } catch (requestError) {
       setError(requestError.message || "Login error.");
+      setSubmitting(false);
+    }
+  }
+
+  async function continueToCheckout() {
+    setSubmitting(true);
+    setError("");
+    try {
+      const response = await fetch(email && password ? `${API_BASE}/api/login` : apiUrl("billing/checkout"), {
+        method: "POST",
+        credentials: "include",
+        headers: email && password ? { "Content-Type": "application/json" } : undefined,
+        body: email && password
+          ? JSON.stringify({ email: normEmail(email), password, remember })
+          : undefined,
+      });
+      const data = await response.json().catch(() => ({}));
+      const checkoutUrl = data.url || data.account?.checkoutUrl;
+      if ((!response.ok && response.status !== 402) || !checkoutUrl) {
+        throw new Error(data.error || "Secure checkout is temporarily unavailable.");
+      }
+      window.location.assign(checkoutUrl);
+    } catch (checkoutError) {
+      setError(checkoutError.message || "Secure checkout is temporarily unavailable.");
+    } finally {
       setSubmitting(false);
     }
   }
@@ -600,10 +626,28 @@ export default function Login() {
                       Continue to secure checkout
                     </a>
                   ) : (
-                    <small style={{ color: BG.text60 }}>
-                      {billingState.billingError ||
-                        "Contact support to reactivate your account."}
-                    </small>
+                    <>
+                      <button
+                        type="button"
+                        onClick={continueToCheckout}
+                        disabled={submitting}
+                        style={{
+                          width: "100%",
+                          textAlign: "center",
+                          background: BG.gold,
+                          color: "#0B0B0C",
+                          border: 0,
+                          borderRadius: 10,
+                          padding: "11px 14px",
+                          fontWeight: 900,
+                        }}
+                      >
+                        {submitting ? "Opening secure checkout…" : "Choose a plan and continue"}
+                      </button>
+                      <small style={{ display: "block", color: BG.text60, marginTop: 10 }}>
+                        {billingState.billingError || "You can review the plan and price before paying."}
+                      </small>
+                    </>
                   )}
                 </div>
               )}

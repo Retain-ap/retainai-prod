@@ -1048,6 +1048,8 @@ def api_get_user(email):
         "gcal_calendars": base.get("gcal_calendars", []),
 
         "status": base.get("status", ""),
+        "deletion_requested_at": base.get("deletion_requested_at", ""),
+        "deletion_scheduled_for": base.get("deletion_scheduled_for", ""),
         "role": role,
         "orgOwnerEmail": org_email,
 
@@ -1114,6 +1116,8 @@ def api_profile():
             "gcal_calendars": base.get("gcal_calendars", []),
 
             "status": base.get("status", ""),
+            "deletion_requested_at": base.get("deletion_requested_at", ""),
+            "deletion_scheduled_for": base.get("deletion_scheduled_for", ""),
             "role": role,
             "orgOwnerEmail": org_email,
             "canInviteTeam": role == "owner",
@@ -2825,6 +2829,8 @@ def _user_payload(email: str, user: dict) -> dict:
         "hasBillingProfile": bool(
             base.get("stripe_customer_id") or base.get("stripe_subscription_id")
         ),
+        "deletion_requested_at": base.get("deletion_requested_at", ""),
+        "deletion_scheduled_for": base.get("deletion_scheduled_for", ""),
         "role": role or user.get("role"),
         "org_id": org_email or user.get("org_id"),
         "orgOwnerEmail": org_email,
@@ -3399,7 +3405,35 @@ def google_oauth():
             or user.get("status") == "active"
             or _within_trial(user, TRIAL_DAYS)
         ):
-            return jsonify({"error": "Account not active. Please complete payment to activate."}), 403
+            checkout_url = None
+            checkout_error = None
+            try:
+                checkout_args = {
+                    "mode": "subscription",
+                    "line_items": [{"price": STRIPE_PRICE_ID, "quantity": 1}],
+                    "success_url": f"{FRONTEND_URL}/login?paid=1&session_id={{CHECKOUT_SESSION_ID}}",
+                    "cancel_url": f"{FRONTEND_URL}/login?billing=canceled",
+                    "metadata": {"user_email": email, "recovery": "true"},
+                }
+                if user.get("stripe_customer_id"):
+                    checkout_args["customer"] = user["stripe_customer_id"]
+                else:
+                    checkout_args["customer_email"] = email
+                checkout_url = stripe.checkout.Session.create(**checkout_args).url
+            except Exception:
+                checkout_error = "Billing is temporarily unavailable. Please try again or contact support."
+            trial = _trial_details(user)
+            return jsonify({
+                "error": "Your trial has ended. Choose a plan to continue.",
+                "code": "billing_required",
+                "account": {
+                    "email": email,
+                    "trialDaysRemaining": trial["daysRemaining"],
+                    "trialEndsAt": trial["endsAt"],
+                    "checkoutUrl": checkout_url,
+                    "billingError": checkout_error,
+                },
+            }), 402
 
         payload = _user_payload(email, user)
         return _complete_login_response(

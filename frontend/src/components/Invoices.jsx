@@ -251,7 +251,7 @@ export default function Invoices({ user, leads }) {
     <div style={styles.container}>
       <div style={styles.header}>
         <div>
-          <h2 style={styles.title}>Invoices</h2>
+          <h2 style={styles.title}>Invoice workspace</h2>
           <p style={styles.subtitle}>Create, view, and remind leads about invoices.</p>
           {account?.id && (
             <div style={styles.accountBadge}>

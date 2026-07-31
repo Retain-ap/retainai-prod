@@ -1814,7 +1814,7 @@ export default function Automations({ user }) {
           }}
         >
           <div>
-            <div style={{ fontSize: 30, fontWeight: 900, letterSpacing: -0.5 }}>Automations</div>
+            <div style={{ fontSize: 24, fontWeight: 900, letterSpacing: -0.5 }}>Automation workspace</div>
             <div style={{ color: C.muted, marginTop: 6, fontSize: 14 }}>
               Build simple follow-up flows that are easy to launch, easy to understand, and easy to manage.
             </div>
