@@ -226,6 +226,8 @@ def _account_row(email, record, leads_by_user, users):
     trial_end = (
         trial_start + datetime.timedelta(days=14) if trial_start else None
     )
+    if record.get("trial_eligible") is False:
+        trial_end = None
     now = datetime.datetime.now(datetime.timezone.utc)
     trial_days_remaining = (
         max(0, (trial_end - now).days + (1 if trial_end > now else 0))
@@ -357,7 +359,7 @@ def owner_overview():
         {
             "accounts_total": len(rows),
             "active_accounts": status_counts.get("active", 0),
-            "trials": status_counts.get("trial", 0) + status_counts.get("pending_payment", 0),
+            "trials": sum(1 for row in rows if row["trial_days_remaining"] > 0),
             "past_due": status_counts.get("past_due", 0),
             "suspended": status_counts.get("suspended", 0),
             "recent_signups": recent_signups,

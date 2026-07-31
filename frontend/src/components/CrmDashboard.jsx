@@ -125,7 +125,9 @@ function CrmDashboard({ authenticatedUser }) {
 
   // When routed to /app/import, auto-open Settings → Imports
   const [settingsTab, setSettingsTab] = useState(null);
-  const [section, setSection] = useState("overview");
+  const [section, setSection] = useState(
+    authenticatedUser?.platformOwner ? "owner" : "overview"
+  );
 
   useEffect(() => {
     const params = new URLSearchParams(location.search);

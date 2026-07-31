@@ -9,6 +9,9 @@ It returns only yes/no configuration checks and never returns secret values.
 ## Required for a healthy result
 
 - `SESSION_SECRET`: stable random value shared by every backend worker.
+- `ACCOUNT_HISTORY_SECRET`: stable random value used to prevent repeat free trials
+  without retaining deleted email addresses. Never rotate it unless the
+  introductory-trial history is intentionally being reset.
 - `STRIPE_SECRET_KEY`: Stripe live secret key.
 - `STRIPE_PRICE_ID`: live subscription price.
 - `STRIPE_WEBHOOK_SECRET`: signing secret for the production webhook.

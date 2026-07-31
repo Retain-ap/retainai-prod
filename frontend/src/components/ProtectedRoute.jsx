@@ -31,8 +31,20 @@ export default function ProtectedRoute({ children }) {
           throw new Error("not_authenticated");
         }
         if (data?.user) {
-          localStorage.setItem("user", JSON.stringify(data.user));
-          setAuthenticatedUser(data.user);
+          let ownerAllowed = Boolean(data.user.platformOwner);
+          try {
+            const ownerResponse = await fetch(apiUrl("owner/access"), {
+              credentials: "include",
+              cache: "no-store",
+            });
+            if (ownerResponse.ok) {
+              const ownerData = await ownerResponse.json();
+              ownerAllowed = Boolean(ownerData.allowed);
+            }
+          } catch {}
+          const verifiedUser = { ...data.user, platformOwner: ownerAllowed };
+          localStorage.setItem("user", JSON.stringify(verifiedUser));
+          setAuthenticatedUser(verifiedUser);
         }
         setStatus("authenticated");
       })

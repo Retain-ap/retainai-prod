@@ -8,6 +8,7 @@ import stripe
 from flask import Blueprint, Response, jsonify, request, session
 
 from storage import DATA_ROOT, delete_users, load_leads, load_users, save_leads, save_users
+from account_history import record_account_deletion
 
 
 account_bp = Blueprint("account_bp", __name__)
@@ -94,6 +95,9 @@ def _purge_workspace_json(workspace):
 
 
 def _purge_workspace(workspace, users):
+    # Retain only a one-way HMAC fingerprint so deleted customers can return,
+    # but cannot repeatedly claim a new introductory trial.
+    record_account_deletion(workspace)
     removed = [
         key
         for key, record in users.items()

@@ -159,6 +159,7 @@ export default function Sidebar({
         {!collapsed && (
           <div className="sidebar-profile-info">
             <div className="sidebar-profile-name">{displayName}</div>
+            {user?.platformOwner && <div className="sidebar-owner-badge">Platform owner</div>}
             {user?.name && user.name.trim() !== "" && (
               <div className="sidebar-profile-email">{user?.email}</div>
             )}

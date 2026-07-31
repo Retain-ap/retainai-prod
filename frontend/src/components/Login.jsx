@@ -392,6 +392,51 @@ export default function Login() {
     }
   }
 
+  async function deleteLockedAccount() {
+    const normalizedEmail = normEmail(email);
+    const required = `DELETE ${normalizedEmail}`;
+    const confirmation = window.prompt(
+      `This permanently deletes your RetainAI account and workspace.\n\nType exactly:\n${required}`
+    );
+    if (confirmation === null) return;
+    if (confirmation !== required) {
+      setError(`Account not deleted. The confirmation must be exactly: ${required}`);
+      return;
+    }
+    if (!window.confirm("Permanently delete this account now? This cannot be undone.")) return;
+
+    setSubmitting(true);
+    setError("");
+    try {
+      const response = await fetch(apiUrl("account/deletion"), {
+        method: "POST",
+        credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "delete_now", confirmation }),
+      });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) {
+        throw new Error(
+          data.error === "billing_cancellation_failed"
+            ? "We could not safely cancel billing, so your account was not deleted. Please contact support."
+            : data.error || "Account deletion could not be completed."
+        );
+      }
+      localStorage.removeItem("user");
+      localStorage.removeItem("userEmail");
+      localStorage.removeItem("rememberEmail");
+      localStorage.setItem("rememberFlag", "0");
+      setBillingState(null);
+      setPassword("");
+      setEmail("");
+      setError("Your account and workspace were permanently deleted. You may create a new paid account later, but the introductory trial cannot be repeated.");
+    } catch (deleteError) {
+      setError(deleteError.message || "Account deletion could not be completed.");
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
   async function handleMfa(e) {
     e.preventDefault();
     if (submitting || !mfaCode.trim()) return;
@@ -786,6 +831,34 @@ export default function Login() {
                       </small>
                     </>
                   )}
+                  <div
+                    style={{
+                      borderTop: "1px solid rgba(255,255,255,.12)",
+                      marginTop: 14,
+                      paddingTop: 12,
+                    }}
+                  >
+                    <small style={{ display: "block", color: BG.text60, marginBottom: 8 }}>
+                      Do not want to continue? You can permanently delete your account and stored workspace.
+                    </small>
+                    <button
+                      type="button"
+                      onClick={deleteLockedAccount}
+                      disabled={submitting}
+                      style={{
+                        width: "100%",
+                        background: "transparent",
+                        color: "#ff9c9c",
+                        border: "1px solid rgba(255,110,110,.55)",
+                        borderRadius: 10,
+                        padding: "10px 14px",
+                        fontWeight: 800,
+                        cursor: submitting ? "not-allowed" : "pointer",
+                      }}
+                    >
+                      Permanently delete my account
+                    </button>
+                  </div>
                 </div>
               )}
 

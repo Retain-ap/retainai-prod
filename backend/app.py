@@ -70,6 +70,7 @@ SESSION_SECRET = (
     or os.getenv("FLASK_SECRET_KEY")
     or os.getenv("APP_SECRET")
 )
+from account_history import record_trial_start, trial_previously_used
 if not SESSION_SECRET:
     # Keep sessions stable across every production worker. The dedicated owner
     # secret is a safe deterministic recovery source until SESSION_SECRET is set.
@@ -203,6 +204,14 @@ def require_authenticated_api_session():
     org = _session_org_email()
     if not actor:
         return jsonify({"error": "authentication_required"}), 401
+    if session.get("recovery_only") and request.path not in {
+        "/api/billing/checkout",
+        "/api/billing/portal",
+        "/api/account/deletion",
+        "/api/account/export",
+        "/api/logout",
+    }:
+        return jsonify({"error": "billing_recovery_session"}), 402
 
     # Legacy clients still send identity fields. Accept only the signed-in user
     # or their workspace owner, preventing email-header impersonation.
@@ -572,6 +581,13 @@ def api_readiness():
         "storage": storage_ready,
         "stable_session_secret": bool(
             os.getenv("SESSION_SECRET")
+            or os.getenv("FLASK_SECRET_KEY")
+            or os.getenv("APP_SECRET")
+            or os.getenv("PLATFORM_OWNER_PASSWORD")
+        ),
+        "stable_account_history_secret": bool(
+            os.getenv("ACCOUNT_HISTORY_SECRET")
+            or os.getenv("SESSION_SECRET")
             or os.getenv("FLASK_SECRET_KEY")
             or os.getenv("APP_SECRET")
             or os.getenv("PLATFORM_OWNER_PASSWORD")
@@ -1842,6 +1858,8 @@ def _within_trial(user: dict, days: int = TRIAL_DAYS) -> bool:
     return _trial_details(user, days)["active"]
 
 def _trial_details(user: dict, days: int = TRIAL_DAYS) -> dict:
+    if (user or {}).get("trial_eligible") is False:
+        return {"active": False, "daysRemaining": 0, "endsAt": None}
     ts = str((user or {}).get("trial_start") or "")
     if not ts:
         return {"active": False, "daysRemaining": 0, "endsAt": None}
@@ -1878,7 +1896,11 @@ def send_trial_ending_soon():
     changed = False
     for email, user in users.items():
         trial_start = user.get("trial_start")
-        if not trial_start or user.get("status") not in ["pending_payment", "active"]:
+        if (
+            not trial_start
+            or user.get("trial_eligible") is False
+            or user.get("status") not in ["pending_payment", "active"]
+        ):
             continue
         try:
             trial_start_dt = datetime.datetime.fromisoformat(trial_start)
@@ -3338,6 +3360,8 @@ def signup():
         return jsonify({"error": "User already exists"}), 409
 
     trial_start = datetime.datetime.utcnow().isoformat()
+    repeat_customer = trial_previously_used(email)
+    trial_days = 0 if repeat_customer else int(TRIAL_DAYS)
 
     users[email] = {
         "email": email,
@@ -3355,9 +3379,11 @@ def signup():
         "status": "pending_payment",
         "email_verified": False,
         "trial_start": trial_start,
+        "trial_eligible": not repeat_customer,
         "trial_ending_notice_sent": False,
     }
     save_users(users)
+    record_trial_start(email)
     _send_verification_email(email)
 
     try:
@@ -3378,18 +3404,20 @@ def signup():
         success_url = f"{FRONTEND_URL}/login?paid=1&session_id={{CHECKOUT_SESSION_ID}}"
         cancel_url  = f"{FRONTEND_URL}/login?canceled=1"
 
-        session = stripe.checkout.Session.create(
-            payment_method_types=["card"],
-            mode="subscription",
-            line_items=[{"price": STRIPE_PRICE_ID, "quantity": 1}],
-            customer_email=email,
-            subscription_data={
-                "trial_period_days": int(TRIAL_DAYS),
+        checkout_args = {
+            "payment_method_types": ["card"],
+            "mode": "subscription",
+            "line_items": [{"price": STRIPE_PRICE_ID, "quantity": 1}],
+            "customer_email": email,
+            "success_url": success_url,
+            "cancel_url": cancel_url,
+        }
+        if trial_days > 0:
+            checkout_args["subscription_data"] = {
+                "trial_period_days": trial_days,
                 "metadata": {"user_email": email},
-            },
-            success_url=success_url,
-            cancel_url=cancel_url,
-        )
+            }
+        session = stripe.checkout.Session.create(**checkout_args)
         return jsonify({"checkoutUrl": session.url}), 200
 
     except stripe.error.StripeError as e:
@@ -3550,6 +3578,8 @@ def login():
                 email, user, payload, remember, "Login successful"
             )
         if password_valid:
+            _start_user_session(email, _user_payload(email, user), remember)
+            session["recovery_only"] = True
             checkout_url = None
             checkout_error = None
             try:
@@ -3773,6 +3803,12 @@ def session_status():
     if int(session.get("security_version") or 0) != int(user.get("security_version") or 0):
         session.clear()
         return jsonify({"authenticated": False, "error": "session_revoked"}), 401
+    if session.get("recovery_only"):
+        return jsonify({
+            "authenticated": False,
+            "recoveryOnly": True,
+            "message": "Payment or account recovery is required.",
+        }), 200
     return jsonify({"authenticated": True, "user": _user_payload(email, user)}), 200
 
 @app.route("/api/oauth/google", methods=["POST"])
@@ -3822,6 +3858,8 @@ def google_oauth():
             or user.get("status") == "active"
             or _within_trial(user, TRIAL_DAYS)
         ):
+            _start_user_session(email, _user_payload(email, user), bool(data.get("remember", True)))
+            session["recovery_only"] = True
             checkout_url = None
             checkout_error = None
             try:
