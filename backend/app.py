@@ -3417,11 +3417,15 @@ def signup():
             "success_url": success_url,
             "cancel_url": cancel_url,
         }
+        checkout_args["metadata"] = {
+            "user_email": email,
+            "returning_customer": "true" if repeat_customer else "false",
+        }
+        checkout_args["subscription_data"] = {
+            "metadata": {"user_email": email},
+        }
         if trial_days > 0:
-            checkout_args["subscription_data"] = {
-                "trial_period_days": trial_days,
-                "metadata": {"user_email": email},
-            }
+            checkout_args["subscription_data"]["trial_period_days"] = trial_days
         session = stripe.checkout.Session.create(**checkout_args)
         return jsonify({"checkoutUrl": session.url}), 200
 
@@ -3431,6 +3435,48 @@ def signup():
     except Exception as e:
         print(f"[STRIPE ERROR] {e}")
         return jsonify({"error": "Could not start payment process."}), 500
+
+
+def _reconcile_paid_subscription(email: str, user: dict) -> bool:
+    """Recover access when Stripe is active but a webhook was delayed."""
+    if not STRIPE_SECRET_KEY or not isinstance(user, dict):
+        return False
+    customer_ids = []
+    stored_customer = str(user.get("stripe_customer_id") or "").strip()
+    if stored_customer:
+        customer_ids.append(stored_customer)
+    try:
+        for customer in stripe.Customer.list(email=email, limit=10).data:
+            customer_id = str(customer.get("id") or "").strip()
+            if customer_id and customer_id not in customer_ids:
+                customer_ids.append(customer_id)
+    except Exception:
+        return False
+
+    for customer_id in customer_ids:
+        try:
+            subscriptions = stripe.Subscription.list(
+                customer=customer_id,
+                status="all",
+                limit=10,
+            ).data
+        except Exception:
+            continue
+        for subscription in subscriptions:
+            subscription_status = str(subscription.get("status") or "")
+            if subscription_status not in {"active", "trialing"}:
+                continue
+            user["status"] = "active"
+            user["billing_status"] = subscription_status
+            user["stripe_customer_id"] = customer_id
+            user["stripe_subscription_id"] = subscription.get("id")
+            user["stripe_event_type"] = "login.subscription_reconciled"
+            user["stripe_event_at"] = datetime.datetime.now(
+                datetime.timezone.utc
+            ).isoformat().replace("+00:00", "Z")
+            return True
+    return False
+
 
 @app.route("/api/login", methods=["POST"])
 def login():
@@ -3558,6 +3604,10 @@ def login():
                 "error": "Verify your email before signing in.",
                 "code": "email_verification_required",
             }), 403
+        if password_valid and user.get("status") != "active":
+            # Webhooks remain authoritative, but a delayed/missed delivery must
+            # not trap a customer who already has an active Stripe subscription.
+            _reconcile_paid_subscription(email, user)
         allowed = password_valid and (
             _is_platform_owner(email)
             or (user.get("status") == "active")
@@ -3594,6 +3644,7 @@ def login():
                     "success_url": f"{FRONTEND_URL}/login?paid=1&session_id={{CHECKOUT_SESSION_ID}}",
                     "cancel_url": f"{FRONTEND_URL}/login?billing=canceled",
                     "metadata": {"user_email": email, "recovery": "true"},
+                    "subscription_data": {"metadata": {"user_email": email}},
                 }
                 if user.get("stripe_customer_id"):
                     checkout_args["customer"] = user["stripe_customer_id"]
@@ -3766,11 +3817,9 @@ def billing_checkout():
         args["customer"] = user["stripe_customer_id"]
     else:
         args["customer_email"] = email
+    args["subscription_data"] = {"metadata": {"user_email": email}}
     if trial["active"] and trial["daysRemaining"] > 0:
-        args["subscription_data"] = {
-            "trial_period_days": trial["daysRemaining"],
-            "metadata": {"user_email": email},
-        }
+        args["subscription_data"]["trial_period_days"] = trial["daysRemaining"]
     try:
         checkout = stripe.checkout.Session.create(**args)
         return jsonify({"url": checkout.url}), 200
@@ -3874,6 +3923,7 @@ def google_oauth():
                     "success_url": f"{FRONTEND_URL}/login?paid=1&session_id={{CHECKOUT_SESSION_ID}}",
                     "cancel_url": f"{FRONTEND_URL}/login?billing=canceled",
                     "metadata": {"user_email": email, "recovery": "true"},
+                    "subscription_data": {"metadata": {"user_email": email}},
                 }
                 if user.get("stripe_customer_id"):
                     checkout_args["customer"] = user["stripe_customer_id"]
@@ -3982,12 +4032,35 @@ def stripe_verify():
 
         user = users[email]
         sub = session_obj.get("subscription")
-        sub_status = (sub.get("status") if isinstance(sub, dict) else None) or "active"
+        sub_status = (sub.get("status") if isinstance(sub, dict) else None) or ""
+        payment_status = str(session_obj.get("payment_status") or "")
+        customer_value = session_obj.get("customer")
+        customer_id = (
+            customer_value.get("id")
+            if isinstance(customer_value, dict)
+            else customer_value
+        )
+        subscription_id = sub.get("id") if isinstance(sub, dict) else sub
 
-        if sub_status in ("active", "trialing", "past_due"):
+        if (
+            payment_status in {"paid", "no_payment_required"}
+            and sub_status in {"active", "trialing"}
+        ):
             user["status"] = "active"
-            user["stripe_customer_id"] = session_obj.get("customer")
-            user["stripe_subscription_id"] = sub.get("id") if isinstance(sub, dict) else sub
+            user["billing_status"] = sub_status
+            user["stripe_customer_id"] = str(customer_id or "")
+            user["stripe_subscription_id"] = str(subscription_id or "")
+            user["stripe_event_type"] = "checkout.return_verified"
+            user["stripe_event_at"] = datetime.datetime.now(
+                datetime.timezone.utc
+            ).isoformat().replace("+00:00", "Z")
+        else:
+            return jsonify({
+                "ok": False,
+                "error": "payment_not_complete",
+                "paymentStatus": payment_status,
+                "subscriptionStatus": sub_status,
+            }), 402
 
         users[email] = user
         save_users(users)

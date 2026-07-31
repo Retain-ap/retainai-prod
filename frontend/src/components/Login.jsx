@@ -156,6 +156,45 @@ export default function Login() {
     }
   }, []);
 
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const sessionId = params.get("session_id");
+    if (params.get("paid") !== "1" || !sessionId) return;
+
+    let active = true;
+    setSubmitting(true);
+    setError("Confirming your secure payment…");
+    fetch(`${API_BASE}/api/stripe/verify?session_id=${encodeURIComponent(sessionId)}`, {
+      credentials: "include",
+      cache: "no-store",
+    })
+      .then(async (response) => {
+        const data = await response.json().catch(() => ({}));
+        if (!response.ok || !data.ok) {
+          throw new Error(
+            data.error === "payment_not_complete"
+              ? "Stripe has not completed the payment yet. Wait a moment and refresh this page."
+              : data.error || "Payment confirmation is temporarily delayed."
+          );
+        }
+        if (!active) return;
+        setBillingState(null);
+        setError("Payment confirmed. Sign in to open your workspace.");
+        window.history.replaceState({}, "", "/login");
+      })
+      .catch((verifyError) => {
+        if (!active) return;
+        setError(verifyError.message || "Payment confirmation is temporarily delayed.");
+      })
+      .finally(() => {
+        if (active) setSubmitting(false);
+      });
+
+    return () => {
+      active = false;
+    };
+  }, []);
+
   async function enterWorkspace(user, fallbackEmail = "") {
     const sessionResponse = await fetch(apiUrl("session"), {
       credentials: "include",
