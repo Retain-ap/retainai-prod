@@ -264,6 +264,17 @@ def require_authenticated_api_session():
         if stored_org:
             org = stored_org
 
+    access_record = users.get(org) if isinstance(users, dict) else None
+    if not isinstance(access_record, dict):
+        access_record = actor_record
+    if (
+        not _is_platform_owner(actor)
+        and isinstance(access_record, dict)
+        and not _account_has_access(access_record)
+    ):
+        session.clear()
+        return jsonify({"error": "account_access_inactive"}), 403
+
     allowed = {value for value in {actor, org} if value}
     # Customer-management routes deliberately name another account. They are
     # protected by the canonical owner check inside app_owner, while this
@@ -1883,6 +1894,31 @@ TRIAL_DAYS = 14
 def _within_trial(user: dict, days: int = TRIAL_DAYS) -> bool:
     return _trial_details(user, days)["active"]
 
+def _complimentary_access_active(user: dict) -> bool:
+    if not isinstance(user, dict):
+        return False
+    if not (user.get("billing_exempt") and user.get("complimentary_access")):
+        return False
+    if str(user.get("status") or "").lower() != "active":
+        return False
+    expires_at = str(user.get("complimentary_expires_at") or "").strip()
+    if not expires_at:
+        return True
+    try:
+        expiry = datetime.datetime.fromisoformat(expires_at.replace("Z", "+00:00"))
+        if expiry.tzinfo is None:
+            expiry = expiry.replace(tzinfo=datetime.timezone.utc)
+        return datetime.datetime.now(datetime.timezone.utc) <= expiry
+    except Exception:
+        return False
+
+def _account_has_access(user: dict) -> bool:
+    if not isinstance(user, dict):
+        return False
+    if user.get("billing_exempt"):
+        return _complimentary_access_active(user)
+    return user.get("status") == "active" or _within_trial(user, TRIAL_DAYS)
+
 def _trial_details(user: dict, days: int = TRIAL_DAYS) -> dict:
     if (user or {}).get("trial_eligible") is False:
         return {"active": False, "daysRemaining": 0, "endsAt": None}
@@ -1976,7 +2012,7 @@ def _req_user_email() -> str:
 def _org_is_active(owner_record: dict) -> bool:
     if not owner_record or not isinstance(owner_record, dict):
         return False
-    return (owner_record.get("status") == "active") or _within_trial(owner_record, TRIAL_DAYS)
+    return _account_has_access(owner_record)
 
 def _lead_status_from_dates(lead: dict) -> str:
     now = datetime.datetime.utcnow()
@@ -3214,9 +3250,9 @@ def _user_payload(email: str, user: dict) -> dict:
         "trialActive": trial["active"],
         "trialDaysRemaining": trial["daysRemaining"],
         "trialEndsAt": trial["endsAt"],
-        "billingRequired": not _is_platform_owner(email) and not (
-            base.get("status") == "active" or trial["active"]
-        ),
+        "billingRequired": not _is_platform_owner(email) and not _account_has_access(base),
+        "complimentaryAccess": _complimentary_access_active(base),
+        "complimentaryExpiresAt": base.get("complimentary_expires_at", ""),
         "hasBillingProfile": bool(
             base.get("stripe_customer_id") or base.get("stripe_subscription_id")
         ),
@@ -3588,6 +3624,12 @@ def _create_or_reuse_billing_checkout(
     deterministic idempotency key so concurrent clicks cannot create multiple
     sessions or subscriptions.
     """
+    if _complimentary_access_active(user):
+        return {
+            "state": "complimentary_access",
+            "url": f"{FRONTEND_URL}/app",
+            "subscriptionStatus": "complimentary",
+        }
     if not STRIPE_SECRET_KEY or not STRIPE_PRICE_ID:
         raise RuntimeError("Billing is not configured.")
 
@@ -3767,8 +3809,7 @@ def login():
 
         owner_ok = bool(owner_acct) and (
             _is_platform_owner(owner_email)
-            or (owner_acct.get("status") == "active")
-            or _within_trial(owner_acct, TRIAL_DAYS)
+            or _account_has_access(owner_acct)
         )
         member_active = str(team_rec.get("team_status") or "active").lower() == "active"
 
@@ -3828,8 +3869,7 @@ def login():
             _reconcile_paid_subscription(email, user)
         allowed = password_valid and (
             _is_platform_owner(email)
-            or (user.get("status") == "active")
-            or _within_trial(user, TRIAL_DAYS)
+            or _account_has_access(user)
         )
         if allowed:
             now_iso = datetime.datetime.now(datetime.timezone.utc).isoformat().replace("+00:00", "Z")
@@ -4063,6 +4103,11 @@ def session_status():
     if int(session.get("security_version") or 0) != int(user.get("security_version") or 0):
         session.clear()
         return jsonify({"authenticated": False, "error": "session_revoked"}), 401
+    role, org_email, org_owner, _subject = _resolve_org_and_role(email, users)
+    access_record = org_owner if role and role != "owner" else user
+    if not (_is_platform_owner(email) or _account_has_access(access_record)):
+        session.clear()
+        return jsonify({"authenticated": False, "error": "account_access_inactive"}), 403
     if session.get("recovery_only"):
         return jsonify({
             "authenticated": False,
@@ -4115,8 +4160,7 @@ def google_oauth():
 
         if not (
             _is_platform_owner(email)
-            or user.get("status") == "active"
-            or _within_trial(user, TRIAL_DAYS)
+            or _account_has_access(user)
         ):
             _start_user_session(email, _user_payload(email, user), bool(data.get("remember", True)))
             session["recovery_only"] = True

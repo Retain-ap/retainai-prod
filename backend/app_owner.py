@@ -9,6 +9,7 @@ from collections import Counter
 from uuid import uuid4
 
 from flask import Blueprint, Response, jsonify, request, send_file, session
+from werkzeug.security import generate_password_hash
 
 from storage import DATA_ROOT, SQLITE_PATH, USE_SQLITE, load_leads, load_users, save_users
 
@@ -296,6 +297,8 @@ def _account_row(email, record, leads_by_user, users):
         "support_note": record.get("platform_support_note") or "",
         "deletion_requested_at": record.get("deletion_requested_at") or "",
         "deletion_scheduled_for": record.get("deletion_scheduled_for") or "",
+        "complimentary": bool(record.get("billing_exempt") and record.get("complimentary_access")),
+        "complimentary_expires_at": record.get("complimentary_expires_at") or "",
     }
 
 
@@ -397,6 +400,78 @@ def owner_accounts():
     return jsonify({"accounts": rows}), 200
 
 
+@owner_bp.post("/api/owner/accounts")
+def owner_create_complimentary_account():
+    actor, error = _require_owner()
+    if error:
+        return error
+    data = request.get_json(silent=True) or {}
+    email = _norm(data.get("email"))
+    password = str(data.get("password") or "")
+    name = str(data.get("name") or "").strip()[:120]
+    business = str(data.get("business") or "").strip()[:160]
+    business_type = str(data.get("business_type") or "").strip()[:120]
+    expires_on = str(data.get("expires_on") or "").strip()
+
+    if not email or "@" not in email or len(email) > 254:
+        return jsonify({"error": "valid_email_required"}), 400
+    if len(password) < 12 or len(password) > 256:
+        return jsonify({"error": "Password must contain between 12 and 256 characters."}), 400
+    if is_platform_owner(email):
+        return jsonify({"error": "platform_owner_account_locked"}), 403
+
+    expires_at = ""
+    if expires_on:
+        try:
+            expiry = datetime.datetime.strptime(expires_on, "%Y-%m-%d").replace(
+                hour=23, minute=59, second=59, tzinfo=datetime.timezone.utc
+            )
+            if expiry <= datetime.datetime.now(datetime.timezone.utc):
+                return jsonify({"error": "Access end date must be in the future."}), 400
+            expires_at = expiry.isoformat().replace("+00:00", "Z")
+        except ValueError:
+            return jsonify({"error": "invalid_access_end_date"}), 400
+
+    users = load_users() or {}
+    if not isinstance(users, dict):
+        return jsonify({"error": "storage_not_ready"}), 503
+    if email in users:
+        return jsonify({"error": "account_already_exists"}), 409
+
+    now = datetime.datetime.now(datetime.timezone.utc).isoformat().replace("+00:00", "Z")
+    users[email] = {
+        "email": email,
+        "password": generate_password_hash(password),
+        "name": name or email.split("@", 1)[0].replace(".", " ").title(),
+        "business": business or "Launch Partner",
+        "businessName": business or "Launch Partner",
+        "businessType": business_type,
+        "role": "owner",
+        "org_id": email,
+        "status": "active",
+        "billing_status": "complimentary",
+        "billing_exempt": True,
+        "complimentary_access": True,
+        "complimentary_expires_at": expires_at,
+        "plan": "Complimentary",
+        "trial_eligible": False,
+        "email_verified": True,
+        "email_verified_at": now,
+        "created_at": now,
+        "created_by_platform_owner": actor,
+        "security_version": 0,
+    }
+    save_users(users)
+    _audit(actor, "complimentary_account_created", email, {
+        "expires_at": expires_at or "never",
+        "business": business,
+    })
+    return jsonify({
+        "ok": True,
+        "account": _account_row(email, users[email], load_leads() or {}, users),
+    }), 201
+
+
 @owner_bp.get("/api/owner/accounts/<path:email>/export")
 def owner_account_export(email):
     actor, error = _require_owner()
@@ -440,7 +515,27 @@ def owner_account_action(email):
             datetime.datetime.now(datetime.timezone.utc).isoformat().replace("+00:00", "Z")
         )
     elif action == "reactivate":
+        if account.get("billing_status") == "complimentary_revoked":
+            return jsonify({"error": "Revoked complimentary access cannot be reactivated as a paid account."}), 409
         account["status"] = "active"
+    elif action == "revoke_complimentary":
+        if not account.get("billing_exempt"):
+            return jsonify({"error": "account_is_not_complimentary"}), 400
+        account["complimentary_access"] = False
+        account["billing_exempt"] = False
+        account["billing_status"] = "complimentary_revoked"
+        account["status"] = "suspended"
+        account["security_version"] = int(account.get("security_version") or 0) + 1
+        details["access_revoked"] = True
+    elif action == "restore_complimentary":
+        if account.get("plan") != "Complimentary":
+            return jsonify({"error": "account_was_not_created_as_complimentary"}), 400
+        account["complimentary_access"] = True
+        account["billing_exempt"] = True
+        account["billing_status"] = "complimentary"
+        account["status"] = "active"
+        account["security_version"] = int(account.get("security_version") or 0) + 1
+        details["access_restored"] = True
     elif action == "extend_trial":
         days = max(1, min(int(data.get("days") or 7), 90))
         account["trial_start"] = (

@@ -140,5 +140,46 @@ class BillingCleanupTests(unittest.TestCase):
         )
 
 
+class ComplimentaryAccountTests(unittest.TestCase):
+    def test_only_platform_owner_can_create_free_access_account(self):
+        client = retainai.app.test_client()
+        users = {}
+        with client.session_transaction() as signed_session:
+            signed_session["user_email"] = "owner@retainai.ca"
+            signed_session["org_email"] = "owner@retainai.ca"
+            signed_session["security_version"] = 0
+        with patch.object(app_account, "load_users", return_value=users), patch(
+            "app_owner.load_users", return_value=users
+        ), patch("app_owner.load_leads", return_value={}), patch(
+            "app_owner.save_users"
+        ) as save:
+            response = client.post(
+                "/api/owner/accounts",
+                json={
+                    "email": "tester@example.com",
+                    "password": "A secure launch password 123!",
+                    "name": "Trusted Tester",
+                    "business": "Launch Partner",
+                },
+            )
+        self.assertEqual(response.status_code, 201)
+        created = save.call_args.args[0]["tester@example.com"]
+        self.assertTrue(created["billing_exempt"])
+        self.assertTrue(created["complimentary_access"])
+        self.assertEqual(created["billing_status"], "complimentary")
+        self.assertNotEqual(created["password"], "A secure launch password 123!")
+
+    def test_expired_complimentary_access_is_inactive(self):
+        self.assertFalse(
+            retainai._complimentary_access_active(
+                {
+                    "billing_exempt": True,
+                    "complimentary_access": True,
+                    "complimentary_expires_at": "2000-01-01T00:00:00Z",
+                }
+            )
+        )
+
+
 if __name__ == "__main__":
     unittest.main()

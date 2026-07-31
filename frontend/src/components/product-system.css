@@ -269,6 +269,20 @@
 .owner-account-summary { display: flex; flex-wrap: wrap; gap: 10px; margin: 4px 0 18px; }
 .owner-account-summary span { padding: 8px 12px; border: 1px solid var(--ra-border); border-radius: 999px; color: var(--ra-muted); background: rgba(255,255,255,.025); }
 .owner-account-summary strong { color: var(--ra-text); margin-right: 4px; }
+.owner-account-tools { justify-content: flex-end; margin-top: 16px; }
+.owner-account-creator {
+  margin: 16px 0 4px;
+  padding: 18px;
+  border: 1px solid rgba(247,203,83,.28);
+  border-radius: 16px;
+  background: linear-gradient(135deg, rgba(247,203,83,.08), rgba(255,255,255,.018));
+}
+.owner-account-creator-heading { display: flex; justify-content: space-between; gap: 16px; align-items: flex-start; }
+.owner-account-creator-heading h3 { margin: 4px 0; }
+.owner-account-creator-heading p { margin: 0; color: var(--ra-muted); font-size: 13px; }
+.owner-account-creator-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; margin-top: 16px; }
+.owner-account-creator-grid label { display: grid; gap: 6px; color: var(--ra-muted); font-size: 12px; font-weight: 800; }
+.owner-account-creator-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 16px; }
 .owner-account-link { padding: 0; border: 0; background: transparent; color: inherit; text-align: left; cursor: pointer; }
 .owner-account-link strong { color: var(--ra-gold); }
 .owner-account-link:hover strong { text-decoration: underline; }
@@ -286,10 +300,15 @@
 .owner-empty-state strong { display: block; color: var(--ra-text); margin-bottom: 4px; }
 @media (max-width: 1100px) {
   .owner-detail-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+  .owner-account-creator-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 }
 @media (max-width: 680px) {
   .owner-filter-bar, .owner-filter-bar > div, .owner-filter-bar .product-input { width: 100%; }
   .owner-detail-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .owner-account-creator-heading { display: grid; }
+  .owner-account-creator-grid { grid-template-columns: 1fr; }
+  .owner-account-creator-actions { position: sticky; bottom: 0; padding-top: 12px; background: linear-gradient(transparent, var(--ra-panel) 30%); }
+  .owner-account-creator-actions .product-button { flex: 1; }
 }
 
 .product-input {

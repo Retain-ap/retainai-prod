@@ -7,6 +7,7 @@ import {
   FaHeartbeat,
   FaSearch,
   FaShieldAlt,
+  FaUserPlus,
   FaUsers,
 } from "react-icons/fa";
 import { apiUrl } from "../apiBase";
@@ -69,6 +70,8 @@ export default function OwnerConsole() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [busy, setBusy] = useState("");
+  const [showAccountCreator, setShowAccountCreator] = useState(false);
+  const [newAccount, setNewAccount] = useState({ email: "", password: "", name: "", business: "", business_type: "", expires_on: "" });
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -142,6 +145,22 @@ export default function OwnerConsole() {
       await load();
     } catch (requestError) {
       setError(requestError.message || "The account action failed.");
+    } finally {
+      setBusy("");
+    }
+  }
+
+  async function createComplimentaryAccount(event) {
+    event.preventDefault();
+    setBusy("account:create");
+    setError("");
+    try {
+      await ownerRequest("accounts", { method: "POST", body: JSON.stringify(newAccount) });
+      setNewAccount({ email: "", password: "", name: "", business: "", business_type: "", expires_on: "" });
+      setShowAccountCreator(false);
+      await load();
+    } catch (requestError) {
+      setError(requestError.message || "Could not create the complimentary account.");
     } finally {
       setBusy("");
     }
@@ -324,6 +343,31 @@ export default function OwnerConsole() {
         <section className="product-card" style={{ marginTop: 18 }}>
           <div className="product-card-header">
             <div><h2>Customer Accounts</h2><p className="product-card-copy">Search, diagnose and safely manage RetainAI customers.</p></div>
+            <button className="product-button primary" onClick={() => setShowAccountCreator((open) => !open)}>
+              <FaUserPlus /> {showAccountCreator ? "Close creator" : "Add complimentary account"}
+            </button>
+          </div>
+          {showAccountCreator && (
+            <form className="owner-account-creator" onSubmit={createComplimentaryAccount}>
+              <div className="owner-account-creator-heading">
+                <div><div className="product-eyebrow">Launch access</div><h3>Create a trusted tester account</h3><p>This skips Stripe and the trial. The password is securely hashed and never shown again.</p></div>
+                <span className="status-pill active">No payment required</span>
+              </div>
+              <div className="owner-account-creator-grid">
+                <label>Email address<input className="product-input" type="email" required autoComplete="off" value={newAccount.email} onChange={(event) => setNewAccount((current) => ({ ...current, email: event.target.value }))} placeholder="tester@example.com" /></label>
+                <label>Temporary password<input className="product-input" type="password" required minLength="12" maxLength="256" autoComplete="new-password" value={newAccount.password} onChange={(event) => setNewAccount((current) => ({ ...current, password: event.target.value }))} placeholder="At least 12 characters" /></label>
+                <label>Name<input className="product-input" value={newAccount.name} onChange={(event) => setNewAccount((current) => ({ ...current, name: event.target.value }))} placeholder="Tester name" /></label>
+                <label>Business<input className="product-input" value={newAccount.business} onChange={(event) => setNewAccount((current) => ({ ...current, business: event.target.value }))} placeholder="Business name" /></label>
+                <label>Business type<input className="product-input" value={newAccount.business_type} onChange={(event) => setNewAccount((current) => ({ ...current, business_type: event.target.value }))} placeholder="Salon, home services, coaching…" /></label>
+                <label>Access ends (optional)<input className="product-input" type="date" value={newAccount.expires_on} onChange={(event) => setNewAccount((current) => ({ ...current, expires_on: event.target.value }))} /></label>
+              </div>
+              <div className="owner-account-creator-actions">
+                <button type="button" className="product-button" onClick={() => setShowAccountCreator(false)}>Cancel</button>
+                <button type="submit" className="product-button primary" disabled={Boolean(busy)}>{busy === "account:create" ? "Creating…" : "Create free-access account"}</button>
+              </div>
+            </form>
+          )}
+          <div className="product-card-header owner-account-tools">
             <div className="owner-filter-bar">
               <div style={{ minWidth: 240, position: "relative" }}>
                 <FaSearch style={{ position: "absolute", left: 12, top: 13, color: "var(--ra-muted)" }} />
@@ -392,7 +436,7 @@ export default function OwnerConsole() {
                 {filteredAccounts.map((account) => (
                   <tr key={account.email}>
                     <td><button className="owner-account-link" onClick={() => setSelectedEmail(account.email)}><strong>{account.business || account.name || "Unnamed business"}</strong><small>{account.email}</small></button></td>
-                    <td><span className={`status-pill ${account.status}`}>{account.status.replaceAll("_", " ")}</span><small>{account.plan}</small></td>
+                    <td><span className={`status-pill ${account.status}`}>{account.status.replaceAll("_", " ")}</span><small>{account.complimentary ? `Complimentary${account.complimentary_expires_at ? ` · until ${new Date(account.complimentary_expires_at).toLocaleDateString()}` : " · no expiry"}` : account.plan}</small></td>
                     <td><strong>{when(account.last_login)}</strong><small>Last login</small></td>
                     <td><strong>{account.lead_count} contacts</strong><small>{account.team_count} teammates · {account.onboarding_score}% onboarded</small></td>
                     <td><IntegrationDots integrations={account.integrations} /></td>
@@ -411,6 +455,8 @@ export default function OwnerConsole() {
                               <button className="product-button danger" disabled={Boolean(busy)} onClick={() => accountAction(account.email, "suspend")}>Suspend</button>
                             )}
                             <button className="product-button" disabled={Boolean(busy)} onClick={() => accountAction(account.email, "extend_trial", { days: 7 })}>+7 trial days</button>
+                            {account.complimentary && <button className="product-button danger" disabled={Boolean(busy)} onClick={() => accountAction(account.email, "revoke_complimentary")}>Revoke free access</button>}
+                            {account.billing_status === "complimentary_revoked" && <button className="product-button" disabled={Boolean(busy)} onClick={() => accountAction(account.email, "restore_complimentary")}>Restore free access</button>}
                             {account.status === "deletion_pending" ? (
                               <>
                                 <button className="product-button" disabled={Boolean(busy)} onClick={() => accountAction(account.email, "cancel_delete")}>Cancel deletion</button>
