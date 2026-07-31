@@ -257,6 +257,11 @@ def require_authenticated_api_session():
             org = stored_org
 
     allowed = {value for value in {actor, org} if value}
+    # Customer-management routes deliberately name another account. They are
+    # protected by the canonical owner check inside app_owner, while this
+    # global guard still verifies the signed session and security version.
+    if request.path.startswith("/api/owner/") and _is_platform_owner(actor):
+        return None
     for value in claimed:
         normalized = str(value or "").strip().lower()
         if normalized and normalized not in allowed:

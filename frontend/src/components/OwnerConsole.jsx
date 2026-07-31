@@ -389,22 +389,31 @@ export default function OwnerConsole() {
                     <td><IntegrationDots integrations={account.integrations} /></td>
                     <td>
                       <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
-                        {account.status === "suspended" ? (
-                          <button className="product-button" disabled={Boolean(busy)} onClick={() => accountAction(account.email, "reactivate")}>Reactivate</button>
-                        ) : (
-                          <button className="product-button danger" disabled={Boolean(busy)} onClick={() => accountAction(account.email, "suspend")}>Suspend</button>
-                        )}
-                        <button className="product-button" disabled={Boolean(busy)} onClick={() => accountAction(account.email, "extend_trial", { days: 7 })}>+7 trial days</button>
                         <button className="product-button" disabled={Boolean(busy)} onClick={() => exportAccount(account.email)}>Export</button>
-                        {account.status === "deletion_pending" ? (
-                          <>
-                            <button className="product-button" disabled={Boolean(busy)} onClick={() => accountAction(account.email, "cancel_delete")}>Cancel deletion</button>
-                            <button className="product-button danger" disabled={Boolean(busy)} onClick={() => permanentlyDeleteAccount(account.email)}>Delete now</button>
-                          </>
+                        {account.platform_owner ? (
+                          <span className="status-pill active" title="The permanent platform owner cannot be suspended, archived, trialed, or deleted.">
+                            Protected owner
+                          </span>
                         ) : (
                           <>
-                            <button className="product-button" disabled={Boolean(busy)} onClick={() => accountAction(account.email, "archive")}>Archive</button>
-                            <button className="product-button danger" disabled={Boolean(busy)} onClick={() => scheduleDeletion(account.email)}>Schedule deletion</button>
+                            {account.status === "suspended" ? (
+                              <button className="product-button" disabled={Boolean(busy)} onClick={() => accountAction(account.email, "reactivate")}>Reactivate</button>
+                            ) : (
+                              <button className="product-button danger" disabled={Boolean(busy)} onClick={() => accountAction(account.email, "suspend")}>Suspend</button>
+                            )}
+                            <button className="product-button" disabled={Boolean(busy)} onClick={() => accountAction(account.email, "extend_trial", { days: 7 })}>+7 trial days</button>
+                            {account.status === "deletion_pending" ? (
+                              <>
+                                <button className="product-button" disabled={Boolean(busy)} onClick={() => accountAction(account.email, "cancel_delete")}>Cancel deletion</button>
+                                <button className="product-button danger" disabled={Boolean(busy)} onClick={() => permanentlyDeleteAccount(account.email)}>Delete now</button>
+                              </>
+                            ) : (
+                              <>
+                                <button className="product-button" disabled={Boolean(busy)} onClick={() => accountAction(account.email, "archive")}>Archive</button>
+                                <button className="product-button danger" disabled={Boolean(busy)} onClick={() => scheduleDeletion(account.email)}>Schedule deletion</button>
+                                <button className="product-button danger" disabled={Boolean(busy)} onClick={() => permanentlyDeleteAccount(account.email)}>Delete now</button>
+                              </>
+                            )}
                           </>
                         )}
                       </div>

@@ -271,6 +271,7 @@ def _account_row(email, record, leads_by_user, users):
         risk_reasons.append("No integrations connected")
     return {
         "email": email,
+        "platform_owner": is_platform_owner(email),
         "name": record.get("name") or "",
         "business": record.get("business") or record.get("businessName") or "",
         "business_type": record.get("businessType") or "",
