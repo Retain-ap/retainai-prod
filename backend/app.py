@@ -414,7 +414,15 @@ STRIPE_WEBHOOK_SECRET = (os.getenv("STRIPE_WEBHOOK_SECRET") or "").strip()
 STRIPE_CONNECT_CLIENT_ID = (os.getenv("STRIPE_CONNECT_CLIENT_ID") or "").strip()
 STRIPE_REDIRECT_URI = (os.getenv("STRIPE_REDIRECT_URI") or "").strip()
 
-FRONTEND_URL = os.getenv("FRONTEND_URL", "http://localhost:3000").rstrip("/")
+FRONTEND_URL = (
+    os.getenv("PUBLIC_FRONTEND_URL")
+    or os.getenv("FRONTEND_URL")
+    or "http://localhost:3000"
+).rstrip("/")
+if FRONTEND_URL == "https://retainai-prod-1-frontend.onrender.com":
+    # Stripe and OAuth must return to the canonical site. On the temporary
+    # Render hostname the api.retainai.ca session cookie becomes cross-site.
+    FRONTEND_URL = "https://www.retainai.ca"
 
 if STRIPE_SECRET_KEY:
     stripe.api_key = STRIPE_SECRET_KEY

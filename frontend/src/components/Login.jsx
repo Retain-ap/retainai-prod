@@ -139,6 +139,18 @@ export default function Login() {
   const [billingState, setBillingState] = useState(null);
   const navigate = useNavigate();
 
+  // Authentication cookies are first-party when the public frontend and API
+  // share retainai.ca. Render's temporary hostname makes the API cookie
+  // cross-site and some browsers block it, even after a valid password.
+  useEffect(() => {
+    const host = String(window.location.hostname || "").toLowerCase();
+    if (host === "retainai-prod-1-frontend.onrender.com") {
+      window.location.replace(
+        `https://www.retainai.ca${window.location.pathname}${window.location.search}${window.location.hash}`
+      );
+    }
+  }, []);
+
   async function enterWorkspace(user, fallbackEmail = "") {
     const sessionResponse = await fetch(apiUrl("session"), {
       credentials: "include",
@@ -147,7 +159,7 @@ export default function Login() {
     const sessionData = await sessionResponse.json().catch(() => ({}));
     if (!sessionResponse.ok || !sessionData?.authenticated || !sessionData?.user) {
       throw new Error(
-        "Your sign-in was accepted, but the secure session was not established. Please wait for the service to finish restarting and try again."
+        "Your sign-in was accepted, but the secure session could not be verified. Open www.retainai.ca/login and try again."
       );
     }
     persistUser(
