@@ -221,6 +221,18 @@ export default function Sidebar({
 
       {/* Nav */}
       <nav className="sidebar-nav" aria-label="Main navigation">
+        {user?.platformOwner && (
+          <>
+            {!collapsed && <div className="sidebar-nav-label sidebar-owner-label">Platform</div>}
+            <button
+              type="button"
+              className={`sidebar-owner-console-btn${section === "owner" ? " active" : ""}`}
+              onClick={() => goTo("owner")}
+            >
+              <FaCrown /> {!collapsed && "Owner Console"}
+            </button>
+          </>
+        )}
         {!collapsed && <div className="sidebar-nav-label">Today</div>}
         <button
           type="button"
@@ -320,16 +332,6 @@ export default function Sidebar({
       {/* Settings */}
       {!collapsed && (
         <>
-        {user?.platformOwner && (
-          <button
-            type="button"
-            className="sidebar-settings-btn"
-            onClick={() => goTo("owner")}
-          >
-            <FaCrown style={{ marginRight: 9, fontSize: 18 }} />
-            Owner Console
-          </button>
-        )}
         <button
           type="button"
           className="sidebar-settings-btn"

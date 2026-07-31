@@ -150,6 +150,23 @@
   font-weight: 800;
 }
 .sidebar-nav button:hover { background: rgba(255,255,255,.05); color: #fff; }
+.sidebar-nav .sidebar-owner-label {
+  color: #f7d978;
+}
+.sidebar-nav .sidebar-owner-console-btn {
+  margin-bottom: 8px;
+  border-color: rgba(247, 203, 83, .26);
+  background:
+    linear-gradient(90deg, rgba(247, 203, 83, .16), rgba(247, 203, 83, .04));
+  color: #f7d978;
+  font-weight: 900;
+}
+.sidebar-nav .sidebar-owner-console-btn:hover {
+  border-color: rgba(247, 203, 83, .5);
+  background:
+    linear-gradient(90deg, rgba(247, 203, 83, .23), rgba(247, 203, 83, .07));
+  color: #ffe9a3;
+}
 
 /* Invite Team (pinned above Settings) */
 .sidebar-invite-btn {
