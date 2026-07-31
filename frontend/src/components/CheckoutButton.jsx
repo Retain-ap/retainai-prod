@@ -3,11 +3,16 @@ import React from "react";
 import { loadStripe } from "@stripe/stripe-js";
 
 // ⬇️ Use your live publishable key
-const stripePromise = loadStripe("pk_test_51KnWUNLKkR3ZKFQyx6IG7ZlxbQGT9UkY5ICqXpAb8apUQ8g0vFvW83dxZiQ1jtMKmY5i4dDaAZjartn8iywJxC3I00f9qE2kD8"); // <--- replace with your real live key
+const publishableKey = process.env.REACT_APP_STRIPE_PUBLISHABLE_KEY || "";
+const stripePromise = publishableKey ? loadStripe(publishableKey) : Promise.resolve(null);
 
 export default function CheckoutButton({ priceId, children }) {
   const handleCheckout = async () => {
     const stripe = await stripePromise;
+    if (!stripe) {
+      alert("Payments are temporarily unavailable. Please contact RetainAI support.");
+      return;
+    }
     const { error } = await stripe.redirectToCheckout({
       lineItems: [{ price: priceId, quantity: 1 }],
       mode: "subscription",

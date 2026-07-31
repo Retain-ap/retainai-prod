@@ -1,11 +1,12 @@
 import React, { useState, useEffect } from 'react';
 import axios from 'axios';
+import { apiUrl } from '../apiBase';
 
 function TokenStatusCard() {
   const [status, setStatus] = useState(null);
 
   useEffect(() => {
-    axios.get('http://127.0.0.1:5000/health')
+    axios.get(apiUrl('readiness'), { withCredentials: true })
       .then(response => {
         setStatus(response.data);
       })

@@ -142,12 +142,15 @@ app.config.update(
 
 _PUBLIC_API_PATHS = {
     "/api/health",
+    "/api/readiness",
     "/api/test",
     "/api/login",
     "/api/logout",
     "/api/session",
     "/api/signup",
     "/api/auth/signup",
+    "/api/auth/password/forgot",
+    "/api/auth/password/reset",
     "/api/oauth/google",
     "/api/auth/2fa/verify-login",
     "/api/stripe/webhook",
@@ -281,6 +284,99 @@ def _clear_login_failures(email: str) -> None:
     _LOGIN_ATTEMPTS.pop(_login_attempt_key(email), None)
 
 
+PASSWORD_RESET_TTL_SECONDS = 30 * 60
+_PASSWORD_RESET_REQUESTS = {}
+
+
+def _password_reset_rate_limited(email: str) -> bool:
+    key = _login_attempt_key(email)
+    now = time.time()
+    attempts = [
+        value
+        for value in _PASSWORD_RESET_REQUESTS.get(key, [])
+        if now - value < LOGIN_WINDOW_SECONDS
+    ]
+    _PASSWORD_RESET_REQUESTS[key] = attempts
+    if len(attempts) >= 4:
+        return True
+    attempts.append(now)
+    return False
+
+
+def _password_reset_token(email: str, user: dict) -> str:
+    issued_at = int(time.time())
+    password_fingerprint = hashlib.sha256(
+        str((user or {}).get("password") or "").encode("utf-8")
+    ).hexdigest()[:20]
+    payload = json.dumps(
+        {"email": _norm_email(email), "iat": issued_at, "pf": password_fingerprint},
+        separators=(",", ":"),
+        sort_keys=True,
+    ).encode("utf-8")
+    encoded = base64.urlsafe_b64encode(payload).decode("ascii").rstrip("=")
+    signature = hmac.new(
+        str(SESSION_SECRET).encode("utf-8"),
+        encoded.encode("ascii"),
+        hashlib.sha256,
+    ).hexdigest()
+    return f"{encoded}.{signature}"
+
+
+def _password_reset_email(token: str, to_email: str) -> bool:
+    if not SENDGRID_API_KEY:
+        app.logger.error("[PASSWORD RESET] SENDGRID_API_KEY is not configured")
+        return False
+    reset_url = f"{FRONTEND_URL}/login?reset_token={urllib.parse.quote(token)}"
+    message = Mail(
+        from_email=Email(SENDER_EMAIL, "RetainAI"),
+        to_emails=to_email,
+        subject="Reset your RetainAI password",
+        html_content=(
+            "<div style='font-family:Arial,sans-serif;color:#18191c;line-height:1.6'>"
+            "<h2>Reset your RetainAI password</h2>"
+            "<p>Use the secure link below within 30 minutes. If you did not request "
+            "this change, you can safely ignore this email.</p>"
+            f"<p><a href='{html.escape(reset_url, quote=True)}' "
+            "style='display:inline-block;background:#d7bb66;color:#111;padding:12px 18px;"
+            "border-radius:8px;text-decoration:none;font-weight:700'>Reset password</a></p>"
+            "<p>For your security, this link stops working after your password changes.</p>"
+            "</div>"
+        ),
+    )
+    try:
+        response = SendGridAPIClient(SENDGRID_API_KEY).send(message)
+        return 200 <= int(response.status_code) < 300
+    except Exception:
+        app.logger.exception("[PASSWORD RESET] Email delivery failed")
+        return False
+
+
+def _decode_password_reset_token(token: str, users: dict) -> Tuple[str, dict]:
+    encoded, supplied_signature = str(token or "").split(".", 1)
+    expected_signature = hmac.new(
+        str(SESSION_SECRET).encode("utf-8"),
+        encoded.encode("ascii"),
+        hashlib.sha256,
+    ).hexdigest()
+    if not hmac.compare_digest(expected_signature, supplied_signature):
+        raise ValueError("invalid")
+    padded = encoded + ("=" * ((4 - len(encoded) % 4) % 4))
+    payload = json.loads(base64.urlsafe_b64decode(padded.encode("ascii")).decode("utf-8"))
+    email = _norm_email(payload.get("email"))
+    issued_at = int(payload.get("iat") or 0)
+    if not email or issued_at <= 0 or time.time() - issued_at > PASSWORD_RESET_TTL_SECONDS:
+        raise ValueError("expired")
+    user = users.get(email)
+    if not isinstance(user, dict):
+        raise ValueError("invalid")
+    current_fingerprint = hashlib.sha256(
+        str(user.get("password") or "").encode("utf-8")
+    ).hexdigest()[:20]
+    if not hmac.compare_digest(str(payload.get("pf") or ""), current_fingerprint):
+        raise ValueError("used")
+    return email, user
+
+
 def _mfa_cipher() -> Fernet:
     key = base64.urlsafe_b64encode(hashlib.sha256(str(SESSION_SECRET).encode("utf-8")).digest())
     return Fernet(key)
@@ -387,6 +483,55 @@ def healthz():
 @app.route("/api/health", methods=["GET"])
 def api_health():
     return jsonify(ok=True, ts=int(time.time())), 200
+
+
+@app.route("/api/readiness", methods=["GET"])
+def api_readiness():
+    """Report production dependencies without exposing secret values."""
+    storage_ready = False
+    storage_error = ""
+    try:
+        users = load_users()
+        storage_ready = isinstance(users, dict)
+    except Exception as exc:
+        storage_error = type(exc).__name__
+
+    checks = {
+        "storage": storage_ready,
+        "stable_session_secret": bool(
+            os.getenv("SESSION_SECRET")
+            or os.getenv("FLASK_SECRET_KEY")
+            or os.getenv("APP_SECRET")
+            or os.getenv("PLATFORM_OWNER_PASSWORD")
+        ),
+        "stripe_billing": bool(
+            os.getenv("STRIPE_SECRET_KEY")
+            and os.getenv("STRIPE_PRICE_ID")
+            and os.getenv("STRIPE_WEBHOOK_SECRET")
+        ),
+        "transactional_email": bool(os.getenv("SENDGRID_API_KEY")),
+        "google_sign_in": bool(os.getenv("GOOGLE_CLIENT_ID")),
+        "whatsapp": bool(
+            (os.getenv("WHATSAPP_TOKEN") or os.getenv("WHATSAPP_ACCESS_TOKEN"))
+            and (os.getenv("WHATSAPP_PHONE_ID") or os.getenv("WHATSAPP_PHONE_NUMBER_ID"))
+            and (os.getenv("APP_SECRET") or os.getenv("META_APP_SECRET"))
+        ),
+        "persistent_storage": bool(
+            (os.getenv("USE_SQLITE") or "").strip().lower() == "true"
+            and os.getenv("SQLITE_PATH")
+        ),
+    }
+    required = ("storage", "stable_session_secret", "stripe_billing", "transactional_email")
+    ready = all(checks[name] for name in required)
+    payload = {
+        "ok": ready,
+        "status": "ready" if ready else "degraded",
+        "checks": checks,
+        "ts": int(time.time()),
+    }
+    if storage_error:
+        payload["storage_error"] = storage_error
+    return jsonify(payload), 200 if ready else 503
 
 @app.route("/test", methods=["GET"])
 def test_root():
@@ -2740,17 +2885,77 @@ def stripe_webhook():
     except Exception:
         return "", 400
 
-    if event["type"] == "checkout.session.completed":
-        session = event["data"]["object"]
-        email = session.get("customer_email")
-        if email:
-            users = load_users() or {}
-            if isinstance(users, dict):
-                user = users.get(_norm_email(email))
-                if user:
-                    user["status"] = "active"
-                    users[_norm_email(email)] = user
-                    save_users(users)
+    event_type = str(event.get("type") or "")
+    event_object = (event.get("data") or {}).get("object") or {}
+    users = load_users() or {}
+    if not isinstance(users, dict):
+        return "", 503
+
+    def find_billing_user() -> Tuple[str, Optional[dict]]:
+        metadata = event_object.get("metadata") or {}
+        candidate_email = _norm_email(
+            event_object.get("customer_email")
+            or (event_object.get("customer_details") or {}).get("email")
+            or metadata.get("user_email")
+        )
+        if candidate_email and isinstance(users.get(candidate_email), dict):
+            return candidate_email, users[candidate_email]
+        customer_id = str(event_object.get("customer") or "")
+        subscription_id = str(
+            event_object.get("subscription")
+            or (event_object.get("id") if event_type.startswith("customer.subscription.") else "")
+            or ""
+        )
+        for stored_email, stored_user in users.items():
+            if not isinstance(stored_user, dict):
+                continue
+            if customer_id and str(stored_user.get("stripe_customer_id") or "") == customer_id:
+                return stored_email, stored_user
+            if subscription_id and str(stored_user.get("stripe_subscription_id") or "") == subscription_id:
+                return stored_email, stored_user
+        return "", None
+
+    email, user = find_billing_user()
+    if email and user:
+        now_iso = datetime.datetime.utcnow().isoformat() + "Z"
+        customer_id = event_object.get("customer")
+        if customer_id:
+            user["stripe_customer_id"] = customer_id
+
+        if event_type == "checkout.session.completed":
+            subscription = event_object.get("subscription")
+            if subscription:
+                user["stripe_subscription_id"] = (
+                    subscription.get("id") if isinstance(subscription, dict) else subscription
+                )
+            user["status"] = "active"
+            user["billing_status"] = "active"
+            user["billing_issue_at"] = ""
+        elif event_type in {"invoice.paid", "invoice.payment_succeeded"}:
+            user["status"] = "active"
+            user["billing_status"] = "active"
+            user["billing_issue_at"] = ""
+        elif event_type in {"invoice.payment_failed", "invoice.payment_action_required"}:
+            # Keep the workspace available while Stripe retries the payment.
+            user["billing_status"] = "past_due"
+            user["billing_issue_at"] = now_iso
+        elif event_type == "customer.subscription.updated":
+            subscription_status = str(event_object.get("status") or "")
+            user["stripe_subscription_id"] = event_object.get("id")
+            user["billing_status"] = subscription_status
+            if subscription_status in {"active", "trialing", "past_due"}:
+                user["status"] = "active"
+            elif subscription_status in {"unpaid", "incomplete_expired", "canceled"}:
+                user["status"] = "inactive"
+        elif event_type == "customer.subscription.deleted":
+            user["billing_status"] = "canceled"
+            user["status"] = "inactive"
+            user["stripe_subscription_id"] = ""
+
+        user["stripe_event_type"] = event_type
+        user["stripe_event_at"] = now_iso
+        users[email] = user
+        save_users(users)
     return "", 200
 
 @app.route("/api/stripe/disconnect", methods=["POST"])
@@ -2891,6 +3096,60 @@ def _bootstrap_platform_owner() -> None:
 
 
 _bootstrap_platform_owner()
+
+
+@app.post("/api/auth/password/forgot")
+def forgot_password():
+    data = request.get_json(silent=True) or {}
+    email = _norm_email(data.get("email"))
+    generic = {
+        "ok": True,
+        "message": "If an account exists for that email, a secure reset link is on its way.",
+    }
+    if not email or _password_reset_rate_limited(email):
+        return jsonify(generic), 200
+
+    users = load_users() or {}
+    user = users.get(email) if isinstance(users, dict) else None
+    if (
+        isinstance(user, dict)
+        and user.get("password")
+        and not _is_platform_owner(email)
+    ):
+        _password_reset_email(_password_reset_token(email, user), email)
+    return jsonify(generic), 200
+
+
+@app.post("/api/auth/password/reset")
+def reset_password():
+    data = request.get_json(silent=True) or {}
+    token = str(data.get("token") or "").strip()
+    password = str(data.get("password") or "")
+    if len(password) < 12:
+        return jsonify({"error": "Use at least 12 characters for your new password."}), 400
+    if len(password) > 256:
+        return jsonify({"error": "Password is too long."}), 400
+
+    users = load_users() or {}
+    if not isinstance(users, dict):
+        return jsonify({"error": "storage_not_ready"}), 503
+    try:
+        email, user = _decode_password_reset_token(token, users)
+    except Exception:
+        return jsonify({
+            "error": "This reset link is invalid or expired. Request a new one."
+        }), 400
+
+    user["password"] = generate_password_hash(password)
+    user["password_changed_at"] = datetime.datetime.utcnow().isoformat() + "Z"
+    users[email] = user
+    save_users(users)
+    session.clear()
+    _clear_login_failures(email)
+    return jsonify({
+        "ok": True,
+        "message": "Password updated. Sign in with your new password.",
+    }), 200
 
 
 def _complete_login_response(email: str, user: dict, payload: dict, remember: bool, message: str):

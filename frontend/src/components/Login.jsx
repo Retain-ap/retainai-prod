@@ -17,8 +17,6 @@ const BG = {
   text80: "rgba(255,255,255,.80)",
 };
 
-const SUPPORT_EMAIL = "owner@retainai.ca";
-
 // Small input
 function Input({
   type = "text",
@@ -137,6 +135,11 @@ export default function Login() {
   const [mfaRequired, setMfaRequired] = useState(false);
   const [mfaCode, setMfaCode] = useState("");
   const [billingState, setBillingState] = useState(null);
+  const [resetToken] = useState(
+    () => new URLSearchParams(window.location.search).get("reset_token") || ""
+  );
+  const [newPassword, setNewPassword] = useState("");
+  const [confirmPassword, setConfirmPassword] = useState("");
   const navigate = useNavigate();
 
   // Authentication cookies are first-party when the public frontend and API
@@ -176,17 +179,63 @@ export default function Login() {
 
     const savedFlag = localStorage.getItem("rememberFlag");
     if (savedFlag) setRemember(savedFlag === "1");
+    if (new URLSearchParams(window.location.search).get("password_reset") === "success") {
+      setError("Password updated. Sign in with your new password.");
+      window.history.replaceState({}, "", "/login");
+    }
   }, []);
 
-  // Forgot password -> open email to support with prefilled body
-  const handleForgot = () => {
-    const subject = encodeURIComponent("Password reset request — RetainAI");
-    const body = encodeURIComponent(
-      `Hi RetainAI,\n\nPlease reset my password.\n\nAccount email: ${
-        email || "<enter your email>"
-      }\n\nThanks!`
-    );
-    window.location.href = `mailto:${SUPPORT_EMAIL}?subject=${subject}&body=${body}`;
+  const handleForgot = async () => {
+    const cleanedEmail = normEmail(email);
+    if (!cleanedEmail) {
+      setError("Enter your account email first.");
+      return;
+    }
+    setSubmitting(true);
+    setError("");
+    try {
+      const response = await fetch(apiUrl("auth/password/forgot"), {
+        method: "POST",
+        credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email: cleanedEmail }),
+      });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(data.error || "Could not request a reset link.");
+      setError(data.message || "Check your email for a secure reset link.");
+    } catch (requestError) {
+      setError(requestError.message || "Could not request a reset link.");
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  const handlePasswordReset = async (event) => {
+    event.preventDefault();
+    setError("");
+    if (newPassword.length < 12) {
+      setError("Use at least 12 characters for your new password.");
+      return;
+    }
+    if (newPassword !== confirmPassword) {
+      setError("The passwords do not match.");
+      return;
+    }
+    setSubmitting(true);
+    try {
+      const response = await fetch(apiUrl("auth/password/reset"), {
+        method: "POST",
+        credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ token: resetToken, password: newPassword }),
+      });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(data.error || "Could not reset your password.");
+      window.location.assign("/login?password_reset=success");
+    } catch (requestError) {
+      setError(requestError.message || "Could not reset your password.");
+      setSubmitting(false);
+    }
   };
 
   // ---- Google OAuth handler ----
@@ -494,12 +543,41 @@ export default function Login() {
               marginBottom: 12,
             }}
           >
-            Welcome back
+            {resetToken ? "Choose a new password" : "Welcome back"}
           </h2>
 
-          <form onSubmit={mfaRequired ? handleMfa : handleLogin}>
+          <form onSubmit={resetToken ? handlePasswordReset : (mfaRequired ? handleMfa : handleLogin)}>
             <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
-              {mfaRequired ? (
+              {resetToken ? (
+                <>
+                  <div style={{ color: BG.text80, lineHeight: 1.6 }}>
+                    Use at least 12 characters. This secure link can only be used once.
+                  </div>
+                  <Input
+                    type={showPw ? "text" : "password"}
+                    value={newPassword}
+                    onChange={(e) => setNewPassword(e.target.value)}
+                    placeholder="New password"
+                    autoComplete="new-password"
+                  />
+                  <Input
+                    type={showPw ? "text" : "password"}
+                    value={confirmPassword}
+                    onChange={(e) => setConfirmPassword(e.target.value)}
+                    placeholder="Confirm new password"
+                    autoComplete="new-password"
+                  />
+                  <label style={{ color: BG.text80, fontSize: 14 }}>
+                    <input
+                      type="checkbox"
+                      checked={showPw}
+                      onChange={(e) => setShowPw(e.target.checked)}
+                      style={{ accentColor: BG.gold, marginRight: 8 }}
+                    />
+                    Show passwords
+                  </label>
+                </>
+              ) : mfaRequired ? (
                 <>
                   <div style={{ color: BG.text80, lineHeight: 1.6 }}>
                     Enter the current code from your authenticator app, or use
@@ -668,7 +746,9 @@ export default function Login() {
                 type="submit"
                 disabled={
                   submitting ||
-                  (mfaRequired ? !mfaCode.trim() : !email || !password)
+                  (resetToken
+                    ? !newPassword || !confirmPassword
+                    : mfaRequired ? !mfaCode.trim() : !email || !password)
                 }
                 style={{
                   background: BG.gold,
@@ -681,14 +761,20 @@ export default function Login() {
                   cursor: submitting ? "not-allowed" : "pointer",
                   opacity:
                     submitting ||
-                    (mfaRequired ? !mfaCode.trim() : !email || !password)
+                    (resetToken
+                      ? !newPassword || !confirmPassword
+                      : mfaRequired ? !mfaCode.trim() : !email || !password)
                       ? 0.7
                       : 1,
                 }}
               >
-                {submitting ? "Signing in…" : "Login"}
+                {submitting
+                  ? (resetToken ? "Updating password…" : "Signing in…")
+                  : (resetToken ? "Update password" : "Login")}
               </button>
 
+              {!resetToken && (
+                <>
               <div
                 style={{
                   display: "flex",
@@ -713,6 +799,8 @@ export default function Login() {
                 theme="filled_black"
                 text="signin_with"
               />
+                </>
+              )}
 
               <div
                 style={{
