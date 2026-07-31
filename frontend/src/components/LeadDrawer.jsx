@@ -258,6 +258,7 @@ export default function LeadDrawer({
 
   return (
     <div
+      className="lead-drawer"
       style={{
         position: "fixed",
         top: 0,
@@ -387,6 +388,9 @@ export default function LeadDrawer({
 
       {/* Tabs */}
       <div
+        className="lead-drawer-tabs"
+        role="tablist"
+        aria-label="Customer details"
         style={{
           display: "flex",
           gap: 8,
@@ -398,6 +402,9 @@ export default function LeadDrawer({
         {tabs.map((tab) => (
           <button
             key={tab.key}
+            className={`lead-drawer-tab${activeTab === tab.key ? " active" : ""}`}
+            role="tab"
+            aria-selected={activeTab === tab.key}
             onClick={() => setActiveTab(tab.key)}
             style={{
               background: activeTab === tab.key ? "#2a2d31" : "transparent",

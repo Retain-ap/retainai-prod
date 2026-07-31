@@ -271,8 +271,17 @@ export default function OwnerConsole() {
 
       <div className="product-tabs" role="tablist" aria-label="Owner console">
         {tabs.map(([key, label, icon]) => (
-          <button key={key} className={`product-tab ${tab === key ? "active" : ""}`} onClick={() => setTab(key)}>
-            {icon} {label}
+          <button
+            key={key}
+            className={`product-tab ${tab === key ? "active" : ""}`}
+            onClick={() => setTab(key)}
+            role="tab"
+            aria-selected={tab === key}
+            aria-label={label}
+            title={label}
+          >
+            <span className="product-tab-icon" aria-hidden="true">{icon}</span>
+            <span className="product-tab-label">{label}</span>
           </button>
         ))}
       </div>

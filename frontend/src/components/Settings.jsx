@@ -668,6 +668,9 @@ export default function Settings({
           <button
             key={t.key}
             className={tab === t.key ? "active" : ""}
+            aria-label={t.label}
+            aria-current={tab === t.key ? "page" : undefined}
+            title={t.label}
             onClick={() => {
               setTab(t.key);
               setEditMode(false);

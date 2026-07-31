@@ -1055,3 +1055,143 @@ video {
     font-size: 12px !important;
   }
 }
+
+/* Compact secondary navigation: keep every destination available without
+   turning a phone header into a wall of labels. The active tab expands so the
+   user always knows where they are; the remaining destinations stay as clear
+   icon buttons with accessible labels and native horizontal swiping. */
+.product-tab-icon {
+  display: inline-grid;
+  flex: 0 0 auto;
+  place-items: center;
+}
+
+.product-tab-label {
+  min-width: 0;
+}
+
+.lead-drawer-tabs,
+.ai-tabs {
+  min-width: 0;
+  overflow-x: auto;
+  overscroll-behavior-inline: contain;
+  scrollbar-width: none;
+  -webkit-overflow-scrolling: touch;
+}
+
+.lead-drawer-tabs::-webkit-scrollbar,
+.ai-tabs::-webkit-scrollbar {
+  display: none;
+}
+
+.lead-drawer-tab,
+.ai-tab {
+  flex: 0 0 auto;
+  white-space: nowrap;
+}
+
+@media (max-width: 900px) {
+  .product-tabs,
+  .settings-nav,
+  .lead-drawer-tabs,
+  .ai-tabs {
+    scroll-snap-type: x proximity;
+  }
+
+  .product-tab,
+  .settings-nav button,
+  .lead-drawer-tab,
+  .ai-tab {
+    scroll-snap-align: start;
+  }
+
+  .lead-drawer {
+    width: min(430px, 100vw) !important;
+    min-width: 0 !important;
+    max-width: 100vw !important;
+    height: 100dvh !important;
+  }
+}
+
+@media (max-width: 620px) {
+  .product-tabs {
+    gap: 4px;
+    padding: 5px;
+    border-radius: 12px;
+  }
+
+  .product-tab {
+    width: 42px;
+    min-width: 42px;
+    min-height: 42px;
+    justify-content: center;
+    gap: 0;
+    padding: 9px !important;
+    border-radius: 9px;
+  }
+
+  .product-tab-label {
+    display: none;
+  }
+
+  .product-tab.active {
+    width: auto;
+    gap: 7px;
+    padding-inline: 12px !important;
+  }
+
+  .product-tab.active .product-tab-label {
+    display: inline;
+    max-width: 150px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .settings-nav {
+    gap: 4px !important;
+    padding: 7px 9px !important;
+  }
+
+  .settings-nav button {
+    width: 42px;
+    min-width: 42px;
+    min-height: 42px;
+    gap: 0;
+    padding: 8px !important;
+  }
+
+  .settings-nav button.active {
+    width: auto;
+    gap: 7px;
+    padding-inline: 11px !important;
+  }
+
+  .settings-nav button.active .settings-label {
+    display: inline;
+    max-width: 118px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .lead-drawer-tabs {
+    gap: 5px !important;
+    padding: 10px 12px 8px !important;
+  }
+
+  .lead-drawer-tab {
+    min-height: 40px;
+    padding: 8px 12px !important;
+  }
+
+  .ai-tabs {
+    gap: 5px;
+    margin: 16px 0;
+  }
+
+  .ai-tab {
+    min-height: 42px;
+    padding: 8px 12px;
+  }
+}
