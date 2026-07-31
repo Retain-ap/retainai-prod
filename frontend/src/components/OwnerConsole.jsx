@@ -60,6 +60,10 @@ export default function OwnerConsole() {
   const [audit, setAudit] = useState([]);
   const [features, setFeatures] = useState({});
   const [query, setQuery] = useState("");
+  const [statusFilter, setStatusFilter] = useState("all");
+  const [integrationFilter, setIntegrationFilter] = useState("all");
+  const [selectedEmail, setSelectedEmail] = useState("");
+  const [supportNote, setSupportNote] = useState("");
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [busy, setBusy] = useState("");
@@ -96,11 +100,32 @@ export default function OwnerConsole() {
 
   const filteredAccounts = useMemo(() => {
     const needle = query.trim().toLowerCase();
-    if (!needle) return accounts;
-    return accounts.filter((item) =>
-      `${item.business} ${item.name} ${item.email} ${item.status}`.toLowerCase().includes(needle)
-    );
-  }, [accounts, query]);
+    return accounts.filter((item) => {
+      const matchesQuery =
+        !needle ||
+        `${item.business} ${item.name} ${item.email} ${item.status}`
+          .toLowerCase()
+          .includes(needle);
+      const matchesStatus =
+        statusFilter === "all" ||
+        (statusFilter === "at_risk"
+          ? Boolean(item.risk_reasons?.length)
+          : item.status === statusFilter);
+      const matchesIntegration =
+        integrationFilter === "all" ||
+        Boolean(item.integrations?.[integrationFilter]);
+      return matchesQuery && matchesStatus && matchesIntegration;
+    });
+  }, [accounts, query, statusFilter, integrationFilter]);
+
+  const selectedAccount = useMemo(
+    () => accounts.find((item) => item.email === selectedEmail) || null,
+    [accounts, selectedEmail]
+  );
+
+  useEffect(() => {
+    setSupportNote(selectedAccount?.support_note || "");
+  }, [selectedAccount]);
 
   async function accountAction(email, action, extra = {}) {
     setBusy(`${email}:${action}`);
@@ -176,6 +201,11 @@ export default function OwnerConsole() {
     }
   }
 
+  async function saveSupportNote() {
+    if (!selectedAccount) return;
+    await accountAction(selectedAccount.email, "support_note", { note: supportNote });
+  }
+
   const tabs = [
     ["overview", "Overview", <FaChartPie />],
     ["accounts", "Customer Accounts", <FaUsers />],
@@ -213,8 +243,10 @@ export default function OwnerConsole() {
           <div className="metric-grid">
             <div className="metric-card"><span>Total accounts</span><strong>{overview.accounts_total}</strong><small>+{overview.recent_signups} this week</small></div>
             <div className="metric-card"><span>Active customers</span><strong>{overview.active_accounts}</strong><small>{overview.trials} trials in progress</small></div>
-            <div className="metric-card"><span>Estimated MRR</span><strong>${overview.estimated_mrr}</strong><small>Based on active standard plans</small></div>
+            <div className="metric-card"><span>Trials in progress</span><strong>{overview.trials}</strong><small>Potential customers in evaluation</small></div>
             <div className="metric-card"><span>Contacts managed</span><strong>{overview.contacts_total}</strong><small>Across all customer workspaces</small></div>
+            <div className="metric-card"><span>Onboarded</span><strong>{overview.onboarded_accounts}</strong><small>{overview.average_onboarding}% average completion</small></div>
+            <div className="metric-card"><span>At-risk accounts</span><strong>{overview.at_risk_accounts}</strong><small>Need proactive attention</small></div>
           </div>
           <div className="product-grid">
             <section className="product-card">
@@ -241,21 +273,74 @@ export default function OwnerConsole() {
         <section className="product-card" style={{ marginTop: 18 }}>
           <div className="product-card-header">
             <div><h2>Customer Accounts</h2><p className="product-card-copy">Search, diagnose and safely manage RetainAI customers.</p></div>
-            <div style={{ width: 300, maxWidth: "100%", position: "relative" }}>
-              <FaSearch style={{ position: "absolute", left: 12, top: 13, color: "var(--ra-muted)" }} />
-              <input className="product-input" style={{ paddingLeft: 36 }} value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search accounts…" />
+            <div className="owner-filter-bar">
+              <div style={{ minWidth: 240, position: "relative" }}>
+                <FaSearch style={{ position: "absolute", left: 12, top: 13, color: "var(--ra-muted)" }} />
+                <input className="product-input" style={{ paddingLeft: 36 }} value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search accounts…" />
+              </div>
+              <select className="product-input" value={statusFilter} onChange={(event) => setStatusFilter(event.target.value)} aria-label="Filter by account status">
+                <option value="all">All statuses</option>
+                <option value="at_risk">At risk</option>
+                <option value="active">Active</option>
+                <option value="trial">Trial</option>
+                <option value="pending_payment">Pending payment</option>
+                <option value="past_due">Past due</option>
+                <option value="suspended">Suspended</option>
+                <option value="deletion_pending">Deletion pending</option>
+              </select>
+              <select className="product-input" value={integrationFilter} onChange={(event) => setIntegrationFilter(event.target.value)} aria-label="Filter by integration">
+                <option value="all">All integrations</option>
+                <option value="whatsapp">WhatsApp connected</option>
+                <option value="google">Google connected</option>
+                <option value="stripe">Stripe connected</option>
+              </select>
             </div>
           </div>
+          <div className="owner-account-summary">
+            <span><strong>{filteredAccounts.length}</strong> accounts shown</span>
+            <span><strong>{filteredAccounts.reduce((sum, item) => sum + Number(item.lead_count || 0), 0)}</strong> contacts</span>
+            <span><strong>{filteredAccounts.filter((item) => item.risk_reasons?.length).length}</strong> need attention</span>
+          </div>
+          {selectedAccount && (
+            <div className="owner-account-detail">
+              <div className="product-card-header">
+                <div>
+                  <div className="product-eyebrow">Account details</div>
+                  <h2>{selectedAccount.business || selectedAccount.name || selectedAccount.email}</h2>
+                  <p className="product-card-copy">{selectedAccount.email} · Created {when(selectedAccount.created_at)}</p>
+                </div>
+                <button className="product-button" onClick={() => setSelectedEmail("")}>Close</button>
+              </div>
+              <div className="owner-detail-grid">
+                <div><span>Status</span><strong>{selectedAccount.status.replaceAll("_", " ")}</strong></div>
+                <div><span>Billing</span><strong>{String(selectedAccount.billing_status || "unknown").replaceAll("_", " ")}</strong></div>
+                <div><span>Onboarding</span><strong>{selectedAccount.onboarding_score}%</strong></div>
+                <div><span>Trial remaining</span><strong>{selectedAccount.trial_days_remaining || 0} days</strong></div>
+                <div><span>Contacts</span><strong>{selectedAccount.lead_count}</strong></div>
+                <div><span>Team</span><strong>{selectedAccount.team_count}</strong></div>
+              </div>
+              <div className="owner-risk-list">
+                {selectedAccount.risk_reasons?.length
+                  ? selectedAccount.risk_reasons.map((reason) => <span key={reason}>{reason}</span>)
+                  : <span className="healthy">No current risk signals</span>}
+              </div>
+              <label className="owner-note-field">
+                <span>Private owner support note</span>
+                <textarea className="product-input" rows="3" maxLength="1000" value={supportNote} onChange={(event) => setSupportNote(event.target.value)} placeholder="Record follow-up context, customer needs, or an internal note…" />
+              </label>
+              <button className="product-button primary" disabled={Boolean(busy)} onClick={saveSupportNote}>Save private note</button>
+            </div>
+          )}
           <div className="owner-table-wrap">
             <table className="owner-table">
               <thead><tr><th>Customer</th><th>Status</th><th>Activity</th><th>Workspace</th><th>Integrations</th><th>Owner actions</th></tr></thead>
               <tbody>
                 {filteredAccounts.map((account) => (
                   <tr key={account.email}>
-                    <td><strong>{account.business || account.name || "Unnamed business"}</strong><small>{account.email}</small></td>
+                    <td><button className="owner-account-link" onClick={() => setSelectedEmail(account.email)}><strong>{account.business || account.name || "Unnamed business"}</strong><small>{account.email}</small></button></td>
                     <td><span className={`status-pill ${account.status}`}>{account.status.replaceAll("_", " ")}</span><small>{account.plan}</small></td>
                     <td><strong>{when(account.last_login)}</strong><small>Last login</small></td>
-                    <td><strong>{account.lead_count} contacts</strong><small>{account.team_count} teammates</small></td>
+                    <td><strong>{account.lead_count} contacts</strong><small>{account.team_count} teammates · {account.onboarding_score}% onboarded</small></td>
                     <td><IntegrationDots integrations={account.integrations} /></td>
                     <td>
                       <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
@@ -281,6 +366,7 @@ export default function OwnerConsole() {
                     </td>
                   </tr>
                 ))}
+                {!filteredAccounts.length && <tr><td colSpan="6"><div className="owner-empty-state"><strong>No matching accounts</strong><small>Adjust the search or filters to see more customers.</small></div></td></tr>}
               </tbody>
             </table>
           </div>

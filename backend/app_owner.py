@@ -7,7 +7,7 @@ from uuid import uuid4
 
 from flask import Blueprint, Response, jsonify, request, session
 
-from storage import DATA_ROOT, delete_users, load_leads, load_users, save_leads, save_users
+from storage import DATA_ROOT, load_leads, load_users, save_users
 
 
 owner_bp = Blueprint("owner_bp", __name__)
@@ -127,19 +127,61 @@ def _account_row(email, record, leads_by_user, users):
     trial_end = (
         trial_start + datetime.timedelta(days=14) if trial_start else None
     )
+    now = datetime.datetime.now(datetime.timezone.utc)
+    trial_days_remaining = (
+        max(0, (trial_end - now).days + (1 if trial_end > now else 0))
+        if trial_end
+        else 0
+    )
+    integrations = _integration_summary(record)
+    onboarding_checks = {
+        "profile": bool(
+            record.get("business")
+            or record.get("businessName")
+        ),
+        "contacts": bool(leads),
+        "integration": any(integrations.values()),
+        "team": team_count > 0,
+    }
+    onboarding_score = round(
+        100 * sum(1 for complete in onboarding_checks.values() if complete)
+        / len(onboarding_checks)
+    )
+    status = (
+        "deletion_pending"
+        if record.get("deletion_scheduled_for")
+        else (record.get("status") or "unknown")
+    )
+    risk_reasons = []
+    last_login = _parse_datetime(record.get("last_login"))
+    created_at = _parse_datetime(record.get("created_at") or record.get("trial_start"))
+    if status in {"past_due", "suspended", "inactive"}:
+        risk_reasons.append("Account access or billing needs attention")
+    if created_at and (now - created_at).days >= 2 and not last_login:
+        risk_reasons.append("No successful login recorded")
+    if not leads and created_at and (now - created_at).days >= 2:
+        risk_reasons.append("No contacts imported")
+    if not any(integrations.values()):
+        risk_reasons.append("No integrations connected")
     return {
         "email": email,
         "name": record.get("name") or "",
         "business": record.get("business") or record.get("businessName") or "",
         "business_type": record.get("businessType") or "",
-        "status": "deletion_pending" if record.get("deletion_scheduled_for") else (record.get("status") or "unknown"),
+        "status": status,
+        "billing_status": record.get("billing_status") or status,
         "created_at": record.get("created_at") or record.get("trial_start") or "",
         "trial_ends_at": trial_end.isoformat() if trial_end else "",
+        "trial_days_remaining": trial_days_remaining,
         "last_login": record.get("last_login") or "",
         "plan": record.get("plan") or record.get("subscription_plan") or "Standard",
         "lead_count": len(leads),
         "team_count": team_count,
-        "integrations": _integration_summary(record),
+        "integrations": integrations,
+        "onboarding_score": onboarding_score,
+        "onboarding_checks": onboarding_checks,
+        "risk_reasons": risk_reasons,
+        "risk_level": "high" if len(risk_reasons) >= 3 else ("medium" if risk_reasons else "healthy"),
         "support_note": record.get("platform_support_note") or "",
         "deletion_requested_at": record.get("deletion_requested_at") or "",
         "deletion_scheduled_for": record.get("deletion_scheduled_for") or "",
@@ -209,10 +251,14 @@ def owner_overview():
             "suspended": status_counts.get("suspended", 0),
             "recent_signups": recent_signups,
             "contacts_total": sum(row["lead_count"] for row in rows),
+            "team_members_total": sum(row["team_count"] for row in rows),
+            "at_risk_accounts": sum(1 for row in rows if row["risk_reasons"]),
+            "onboarded_accounts": sum(1 for row in rows if row["onboarding_score"] >= 75),
+            "average_onboarding": round(
+                sum(row["onboarding_score"] for row in rows) / len(rows)
+            ) if rows else 0,
+            "status_breakdown": dict(status_counts),
             "integrations": dict(connected),
-            "estimated_mrr": sum(
-                20 if row["status"] == "active" else 0 for row in rows
-            ),
             "generated_at": int(time.time()),
         }
     ), 200
@@ -303,19 +349,17 @@ def owner_account_action(email):
         confirmation = str(data.get("confirmation") or "").strip()
         if confirmation != f"DELETE {target}":
             return jsonify({"error": "email_confirmation_required"}), 400
-        removed_keys = []
-        for key, record in list(users.items()):
-            if key == target or (
-                isinstance(record, dict) and _norm(record.get("org_id")) == target
-            ):
-                removed_keys.append(key)
-                users.pop(key, None)
-        leads = load_leads() or {}
-        if isinstance(leads, dict):
-            leads.pop(target, None)
-            save_leads(leads)
-        delete_users(removed_keys)
-        details["records_removed"] = len(removed_keys)
+        # Reuse the billing-safe account lifecycle implementation. It refuses
+        # deletion when an active Stripe subscription cannot be cancelled.
+        from app_account import _cancel_workspace_subscriptions, _purge_workspace
+        try:
+            details["subscriptions_cancelled"] = _cancel_workspace_subscriptions(account)
+        except Exception:
+            return jsonify({
+                "error": "billing_cancellation_failed",
+                "message": "The subscription could not be safely cancelled, so no customer data was deleted.",
+            }), 409
+        details["records_removed"] = _purge_workspace(target, users)
         _audit(actor, action, target, details)
         return jsonify({"ok": True, "deleted": True}), 200
     else:
