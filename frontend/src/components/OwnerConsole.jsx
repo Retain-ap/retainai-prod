@@ -499,13 +499,15 @@ export default function OwnerConsole() {
 
       {tab === "health" && health && (
         <section className="product-card" style={{ marginTop: 18 }}>
-          <div className="product-card-header"><div><h2>System Health</h2><p className="product-card-copy">Configuration readiness without exposing secret values.</p></div><span className={`status-pill ${health.ok ? "active" : "past_due"}`}>{health.ok ? "All ready" : "Needs attention"}</span></div>
-          <div className="system-check-grid">
-            {Object.entries(health.checks || {}).map(([key, ok]) => (
-              <div className={`system-check ${ok ? "ok" : "missing"}`} key={key}>
-                <strong>{key.replaceAll("_", " ")}</strong><span>{ok ? "Configured" : "Missing configuration"}</span>
-              </div>
-            ))}
+          <div className="product-card-header"><div><h2>Live System Status</h2><p className="product-card-copy">Operational checks and plain-language recovery instructions without exposing secret values.</p></div><span className={`status-pill ${health.ok ? "active" : "past_due"}`}>{health.ok ? "All ready" : "Needs attention"}</span></div>
+          <div className="system-check-grid">{(health.diagnostics || []).map((item) => <div className={`system-check ${item.ok ? "ok" : "missing"}`} key={item.key}><div><strong>{item.label}</strong><span>{item.detail || (item.ok ? "Ready" : "Needs attention")}</span></div>{!item.ok && <small>{item.action}</small>}</div>)}</div>
+          <div className="owner-detail-grid" style={{ marginTop: 18 }}>
+            <div><span>Last outgoing WhatsApp</span><strong>{when(health.activity?.last_outgoing_whatsapp)}</strong></div>
+            <div><span>Last incoming webhook</span><strong>{when(health.activity?.last_incoming_webhook)}</strong></div>
+            <div><span>Last matched reply</span><strong>{when(health.activity?.last_matched_reply)}</strong></div>
+            <div><span>Unmatched replies</span><strong>{health.activity?.unmatched_reply_count || 0}</strong></div>
+            <div><span>Active automation runs</span><strong>{health.activity?.automation_active_runs || 0}</strong></div>
+            <div><span>Failed automation runs</span><strong>{health.activity?.automation_failed_runs || 0}</strong></div>
           </div>
           {health.deployment && <p className="product-card-copy">Deployment revision: <code>{health.deployment}</code></p>}
         </section>

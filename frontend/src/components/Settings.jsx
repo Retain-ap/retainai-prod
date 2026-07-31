@@ -182,6 +182,7 @@ export default function Settings({
   const [info, setInfo] = useState("");
   const [profileBackendOk, setProfileBackendOk] = useState(null);
   const [supportCopied, setSupportCopied] = useState(false);
+  const [billingUsage, setBillingUsage] = useState(null);
   const [notificationPrefs, setNotificationPrefs] = useState(() => {
     const saved = safeParse(localStorage.getItem("retainai:notification-preferences") || "");
     return {
@@ -207,6 +208,11 @@ export default function Settings({
       setTab(initialTab);
     }
   }, [initialTab]);
+
+  useEffect(() => {
+    if (tab !== "billing") return;
+    fetchJson(apiUrl("billing/usage")).then(setBillingUsage).catch(() => setBillingUsage(null));
+  }, [tab]);
 
   useEffect(() => {
     const next = normalizeUser(user);
@@ -920,8 +926,18 @@ export default function Settings({
             </div>
             <div className="integration-overview">
               <div><span>Account status</span><strong className="ready">{profile?.status || "Active"}</strong></div>
-              <div><span>Current plan</span><strong>Standard</strong></div>
+              <div><span>Current plan</span><strong>{billingUsage?.plan || "Standard"}</strong></div>
               <div><span>Stripe invoicing</span><strong className={profile?.stripe_connected ? "ready" : "muted"}>{profile?.stripe_connected ? "Connected" : "Optional"}</strong></div>
+            </div>
+            <div className="owner-detail-grid" style={{ marginBottom: 18 }}>
+              <div><span>Trial ends</span><strong>{billingUsage?.trial_ends_at ? new Date(billingUsage.trial_ends_at).toLocaleDateString() : "—"}</strong></div>
+              <div><span>Next payment</span><strong>{billingUsage?.next_payment_at ? new Date(Number(billingUsage.next_payment_at) * 1000).toLocaleDateString() : "Shown in Stripe"}</strong></div>
+              <div><span>WhatsApp messages</span><strong>{billingUsage?.whatsapp_messages || 0}</strong></div>
+              <div><span>AI generations</span><strong>{billingUsage?.ai_generations || 0}</strong></div>
+              <div><span>Active automations</span><strong>{billingUsage?.active_automations || 0}</strong></div>
+              <div><span>Team seats</span><strong>{billingUsage?.team_seats || 1}</strong></div>
+              <div><span>Contacts</span><strong>{billingUsage?.contacts || 0}</strong></div>
+              <div><span>Invoices created</span><strong>{billingUsage?.invoices_created || 0}</strong></div>
             </div>
             <div className="connected-accounts-grid">
               <StripeConnectCard

@@ -24,13 +24,13 @@ export default function OnboardingGuide({ user, leads = [], setSection, openImpo
         action: () => setSection("settings"),
       },
       {
-        label: "Connect your calendar",
-        done: Boolean(user?.gcal_connected || user?.google_refresh_token),
-        action: () => setSection("settings"),
+        label: "Send a WhatsApp test message",
+        done: localStorage.getItem("retainai:onboarding-test-message") === "1",
+        action: () => setSection("messages"),
       },
       {
-        label: "Set up billing",
-        done: Boolean(user?.stripe_connected || user?.stripe_account_id),
+        label: "Connect your calendar",
+        done: Boolean(user?.gcal_connected || user?.google_refresh_token),
         action: () => setSection("settings"),
       },
       {
@@ -42,6 +42,11 @@ export default function OnboardingGuide({ user, leads = [], setSection, openImpo
         label: "Activate your first playbook",
         done: localStorage.getItem("retainai:onboarding-playbook") === "1",
         action: () => setSection("automations"),
+      },
+      {
+        label: "Invite a teammate",
+        done: localStorage.getItem("retainai:onboarding-team") === "1",
+        action: () => window.RetainAI?.openTeam?.(),
       },
     ],
     [leads.length, openImports, setSection, user]

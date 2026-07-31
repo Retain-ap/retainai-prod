@@ -1393,6 +1393,7 @@ export default function Messages({ user, leads = [], defaultTemplate = "", langu
       }
 
       setBanner(data.mode === "template" ? "Template sent successfully." : null);
+      localStorage.setItem("retainai:onboarding-test-message", "1");
       setInput("");
 
       if (typeof expectedParams === "number" && expectedParams > 0) {

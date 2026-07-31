@@ -1,304 +1,134 @@
-// src/components/ImportContacts.jsx
-import React, { useEffect, useMemo, useRef, useState } from "react";
-import { API_BASE, apiUrl } from "../apiBase";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { FaCloudUploadAlt, FaGoogle, FaHistory, FaUndo } from "react-icons/fa";
+import { apiUrl } from "../apiBase";
+import "./product-system.css";
+import "./ImportContacts.css";
 
+const FIELDS = [
+  ["name", "Full name"], ["first_name", "First name"], ["last_name", "Last name"],
+  ["email", "Email"], ["phone", "Phone / WhatsApp"], ["company", "Company"],
+  ["title", "Job title"], ["notes", "Notes"],
+];
+
+async function request(path, options = {}, userEmail = "") {
+  const response = await fetch(apiUrl(path), {
+    credentials: "include", ...options,
+    headers: { Accept: "application/json", ...(userEmail ? { "X-User-Email": userEmail } : {}), ...(options.headers || {}) },
+  });
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok) throw new Error(data.error || `Import request failed (${response.status})`);
+  return data;
+}
 
 export default function ImportContacts({ user }) {
-  // Use the SAME env var the rest of the app uses
-  const API = API_BASE;
-
-  // ---------- CSV state ----------
-  const [file, setFile] = useState(null);
-  const [preview, setPreview] = useState(null);
-  const [loading, setLoading] = useState(false);
-  const [result, setResult] = useState(null);
-
-  // ---------- Google state ----------
-  const [gStatus, setGStatus] = useState(null);
-  const [gBusy, setGBusy] = useState(false);
+  const userEmail = useMemo(() => String(user?.org_id || user?.email || "").toLowerCase(), [user]);
+  const inputRef = useRef(null);
   const popupRef = useRef(null);
+  const [file, setFile] = useState(null);
+  const [dragging, setDragging] = useState(false);
+  const [preview, setPreview] = useState(null);
+  const [mapping, setMapping] = useState({});
+  const [countryCode, setCountryCode] = useState("+1");
+  const [duplicateMode, setDuplicateMode] = useState("skip");
+  const [tag, setTag] = useState("CSV import");
+  const [result, setResult] = useState(null);
+  const [history, setHistory] = useState([]);
+  const [google, setGoogle] = useState(null);
+  const [busy, setBusy] = useState("");
+  const [error, setError] = useState("");
 
-  const userEmail = useMemo(() => (user?.email || "").toLowerCase(), [user?.email]);
-
-  // ---------- CSV handlers ----------
-  async function handlePreview() {
-    if (!file || !userEmail) return;
-    setLoading(true);
-    setResult(null);
-    setPreview(null);
-    const form = new FormData();
-    form.append("file", file);
-    const res = await fetch(`${API}/api/import/csv/preview`, {
-      method: "POST",
-      credentials: "include",
-      headers: { "X-User-Email": userEmail },
-      body: form,
-    });
-    const data = await res.json();
-    setPreview(data);
-    setLoading(false);
-  }
-
-  function toggleRow(i) {
-    const copy = {
-      ...preview,
-      rows: preview.rows.map((r, idx) =>
-        idx === i ? { ...r, selected: r.selected === false ? true : (r.selected === true ? false : false) } : r
-      ),
-    };
-    setPreview(copy);
-  }
-
-  function selectAll(val) {
-    const copy = { ...preview, rows: preview.rows.map((r) => ({ ...r, selected: val })) };
-    setPreview(copy);
-  }
-
-  async function handleImport() {
-    if (!preview || !userEmail) return;
-    setLoading(true);
-    const payload = {
-      rows: preview.rows.map((r) => ({ ...r, selected: r.selected !== false })),
-    };
-    const res = await fetch(`${API}/api/import/csv/commit`, {
-      method: "POST",
-      credentials: "include",
-      headers: {
-        "Content-Type": "application/json",
-        "X-User-Email": userEmail,
-      },
-      body: JSON.stringify(payload),
-    });
-    const data = await res.json();
-    setResult(data?.summary || data);
-    setLoading(false);
-  }
-
-  // ---------- Google: status ----------
-  async function refreshGoogleStatus() {
+  const refresh = useCallback(async () => {
     if (!userEmail) return;
+    const [historyData, googleData] = await Promise.all([
+      request("import/history", {}, userEmail).catch(() => ({ imports: [] })),
+      request(`google/status?userEmail=${encodeURIComponent(userEmail)}`, {}, userEmail).catch(() => null),
+    ]);
+    setHistory(historyData.imports || []);
+    setGoogle(googleData);
+  }, [userEmail]);
+
+  useEffect(() => { refresh(); }, [refresh]);
+
+  async function createPreview(selected = file) {
+    if (!selected) return;
+    setFile(selected); setBusy("preview"); setError(""); setResult(null);
     try {
-      const res = await fetch(
-        apiUrl(`google/status/${encodeURIComponent(userEmail)}`),
-        { credentials: "include", cache: "no-store" }
-      );
-      const data = await res.json();
-      setGStatus(data);
-    } catch (e) {
-      setGStatus(null);
-    }
+      const form = new FormData(); form.append("file", selected);
+      const data = await request("import/csv/preview", { method: "POST", body: form }, userEmail);
+      setPreview(data); setMapping(data.mapping || {});
+    } catch (err) { setError(err.message); } finally { setBusy(""); }
   }
 
-  useEffect(() => {
-    refreshGoogleStatus();
-    // listen for popup postMessage upon callback completion
-    const onMsg = (e) => {
-      if (e?.data && e.data.type === "google-import-complete") {
-        refreshGoogleStatus();
-      }
-    };
-    window.addEventListener("message", onMsg);
-    return () => window.removeEventListener("message", onMsg);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [userEmail, API]);
+  async function commit() {
+    setBusy("commit"); setError("");
+    try {
+      const data = await request("import/csv/commit", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ rows: preview.rows, mapping, country_code: countryCode, duplicate_mode: duplicateMode, tag, file_name: file?.name }),
+      }, userEmail);
+      setResult(data.summary); setPreview(null); setFile(null); await refresh();
+      window.dispatchEvent(new Event("leads:changed"));
+    } catch (err) { setError(err.message); } finally { setBusy(""); }
+  }
 
-  // ---------- Google: start OAuth in popup ----------
+  async function undo(id) {
+    if (!window.confirm("Undo this import and restore contacts to their previous state?")) return;
+    setBusy(`undo:${id}`); setError("");
+    try {
+      await request(`import/${encodeURIComponent(id)}/undo`, { method: "POST" }, userEmail);
+      await refresh(); window.dispatchEvent(new Event("leads:changed"));
+    } catch (err) { setError(err.message); } finally { setBusy(""); }
+  }
+
   function connectGoogle() {
-    if (!userEmail) return;
-    const redirectBack = `${window.location.origin}/app/import`; // land back here
-    const url = `${API}/api/google/authorize?userEmail=${encodeURIComponent(
-      userEmail
-    )}&redirect=${encodeURIComponent(redirectBack)}`;
-
-    // open popup
-    const w = 520,
-      h = 640;
-    const left = window.screenX + (window.outerWidth - w) / 2;
-    const top = window.screenY + (window.outerHeight - h) / 2;
-    popupRef.current = window.open(
-      url,
-      "google_contacts_auth",
-      `width=${w},height=${h},left=${left},top=${top}`
-    );
-
-    // optional: poll for close & refresh
-    const iv = setInterval(() => {
-      if (!popupRef.current || popupRef.current.closed) {
-        clearInterval(iv);
-        popupRef.current = null;
-        refreshGoogleStatus();
-      }
-    }, 800);
+    const redirect = `${window.location.origin}/app/import`;
+    popupRef.current = window.open(apiUrl(`google/authorize?userEmail=${encodeURIComponent(userEmail)}&redirect=${encodeURIComponent(redirect)}`), "google_contacts", "width=540,height=700");
+    const timer = setInterval(() => { if (!popupRef.current || popupRef.current.closed) { clearInterval(timer); refresh(); } }, 800);
   }
 
-  // ---------- Google: import now with saved token ----------
-  async function importFromGoogleNow() {
-    if (!userEmail) return;
-    setGBusy(true);
+  async function importGoogle() {
+    setBusy("google"); setError("");
     try {
-      const res = await fetch(`${API}/api/google/import-now`, {
-        method: "POST",
-        credentials: "include",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ userEmail }),
-      });
-      const data = await res.json();
-      // surface a quick summary under the Google section
-      setGStatus((prev) => ({
-        ...(prev || {}),
-        last_import_result: data,
-      }));
-      // You may also want to refresh your leads list elsewhere in your app
-    } catch (e) {
-      setGStatus((prev) => ({ ...(prev || {}), last_import_result: { status: "error" } }));
-    } finally {
-      setGBusy(false);
-    }
+      const data = await request("google/import-now", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ userEmail }) }, userEmail);
+      setResult(data); await refresh(); window.dispatchEvent(new Event("leads:changed"));
+    } catch (err) { setError(err.message); } finally { setBusy(""); }
   }
 
+  const selectedCount = preview?.rows?.filter((row) => row.selected !== false).length || 0;
   return (
-    <div style={{ padding: 16, color: "#e9edef" }}>
-      <h2 style={{ marginBottom: 12 }}>Import Contacts</h2>
+    <div className="product-page import-workspace">
+      <header className="product-hero"><div><div className="product-eyebrow">Customer data</div><h1>Bring your customers with you</h1><p>Map, clean, preview, merge, and safely undo contact imports.</p></div></header>
+      {error && <div className="product-alert danger">{error}</div>}
+      {result && <div className="product-alert success"><strong>Import complete.</strong> Added {result.imported || 0}, updated {result.updated || result.merged || 0}, skipped {result.skipped || 0}.</div>}
 
-      {/* CSV Import */}
-      <div style={{ background: "#232323", padding: 16, borderRadius: 12, marginBottom: 16 }}>
-        <h3>1) CSV Import</h3>
-        <input
-          type="file"
-          accept=".csv,text/csv"
-          onChange={(e) => setFile(e.target.files?.[0] || null)}
-        />
-        <button onClick={handlePreview} disabled={!file || loading} style={{ marginLeft: 8 }}>
-          Preview
-        </button>
-      </div>
-
-      {preview && (
-        <div style={{ background: "#232323", padding: 16, borderRadius: 12, marginBottom: 16 }}>
-          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-            <h3>
-              Preview ({preview.preview_count} of {preview.total_rows})
-            </h3>
-            <div>
-              <button onClick={() => selectAll(true)} style={{ marginRight: 8 }}>
-                Select All
-              </button>
-              <button onClick={() => selectAll(false)}>Deselect All</button>
-            </div>
-          </div>
-          <table style={{ width: "100%", borderCollapse: "collapse" }}>
-            <thead>
-              <tr>
-                <th></th>
-                <th>Name</th>
-                <th>Emails</th>
-                <th>Phones</th>
-                <th>Company</th>
-                <th>Title</th>
-                <th>Notes</th>
-                <th>Dup</th>
-              </tr>
-            </thead>
-            <tbody>
-              {preview.rows.map((r, i) => (
-                <tr
-                  key={i}
-                  style={{
-                    borderTop: "1px solid #2a3942",
-                    background: r.duplicate ? "#1f1f1f" : "transparent",
-                  }}
-                >
-                  <td>
-                    <input
-                      type="checkbox"
-                      checked={r.selected !== false}
-                      onChange={() => toggleRow(i)}
-                    />
-                  </td>
-                  <td>{r.name}</td>
-                  <td>{(r.emails || []).join(", ")}</td>
-                  <td>{(r.phones || []).join(", ")}</td>
-                  <td>{r.company}</td>
-                  <td>{r.title}</td>
-                  <td
-                    style={{
-                      maxWidth: 240,
-                      whiteSpace: "nowrap",
-                      overflow: "hidden",
-                      textOverflow: "ellipsis",
-                    }}
-                  >
-                    {r.notes}
-                  </td>
-                  <td>{r.duplicate ? "Yes" : "No"}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-          <button onClick={handleImport} disabled={loading} style={{ marginTop: 12 }}>
-            Import Selected
+      <div className="import-grid">
+        <section className="product-card">
+          <div className="product-card-header"><div><h2>CSV import</h2><p className="product-card-copy">Best for spreadsheets exported from another CRM.</p></div></div>
+          <button type="button" className={`import-dropzone ${dragging ? "dragging" : ""}`} onClick={() => inputRef.current?.click()} onDragOver={(event) => { event.preventDefault(); setDragging(true); }} onDragLeave={() => setDragging(false)} onDrop={(event) => { event.preventDefault(); setDragging(false); createPreview(event.dataTransfer.files?.[0]); }}>
+            <FaCloudUploadAlt /><strong>{file?.name || "Drop a CSV here"}</strong><span>or choose a file · maximum 5 MB</span>
           </button>
-        </div>
-      )}
-
-      {result && (
-        <div style={{ background: "#232323", padding: 16, borderRadius: 12 }}>
-          <h3>Success</h3>
-          <p>
-            Imported: <b>{result.imported}</b> &nbsp; Merged: <b>{result.merged}</b> &nbsp; Skipped:{" "}
-            <b>{result.skipped}</b>
-          </p>
-          <p>
-            Total leads (after): <b>{result.total_after}</b>
-          </p>
-        </div>
-      )}
-
-      {/* Google Contacts */}
-      <div style={{ background: "#232323", padding: 16, borderRadius: 12, marginTop: 16 }}>
-        <h3>2) Google Contacts</h3>
-
-        {!gStatus ? (
-          <p>Checking Google status…</p>
-        ) : gStatus.google_connected ? (
-          <>
-            <p>
-              Connected ✅{gStatus.token_obtained_at ? (
-                <>
-                  &nbsp;•&nbsp;<span title="Token obtained at UNIX">{gStatus.token_obtained_at}</span>
-                </>
-              ) : null}
-              {gStatus.sync_token_present ? " • Sync token saved" : ""}
-              {typeof gStatus.leads_count === "number" ? ` • Leads: ${gStatus.leads_count}` : ""}
-            </p>
-            <div style={{ display: "flex", gap: 8 }}>
-              <button onClick={importFromGoogleNow} disabled={gBusy}>
-                {gBusy ? "Importing…" : "Import Now"}
-              </button>
-              <button onClick={refreshGoogleStatus} disabled={gBusy}>
-                Refresh Status
-              </button>
-            </div>
-            {gStatus.last_import_result && (
-              <div style={{ marginTop: 10, fontSize: 14 }}>
-                Last import:{" "}
-                <code style={{ background: "#1b1b1b", padding: "2px 6px", borderRadius: 6 }}>
-                  {JSON.stringify(gStatus.last_import_result)}
-                </code>
-              </div>
-            )}
-          </>
-        ) : (
-          <>
-            <p>Connect Google to import contacts.</p>
-            <button onClick={connectGoogle} disabled={!userEmail}>
-              Connect Google
-            </button>
-          </>
-        )}
+          <input ref={inputRef} hidden type="file" accept=".csv,text/csv" onChange={(event) => createPreview(event.target.files?.[0])} />
+        </section>
+        <section className="product-card">
+          <div className="product-card-header"><div><h2>Google Contacts</h2><p className="product-card-copy">Securely import from your connected Google account.</p></div><FaGoogle /></div>
+          <div className="integration-summary"><span className={`status-pill ${google?.google_connected ? "active" : "pending_payment"}`}>{google?.google_connected ? "Connected" : "Not connected"}</span><strong>{google?.leads_count || 0} contacts in RetainAI</strong></div>
+          <button className="product-button primary" onClick={google?.google_connected ? importGoogle : connectGoogle} disabled={Boolean(busy)}>{busy === "google" ? "Importing…" : google?.google_connected ? "Import latest contacts" : "Connect Google"}</button>
+        </section>
       </div>
 
-      {(loading || gBusy) && <p style={{ marginTop: 8 }}>Working…</p>}
+      {preview && <section className="product-card import-preview">
+        <div className="product-card-header"><div><h2>Map and review</h2><p className="product-card-copy">{selectedCount} of {preview.rows.length} rows selected.</p></div></div>
+        <div className="mapping-grid">{FIELDS.map(([key, label]) => <label key={key}>{label}<select className="product-input" value={mapping[key] || ""} onChange={(event) => setMapping((current) => ({ ...current, [key]: event.target.value }))}><option value="">Not imported</option>{preview.headers.map((header) => <option key={header}>{header}</option>)}</select></label>)}</div>
+        <div className="import-options"><label>Default country code<input className="product-input" value={countryCode} onChange={(event) => setCountryCode(event.target.value)} /></label><label>Duplicates<select className="product-input" value={duplicateMode} onChange={(event) => setDuplicateMode(event.target.value)}><option value="skip">Skip existing</option><option value="update">Replace mapped fields</option><option value="merge">Fill missing fields</option></select></label><label>Tag imported contacts<input className="product-input" value={tag} onChange={(event) => setTag(event.target.value)} /></label></div>
+        <div className="owner-table-wrap"><table className="owner-table"><thead><tr><th><input type="checkbox" checked={selectedCount === preview.rows.length} onChange={(event) => setPreview((current) => ({ ...current, rows: current.rows.map((row) => ({ ...row, selected: event.target.checked })) }))} /></th><th>Name</th><th>Email</th><th>Phone</th><th>Status</th></tr></thead><tbody>{preview.rows.slice(0, 100).map((row, index) => <tr key={index}><td><input type="checkbox" checked={row.selected !== false} onChange={() => setPreview((current) => ({ ...current, rows: current.rows.map((item, itemIndex) => itemIndex === index ? { ...item, selected: item.selected === false } : item) }))} /></td><td>{row.name || "—"}</td><td>{row.email || "—"}</td><td>{row.phone || "—"}</td><td><span className={`status-pill ${row.duplicate ? "pending_payment" : "active"}`}>{row.duplicate ? "Duplicate" : "New"}</span></td></tr>)}</tbody></table></div>
+        {preview.rows.length > 100 && <p className="product-card-copy">Showing the first 100 rows. All {preview.rows.length} selected rows will be processed.</p>}
+        <div className="owner-account-creator-actions"><button className="product-button" onClick={() => setPreview(null)}>Cancel</button><button className="product-button primary" disabled={!selectedCount || Boolean(busy)} onClick={commit}>{busy === "commit" ? "Importing…" : `Import ${selectedCount} contacts`}</button></div>
+      </section>}
+
+      <section className="product-card">
+        <div className="product-card-header"><div><h2>Recent imports</h2><p className="product-card-copy">Undo restores the exact contact list from before that import.</p></div><FaHistory /></div>
+        <div className="insight-list">{history.map((item) => <div className="insight-row" key={item.id}><div className="insight-row-main"><strong>{item.label}</strong><small>{new Date(item.created_at * 1000).toLocaleString()} · {item.summary?.imported || 0} added · {item.summary?.updated || item.summary?.merged || 0} updated</small></div><button className="product-button" onClick={() => undo(item.id)} disabled={Boolean(busy)}><FaUndo /> Undo</button></div>)}{!history.length && <div className="owner-empty-state"><strong>No imports yet</strong><small>Your import report and undo option will appear here.</small></div>}</div>
+      </section>
     </div>
   );
 }

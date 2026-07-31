@@ -629,8 +629,26 @@ def owner_health():
         return error
     backup_rows = _backup_rows()
     latest_backup = backup_rows[0] if backup_rows else None
+    webhook_events = _load_json(os.path.join(DATA_ROOT, "whatsapp_webhook_events.json"), [])
+    unmatched = _load_json(os.path.join(DATA_ROOT, "whatsapp_unmatched.json"), [])
+    chats = _load_json(os.path.join(DATA_ROOT, "whatsapp_chats.json"), {})
+    automation_state = _load_json(os.path.join(DATA_ROOT, "automations_state.json"), {})
+    google_tokens = _load_json(os.path.join(DATA_ROOT, "google_tokens.json"), {})
+    disk_ok = os.path.isdir(DATA_ROOT) and os.access(DATA_ROOT, os.W_OK)
+    database_ok = True
+    if USE_SQLITE:
+        try:
+            connection = sqlite3.connect(SQLITE_PATH, timeout=2)
+            connection.execute("SELECT 1").fetchone()
+            connection.close()
+        except Exception:
+            database_ok = False
+    scheduler_on = os.getenv("RUN_SCHEDULER", "0") == "1"
     checks = {
-        "database": True,
+        "backend_online": True,
+        "database": database_ok,
+        "persistent_disk": disk_ok,
+        "scheduler": scheduler_on,
         "session_secret": bool(os.getenv("SESSION_SECRET") or os.getenv("FLASK_SECRET_KEY")),
         "whatsapp_token": bool(os.getenv("WHATSAPP_TOKEN") or os.getenv("WHATSAPP_ACCESS_TOKEN")),
         "whatsapp_phone_id": bool(os.getenv("WHATSAPP_PHONE_ID") or os.getenv("WHATSAPP_PHONE_NUMBER_ID")),
@@ -641,6 +659,33 @@ def owner_health():
         "sendgrid": bool(os.getenv("SENDGRID_API_KEY")),
         "backup_available": bool(latest_backup),
     }
+    last_outgoing = None
+    if isinstance(chats, dict):
+        outgoing = []
+        for workspace in chats.values():
+            for thread in (workspace or {}).values():
+                outgoing.extend(row for row in (thread or []) if str(row.get("direction") or row.get("from") or "").lower() in {"outbound", "user"})
+        outgoing.sort(key=lambda row: str(row.get("time") or row.get("created_at") or ""), reverse=True)
+        last_outgoing = (outgoing[0].get("time") or outgoing[0].get("created_at")) if outgoing else None
+    last_event = webhook_events[0] if isinstance(webhook_events, list) and webhook_events else {}
+    matched = next((row for row in (webhook_events if isinstance(webhook_events, list) else []) if row.get("kind") == "inbound_matched"), {})
+    active_runs = completed_runs = failed_runs = 0
+    for flow_runs in (automation_state.values() if isinstance(automation_state, dict) else []):
+        for run in ((flow_runs or {}).values() if isinstance(flow_runs, dict) else []):
+            completed_runs += bool(run.get("done"))
+            active_runs += not bool(run.get("done"))
+            failed_runs += bool(run.get("error") or run.get("failure_reason"))
+    diagnostics = [
+        {"key": "backend", "label": "Backend", "ok": True, "detail": f"Online for {int(time.time() - OWNER_MODULE_STARTED_AT)} seconds", "action": "No action required."},
+        {"key": "database", "label": "Database", "ok": database_ok, "detail": "Connection verified" if database_ok else "Connection failed", "action": "Check DATABASE_URL and the persistent database service."},
+        {"key": "disk", "label": "Persistent disk", "ok": disk_ok, "detail": DATA_ROOT, "action": "Attach a writable Render disk and set DATA_ROOT to its mount path."},
+        {"key": "scheduler", "label": "Scheduler", "ok": scheduler_on, "detail": "Enabled" if scheduler_on else "Disabled", "action": "Set RUN_SCHEDULER=1 on exactly one backend instance."},
+        {"key": "whatsapp", "label": "WhatsApp credentials", "ok": checks["whatsapp_token"] and checks["whatsapp_phone_id"], "detail": "Token and phone ID configured" if checks["whatsapp_token"] and checks["whatsapp_phone_id"] else "Credentials incomplete", "action": "Open Settings > Integrations and validate a permanent Meta System User token, Phone Number ID, and WABA ID."},
+        {"key": "webhook", "label": "Last WhatsApp webhook", "ok": bool(last_event), "detail": str(last_event.get("created_at") or "No event received yet"), "action": "Subscribe the Meta app webhook to messages and verify the callback URL."},
+        {"key": "stripe", "label": "Stripe webhooks", "ok": checks["stripe"] and checks["stripe_webhook"], "detail": "Secret and webhook signing secret configured", "action": "Add STRIPE_SECRET_KEY and STRIPE_WEBHOOK_SECRET in Render."},
+        {"key": "google", "label": "Google Calendar / Contacts", "ok": checks["google_oauth"], "detail": f"OAuth configured · {len(google_tokens) if isinstance(google_tokens, dict) else 0} saved connection(s)", "action": "Add the production callback URLs and Google OAuth credentials."},
+        {"key": "sendgrid", "label": "SendGrid email", "ok": checks["sendgrid"], "detail": "API key configured" if checks["sendgrid"] else "API key missing", "action": "Add a verified SendGrid sender and SENDGRID_API_KEY."},
+    ]
     return jsonify(
         {
             "ok": all(checks.values()),
@@ -650,6 +695,16 @@ def owner_health():
             "checked_at": int(time.time()),
             "uptime_seconds": int(time.time() - OWNER_MODULE_STARTED_AT),
             "latest_backup": latest_backup,
+            "diagnostics": diagnostics,
+            "activity": {
+                "last_outgoing_whatsapp": last_outgoing,
+                "last_incoming_webhook": last_event.get("created_at"),
+                "last_matched_reply": matched.get("created_at"),
+                "unmatched_reply_count": len(unmatched) if isinstance(unmatched, list) else 0,
+                "automation_active_runs": active_runs,
+                "automation_completed_runs": completed_runs,
+                "automation_failed_runs": failed_runs,
+            },
         }
     ), 200
 

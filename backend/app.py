@@ -6813,6 +6813,29 @@ def send_ai_message():
 # =================================================================
 # AUTOMATIONS (INLINE) â€” Blueprint + Engine (prod-ready routes)
 # =================================================================
+@app.get("/api/billing/usage")
+def billing_usage():
+    workspace = _session_org_email()
+    if not workspace:
+        return jsonify({"error": "authentication_required"}), 401
+    users = load_users() or {}
+    record = users.get(workspace) or {}
+    leads = (load_leads() or {}).get(workspace, []) or []
+    chats_data = load_chats()
+    chats = chats_data.get(workspace, {}) if isinstance(chats_data, dict) else {}
+    message_count = sum(len(thread or []) for thread in (chats or {}).values())
+    team_count = len([row for row in users.values() if str(row.get("org_owner_email") or "").lower() == workspace])
+    flows_db = read_json(os.path.join(DATA_ROOT, "automations.json"), {"users": {}}) if "read_json" in globals() else {"users": {}}
+    flows = (flows_db.get("users") or {}).get(workspace, []) if isinstance(flows_db, dict) else []
+    return jsonify({
+        "plan": record.get("plan") or "Standard", "billing_status": record.get("billing_status") or record.get("status") or "trial",
+        "trial_days_remaining": _trial_details(record).get("daysRemaining", 0), "trial_ends_at": _trial_details(record).get("endsAt"),
+        "next_payment_at": record.get("current_period_end") or record.get("subscription_period_end"),
+        "whatsapp_messages": message_count, "ai_generations": int(record.get("ai_generations") or 0),
+        "active_automations": len([flow for flow in flows if flow.get("enabled")]), "team_seats": team_count + 1,
+        "contacts": len(leads), "invoices_created": int(record.get("invoices_created") or 0),
+    }), 200
+
 CHANNEL_EMAIL = "email"
 CHANNEL_WHATSAPP = "whatsapp"
 
@@ -7233,12 +7256,19 @@ def get_run(state: Dict[str, Any], flow_id: str, lead_key: str) -> Dict[str, Any
         "last_step_at": None,
         "done": False,
         "last_sent": {},
-        "memo": {}
+        "memo": {},
+        "events": [{"type": "entered", "label": "Lead entered flow", "at": now_utc().isoformat()}],
+        "error": "",
     })
 
 def advance(run: Dict[str, Any]):
     run["step"] = int(run.get("step", 0)) + 1
     run["last_step_at"] = now_utc().isoformat()
+
+def automation_event(run: Dict[str, Any], event_type: str, label: str, **details):
+    rows = run.setdefault("events", [])
+    rows.append({"type": event_type, "label": label, "at": now_utc().isoformat(), **details})
+    run["events"] = rows[-100:]
 
 def trigger_met(trigger: Dict[str, Any], lead: Dict[str, Any]) -> bool:
     t = trigger.get("type")
@@ -7493,19 +7523,29 @@ def engine_tick():
 
                                 if should_auto_stop(flow, lead, run):
                                     run["done"] = True
+                                    run["completed_at"] = now_utc().isoformat()
+                                    automation_event(run, "reply", "Flow stopped because the customer replied")
                                     continue
 
                                 step_index = int(run.get("step", 0))
                                 if step_index >= len(steps):
                                     run["done"] = True
+                                    run["completed_at"] = now_utc().isoformat()
+                                    automation_event(run, "completed", "Flow completed")
                                     continue
 
                                 step = steps[step_index]
                                 progressed = execute_step(flow, step, lead, run, caps, profile)
                                 if progressed:
+                                    automation_event(run, "step", f"{str(step.get('type') or 'step').replace('_', ' ').title()} completed", step_index=step_index)
                                     advance(run)
 
                             except Exception as e:
+                                try:
+                                    run["error"] = str(e)[:300]
+                                    automation_event(run, "failed", "Step failed", reason=str(e)[:300])
+                                except Exception:
+                                    pass
                                 try:
                                     app.logger.warning(
                                         "[AUTOMATIONS engine_tick] lead failure user=%s flow_id=%s lead_id=%s error=%s",
@@ -7686,6 +7726,77 @@ def _bf_ensure_files():
 def automations_health():
     return jsonify({"ok": True, "message": "automations alive"})
 
+def _automation_history_for_user(user: str):
+    flows = load_user_flows(user)
+    flow_map = {str(flow.get("id")): flow for flow in flows if isinstance(flow, dict)}
+    leads = {str(lead.get("id")): lead for lead in (load_leads().get(user, []) or []) if isinstance(lead, dict)}
+    state = load_state()
+    rows = []
+    for flow_id, runs in (state.items() if isinstance(state, dict) else []):
+        flow = flow_map.get(str(flow_id))
+        if not flow or not isinstance(runs, dict):
+            continue
+        for lead_id, run in runs.items():
+            if not isinstance(run, dict):
+                continue
+            lead = leads.get(str(lead_id), {})
+            events = run.get("events") if isinstance(run.get("events"), list) else []
+            rows.append({
+                "id": f"{flow_id}:{lead_id}", "flow_id": str(flow_id), "flow_name": flow.get("name") or "Untitled flow",
+                "lead_id": str(lead_id), "lead_name": lead.get("name") or lead.get("email") or "Unknown contact", "lead_email": lead.get("email") or "",
+                "status": "failed" if run.get("error") else ("completed" if run.get("done") else "running"),
+                "created_at": run.get("created_at"), "last_run": run.get("last_step_at") or run.get("created_at"),
+                "completed_at": run.get("completed_at"), "current_step": int(run.get("step") or 0),
+                "messages_sent": len([event for event in events if "send" in str(event.get("label") or "").lower()]),
+                "replies_received": len([event for event in events if event.get("type") == "reply"]),
+                "failure_reason": run.get("error") or "", "events": events[-50:],
+            })
+    rows.sort(key=lambda row: str(row.get("last_run") or ""), reverse=True)
+    return rows
+
+@automations_bp.get("/dashboard")
+def automation_dashboard():
+    user = user_from_request()
+    flows = load_user_flows(user)
+    history = _automation_history_for_user(user)
+    return jsonify({
+        "ok": True,
+        "summary": {
+            "flows": len(flows), "active_flows": len([flow for flow in flows if flow.get("enabled")]),
+            "leads_entered": len(history), "completed": len([row for row in history if row["status"] == "completed"]),
+            "running": len([row for row in history if row["status"] == "running"]), "failed": len([row for row in history if row["status"] == "failed"]),
+            "messages_sent": sum(row["messages_sent"] for row in history), "replies": sum(row["replies_received"] for row in history),
+            "next_evaluation": (now_utc() + _td(minutes=15)).isoformat(),
+        }
+    })
+
+@automations_bp.get("/history")
+def automation_history():
+    user = user_from_request()
+    rows = _automation_history_for_user(user)
+    flow_id = str(request.args.get("flow_id") or "")
+    status = str(request.args.get("status") or "")
+    if flow_id:
+        rows = [row for row in rows if row["flow_id"] == flow_id]
+    if status:
+        rows = [row for row in rows if row["status"] == status]
+    limit = min(max(int(request.args.get("limit") or 100), 1), 500)
+    return jsonify({"ok": True, "history": rows[:limit]}), 200
+
+@automations_bp.post("/history/<flow_id>/<lead_id>/retry")
+def retry_automation_run(flow_id, lead_id):
+    user = user_from_request()
+    if not any(str(flow.get("id")) == str(flow_id) for flow in load_user_flows(user)):
+        return jsonify({"error": "Flow not found."}), 404
+    state = load_state()
+    run = (state.get(str(flow_id)) or {}).get(str(lead_id))
+    if not isinstance(run, dict):
+        return jsonify({"error": "Run not found."}), 404
+    run["error"] = ""; run["done"] = False
+    automation_event(run, "retry", "Run queued for retry")
+    save_state(state)
+    return jsonify({"ok": True}), 200
+
 @automations_bp.route("/user/profile", methods=["GET"])
 def get_user_profile_route():
     user = user_from_request()
@@ -7854,7 +7965,7 @@ def set_user_profile_route():
     return jsonify({"ok": True, "profile": prof})
 
 def builtin_templates() -> List[Dict[str, Any]]:
-    return [
+    templates = [
         {
             "id": "cold-recovery-7d",
             "name": "Cold Lead Recovery (7-day)",
@@ -7905,6 +8016,25 @@ def builtin_templates() -> List[Dict[str, Any]]:
             "auto_stop_on_reply": True
         }
     ]
+    industry_templates = [
+        ("salon-rebook", "Salon · Rebook after service", "no_reply", "Ready for your next appointment? Book with {{business_name}} here: {{booking_link}}"),
+        ("salon-review", "Salon · Review request", "no_reply", "Thanks for visiting {{business_name}}. We would love to hear how your appointment went."),
+        ("salon-lapsed", "Salon · Lapsed client recovery", "no_reply", "We miss seeing you at {{business_name}}. Choose a time that works for you: {{booking_link}}"),
+        ("home-quote", "Home services · Quote follow-up", "no_reply", "Just checking whether you had any questions about your quote from {{business_name}}."),
+        ("home-missed-call", "Home services · Missed-call follow-up", "new_lead", "Sorry we missed your call. How can {{business_name}} help today?"),
+        ("home-review", "Home services · Job-completion review", "no_reply", "Thanks for choosing {{business_name}}. How did everything go?"),
+        ("coaching-discovery", "Coaching · Discovery-call follow-up", "new_lead", "Thanks for connecting with {{business_name}}. Your next step is here: {{booking_link}}"),
+        ("coaching-renewal", "Coaching · Package renewal", "no_reply", "Ready to continue your progress with {{business_name}}? Book your next session: {{booking_link}}"),
+        ("coaching-checkin", "Coaching · Client check-in", "no_reply", "A quick check-in from {{business_name}}: how are things going this week?"),
+    ]
+    for template_id, name, trigger_type, message in industry_templates:
+        templates.append({
+            "id": template_id, "name": name, "enabled": False,
+            "trigger": {"type": trigger_type, **({"within_hours": 24} if trigger_type == "new_lead" else {"days": 7})},
+            "steps": [{"type": "send_whatsapp", "text": message}, {"type": "wait", "days": 2}, {"type": "push_owner", "title": "Follow up personally", "message": "This customer may benefit from a personal check-in."}],
+            "caps": {"per_lead_per_day": 1, "respect_quiet_hours": True}, "auto_stop_on_reply": True,
+        })
+    return templates
 
 def _flow_actions_preview(flow: Dict[str, Any], lead: Dict[str, Any], profile: Dict[str, Any]) -> List[Dict[str, Any]]:
     run = {

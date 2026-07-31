@@ -1635,6 +1635,41 @@ function Preview({ userEmail, flow }) {
   );
 }
 
+function RunHistory({ userEmail }) {
+  const [history, setHistory] = useState([]);
+  const [summary, setSummary] = useState({});
+  const [selected, setSelected] = useState(null);
+  const [busy, setBusy] = useState("");
+  const [historyError, setHistoryError] = useState("");
+  const load = async () => {
+    try {
+      const [historyData, dashboardData] = await Promise.all([api.getHistory(userEmail), api.getDashboard(userEmail)]);
+      setHistory(historyData.history || []); setSummary(dashboardData.summary || {}); setHistoryError("");
+    } catch (err) { setHistoryError(err.message || "Could not load automation history."); }
+  };
+  useEffect(() => { load(); }, [userEmail]); // eslint-disable-line react-hooks/exhaustive-deps
+  const retry = async (row) => {
+    setBusy(row.id);
+    try { await api.retryRun(userEmail, row.flow_id, row.lead_id); await load(); } catch (err) { setHistoryError(err.message); } finally { setBusy(""); }
+  };
+  return <div style={{ display: "grid", gap: 16 }}>
+    <SectionTitle title="Run history" subtitle="See exactly what ran, what is waiting, and what needs attention." right={<Btn kind="ghost" onClick={load}>Refresh</Btn>} />
+    {historyError && <div style={{ ...softCard, padding: 14, color: C.redTxt }}>{historyError}</div>}
+    <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(140px,1fr))", gap: 12 }}>
+      <StatCard label="Leads entered" value={summary.leads_entered || 0} /><StatCard label="Running" value={summary.running || 0} accent /><StatCard label="Completed" value={summary.completed || 0} /><StatCard label="Failed" value={summary.failed || 0} /><StatCard label="Messages" value={summary.messages_sent || 0} /><StatCard label="Replies" value={summary.replies || 0} />
+    </div>
+    <div style={{ ...shellCard, overflow: "hidden" }}>
+      {history.map((row) => <div key={row.id} style={{ padding: 16, borderBottom: `1px solid ${C.border}`, display: "grid", gap: 10 }}>
+        <div style={{ display: "flex", justifyContent: "space-between", gap: 12, flexWrap: "wrap" }}><div><strong>{row.flow_name}</strong><div style={{ color: C.muted, fontSize: 13 }}>{row.lead_name} · Last activity {row.last_run ? new Date(row.last_run).toLocaleString() : "not yet"}</div></div><Chip active={row.status === "running"} onClick={() => setSelected(selected?.id === row.id ? null : row)}>{row.status}</Chip></div>
+        <div style={{ display: "flex", gap: 8, flexWrap: "wrap", color: C.muted, fontSize: 13 }}><span>Step {row.current_step}</span><span>· {row.messages_sent} messages</span><span>· {row.replies_received} replies</span>{row.failure_reason && <span style={{ color: C.redTxt }}>· {row.failure_reason}</span>}</div>
+        {row.status === "failed" && <div><Btn kind="outline" disabled={busy === row.id} onClick={() => retry(row)}>{busy === row.id ? "Queueing…" : "Retry run"}</Btn></div>}
+        {selected?.id === row.id && <div style={{ ...softCard, padding: 14 }}>{(row.events || []).length ? row.events.map((event, index) => <div key={`${event.at}-${index}`} style={{ display: "grid", gridTemplateColumns: "150px 1fr", gap: 12, padding: "8px 0", borderBottom: `1px solid ${C.border}` }}><small style={{ color: C.muted }}>{event.at ? new Date(event.at).toLocaleString() : ""}</small><span>{event.label || event.type}</span></div>) : <span style={{ color: C.muted }}>No recorded events yet.</span>}</div>}
+      </div>)}
+      {!history.length && <div style={{ padding: 24, color: C.muted }}>No runs yet. Activate a flow or test it with one contact.</div>}
+    </div>
+  </div>;
+}
+
 /* -------------------- MAIN -------------------- */
 export default function Automations({ user }) {
   const userEmail = (user?.org_id || user?.email || "").toLowerCase();
@@ -1826,6 +1861,9 @@ export default function Automations({ user }) {
             </Chip>
             <Chip active={tab === "flows"} onClick={() => setTab("flows")}>
               My Flows
+            </Chip>
+            <Chip active={tab === "history"} onClick={() => setTab("history")}>
+              Run History
             </Chip>
             <Chip
               active={tab === "builder"}
@@ -2021,6 +2059,8 @@ export default function Automations({ user }) {
             )}
           </div>
         )}
+
+        {!loading && tab === "history" && <RunHistory userEmail={userEmail} />}
 
         {!loading && tab === "builder" && (
           <div

@@ -787,6 +787,7 @@ function CrmDashboard({ authenticatedUser }) {
   useEffect(() => {
     window.RetainAI = window.RetainAI || {};
     window.RetainAI.openImports = openImports;
+    window.RetainAI.openSection = (nextSection) => setSection(nextSection);
     window.RetainAI.openTeam = () => {
       setSettingsTab("team");
       setSection("settings");

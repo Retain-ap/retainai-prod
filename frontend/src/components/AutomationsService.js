@@ -154,6 +154,12 @@ const api = {
     });
   },
 
+  retryRun(userEmail, flowId, leadId) {
+    return request(`history/${encodeURIComponent(flowId)}/${encodeURIComponent(leadId)}/retry`, {
+      method: "POST", userEmail, body: {},
+    });
+  },
+
   getWATemplates(userEmail) {
     return request("wa/templates", { userEmail });
   },

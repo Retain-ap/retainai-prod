@@ -21,6 +21,7 @@ export default function WhatsAppHealthCard({ user }) {
   const [editing, setEditing] = useState(false);
   const [saving, setSaving] = useState(false);
   const [connection, setConnection] = useState(null);
+  const [approvedTemplates, setApprovedTemplates] = useState(0);
   const [form, setForm] = useState({
     access_token: "",
     phone_id: "",
@@ -59,10 +60,12 @@ export default function WhatsAppHealthCard({ user }) {
         cache: "no-store",
         headers: { Accept: "application/json" },
       });
-      const [healthResponse, inboundResponse, connectionResponse] = await Promise.all([
+      const templatesRequest = fetch(apiUrl("whatsapp/templates"), { credentials: "include", cache: "no-store", headers: { Accept: "application/json" } });
+      const [healthResponse, inboundResponse, connectionResponse, templatesResponse] = await Promise.all([
         healthRequest,
         inboundRequest,
         connectionRequest,
+        templatesRequest,
       ]);
       const healthData = await healthResponse.json().catch(() => ({}));
       if (!healthResponse.ok) {
@@ -89,6 +92,9 @@ export default function WhatsAppHealthCard({ user }) {
           business_number: connectionData.business_number || "",
         }));
       }
+      const templatesData = await templatesResponse.json().catch(() => ({}));
+      const templateRows = templatesData?.data?.data || templatesData?.templates || [];
+      setApprovedTemplates(templateRows.filter((item) => String(item.status || "").toUpperCase() === "APPROVED").length);
     } catch (err) {
       setHealth(null);
       setInbound(null);
@@ -187,6 +193,7 @@ export default function WhatsAppHealthCard({ user }) {
           <div className={health?.has_waba_id ? "ready" : "missing"}>
             <span /> Business account ID
           </div>
+          <div className={approvedTemplates > 0 ? "ready" : "missing"}><span /> Approved template detected ({approvedTemplates})</div>
           <div className={webhookSeen ? "ready" : "missing"}>
             <span /> Webhook receiving events
           </div>
@@ -295,6 +302,7 @@ export default function WhatsAppHealthCard({ user }) {
             {editing ? "Close setup" : "Manage workspace connection"}
           </button>
         ) : null}
+        <button className="account-secondary-btn" onClick={() => window.RetainAI?.openSection?.("messages")}>Send and receive test</button>
       </div>
     </article>
   );

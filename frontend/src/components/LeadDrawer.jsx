@@ -133,6 +133,7 @@ export default function LeadDrawer({
   const tabs = useMemo(
     () => [
       { key: "Details", label: "Details" },
+      { key: "Timeline", label: "Timeline" },
       { key: "Notes", label: "Notes" },
       { key: "Reminders", label: `Reminders${reminders.length ? ` (${reminders.length})` : ""}` },
     ],
@@ -140,6 +141,19 @@ export default function LeadDrawer({
   );
 
   const statusMeta = useMemo(() => getStatusMeta(lead?.status), [lead?.status]);
+  const timeline = useMemo(() => {
+    const rows = [];
+    const add = (type, title, date, detail = "") => date && rows.push({ type, title, date, detail });
+    add("profile", "Customer added", lead?.createdAt || lead?.created_at, lead?.source ? `Source: ${lead.source}` : "");
+    add("message", "Last outbound contact", lead?.last_outbound_at || lead?.last_contacted);
+    add("reply", "Customer replied", lead?.last_inbound_at || lead?.last_reply_at);
+    (lead?.appointments || []).forEach((item) => add("appointment", `Appointment · ${item.status || "scheduled"}`, item.start || item.date || item.created_at, item.service || item.notes || ""));
+    (lead?.invoice_events || lead?.invoices || []).forEach((item) => add("invoice", `Invoice · ${item.status || "updated"}`, item.created_at || item.date, item.amount ? `$${item.amount}` : ""));
+    updates.forEach((item) => add(item.type || "note", item.type === "ai" ? "AI draft" : "Note added", item.date || item.created_at, item.text || ""));
+    reminders.forEach((item) => add("reminder", item.done ? "Reminder completed" : "Reminder created", item.date, item.text));
+    add("profile", "Profile updated", lead?.updated_at);
+    return rows.sort((a, b) => new Date(b.date) - new Date(a.date));
+  }, [lead, reminders, updates]);
 
   const persistLeadPatch = useCallback(
     async (patch) => {
@@ -480,6 +494,11 @@ export default function LeadDrawer({
             )}
           </div>
         )}
+
+        {activeTab === "Timeline" && <div style={{ display: "grid", gap: 10 }}>
+          {timeline.map((item, index) => <div key={`${item.type}-${item.date}-${index}`} style={{ display: "grid", gridTemplateColumns: "12px 1fr", gap: 12 }}><span style={{ width: 10, height: 10, borderRadius: "50%", background: item.type === "reply" ? "#30b46c" : item.type === "appointment" ? "#f7cb53" : "#69737d", marginTop: 7 }} /><div style={{ background: "#23262a", border: "1px solid #31353a", borderRadius: 12, padding: 12 }}><strong>{item.title}</strong><div style={{ color: "#929da6", fontSize: 12, marginTop: 3 }}>{formatDateTime(item.date)}</div>{item.detail && <p style={{ margin: "8px 0 0", color: "#cbd2d8" }}>{item.detail}</p>}</div></div>)}
+          {!timeline.length && <EmptyState title="No activity yet" text="Messages, appointments, invoices, notes, reminders, and profile changes will appear here." />}
+        </div>}
 
         {activeTab === "Notes" && (
           <div>

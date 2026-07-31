@@ -71,6 +71,17 @@ function labelForNotification(notif) {
   return "App";
 }
 
+function actionForNotification(notif) {
+  const text = `${notif.subject || ""} ${notif.message || ""} ${notif.channel || ""}`.toLowerCase();
+  if (text.includes("unmatched")) return { label: "Match reply", section: "messages", category: "WhatsApp reply unmatched" };
+  if (text.includes("whatsapp") || text.includes("reply")) return { label: "Open conversation", section: "messages", category: "Needs reply" };
+  if (text.includes("automation") && (text.includes("fail") || text.includes("attention"))) return { label: "Review flow", section: "automations", category: "Automation failed" };
+  if (text.includes("appointment")) return { label: "Open calendar", section: "calendar", category: "Appointment requested" };
+  if (text.includes("invoice") || text.includes("payment")) return { label: "Open invoices", section: "invoices", category: "Invoice or payment" };
+  if (text.includes("trial") || text.includes("integration") || text.includes("disconnect")) return { label: "Resolve", section: "settings", category: text.includes("trial") ? "Trial ending" : "Integration disconnected" };
+  return { label: "Review", section: "overview", category: "Follow-up" };
+}
+
 function normalizeNotification(n, idx) {
   const subject = n.subject || n.title || n.type || "Notification";
   const message = n.message || n.body || n.text || "";
@@ -166,6 +177,7 @@ function Section({ title, items, children, defaultOpen = true }) {
 }
 
 function NotificationRow({ notif, onMarkAsRead }) {
+  const action = actionForNotification(notif);
   return (
     <li className={`notif-item ${notif.read ? "read" : "unread"}`}>
       <div className="notif-icon" aria-hidden>
@@ -195,6 +207,7 @@ function NotificationRow({ notif, onMarkAsRead }) {
           Mark as Read
         </button>
       ) : null}
+      <button className="notif-mark-read" onClick={() => window.RetainAI?.openSection?.(action.section)} type="button">{action.label}</button>
     </li>
   );
 }
@@ -311,6 +324,11 @@ export default function NotificationsCenter({ user }) {
       safeStr(n.channel).toLowerCase().includes("whatsapp") ||
       safeStr(n.subject).toLowerCase().includes("whatsapp")
   ).length;
+  const actionGroups = notifications.filter((n) => !n.read).reduce((groups, item) => {
+    const action = actionForNotification(item);
+    groups[action.category] = (groups[action.category] || 0) + 1;
+    return groups;
+  }, {});
 
   return (
     <div className="notif-root">
@@ -335,6 +353,7 @@ export default function NotificationsCenter({ user }) {
           <StatCard label="Appointments" value={appointmentCount} />
           <StatCard label="WhatsApp" value={whatsappCount} />
         </div>
+        {Object.keys(actionGroups).length > 0 ? <div className="notif-stats">{Object.entries(actionGroups).map(([label, count]) => <StatCard key={label} label={label} value={count} accent={label === "Needs reply" || label === "Automation failed"} />)}</div> : null}
 
         <div className="notif-toolbar">
           <div className="notif-filters">
