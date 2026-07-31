@@ -25,7 +25,7 @@ export default function ProtectedRoute({ children }) {
       return response.json();
     };
     verify()
-      .then((data) => {
+      .then(async (data) => {
         if (!active) return;
         if (!data?.authenticated || !data?.user) {
           throw new Error("not_authenticated");
