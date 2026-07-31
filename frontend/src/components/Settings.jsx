@@ -552,6 +552,48 @@ export default function Settings({
     }
   };
 
+  const downloadWorkspaceData = async () => {
+    setInfo("Preparing your workspace export…");
+    try {
+      const response = await fetch(apiUrl("account/export"), { credentials: "include" });
+      if (!response.ok) {
+        const data = await response.json().catch(() => ({}));
+        throw new Error(data.error || "Workspace export is unavailable.");
+      }
+      const blob = await response.blob();
+      const href = URL.createObjectURL(blob);
+      const anchor = document.createElement("a");
+      anchor.href = href;
+      anchor.download = "retainai-workspace-export.json";
+      document.body.appendChild(anchor);
+      anchor.click();
+      anchor.remove();
+      URL.revokeObjectURL(href);
+      setInfo("Workspace export downloaded. Credentials and access tokens were excluded.");
+    } catch (error) {
+      setInfo(error.message || "Workspace export is unavailable.");
+    }
+  };
+
+  const scheduleAccountDeletion = async () => {
+    const confirmation = window.prompt(
+      `Schedule this workspace for deletion in 14 days? Type ${profile.email} to confirm.`
+    );
+    if (confirmation !== profile.email) return;
+    try {
+      const data = await postJson("account/deletion", {
+        action: "schedule",
+        confirmation,
+      });
+      setInfo(
+        `Deletion scheduled for ${new Date(data.deletion_scheduled_for).toLocaleString()}. Contact support or use the owner console to cancel.`
+      );
+      if (typeof refreshUser === "function") refreshUser();
+    } catch (error) {
+      setInfo(error.message || "Could not schedule account deletion.");
+    }
+  };
+
   const MAX_W = 1120;
 
   if (!profile?.email) {
@@ -916,6 +958,19 @@ export default function Settings({
               <article className="account-card">
                 <div className="account-card-copy"><h3>Security recommendation</h3><p>Use a unique password and remove team members as soon as they no longer need workspace access.</p></div>
                 <div className="account-card-content"><div className="account-detail-box">Sensitive integrations and platform-owner controls are verified by the backend, not by browser storage.</div></div>
+              </article>
+              <article className="account-card">
+                <div className="account-card-copy"><h3>Download your data</h3><p>Export your workspace profile, team, and contacts before making account changes.</p></div>
+                <div className="account-card-actions">
+                  <button className="account-primary-btn" onClick={downloadWorkspaceData}>Download export</button>
+                </div>
+              </article>
+              <article className="account-card">
+                <div className="account-card-copy"><h3>Close workspace</h3><p>Workspace owners can schedule deletion with a 14-day recovery window. This never deletes immediately.</p></div>
+                <div className="account-card-content"><div className="account-detail-box">Download your data first. Billing should also be cancelled through the secure billing portal.</div></div>
+                <div className="account-card-actions">
+                  <button className="account-secondary-btn" onClick={scheduleAccountDeletion}>Schedule deletion</button>
+                </div>
               </article>
             </div>
           </div>

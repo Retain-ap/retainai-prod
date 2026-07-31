@@ -7631,11 +7631,13 @@ def save_subscription():
 from app_imports import imports_bp
 from app_team import team_bp
 from app_owner import owner_bp
+from app_account import account_bp
 from app_wa_auto_appointments import WA_AUTO_BP
 
 app.register_blueprint(imports_bp)
 app.register_blueprint(team_bp)
 app.register_blueprint(owner_bp)
+app.register_blueprint(account_bp)
 app.register_blueprint(WA_AUTO_BP)
 
 

@@ -19,8 +19,18 @@ export default function OnboardingGuide({ user, leads = [], setSection, openImpo
         action: openImports,
       },
       {
-        label: "Connect an integration",
-        done: Boolean(user?.gcal_connected || user?.stripe_connected),
+        label: "Connect WhatsApp Business",
+        done: Boolean(user?.whatsapp_connected || user?.whatsapp),
+        action: () => setSection("settings"),
+      },
+      {
+        label: "Connect your calendar",
+        done: Boolean(user?.gcal_connected || user?.google_refresh_token),
+        action: () => setSection("settings"),
+      },
+      {
+        label: "Set up billing",
+        done: Boolean(user?.stripe_connected || user?.stripe_account_id),
         action: () => setSection("settings"),
       },
       {

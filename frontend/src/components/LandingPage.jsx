@@ -44,7 +44,7 @@ function TipBar() {
           style={{ color: BG.text80 }}
           aria-expanded={open}
         >
-          Use “AI Draft” first, then personalize. It converts better than sending raw templates.
+          Start with an AI draft, then personalize it before sending.
         </button>
         <button
           onClick={() => setOpen((v) => !v)}
@@ -56,8 +56,8 @@ function TipBar() {
       </div>
       {open && (
         <div className="max-w-7xl mx-auto px-6 pb-3 text-sm" style={{ color: BG.text60 }}>
-          AI drafts use your lead’s tags, last message and tone. Edit the opener to sound like you, then send via
-          WhatsApp. Average reply time drops ~40% from week one.
+          AI drafts use the contact’s tags, conversation context, and your preferred tone. You stay in control:
+          review the message, adjust the opener, then send it through WhatsApp.
         </div>
       )}
     </div>
@@ -132,7 +132,7 @@ function ROINumbers({ leadsPerWeek, closeRate }) {
       <div>Est. bookings/month now: <b>{base.toFixed(1)}</b></div>
       <div>With RetainAI (+20%): <b style={{ color: BG.gold }}>{withRetain.toFixed(1)}</b></div>
       <div className="text-xs mt-1" style={{ color: BG.text60 }}>
-        Assumes smarter follow-ups (no-response ↓ ~31%) and more human replies (reply time ↓ ~42%).
+        Illustration only. Actual results depend on lead volume, response rate, offer, and follow-up process.
       </div>
     </div>
   );
@@ -516,20 +516,20 @@ export default function LandingPage() {
       {/* SOCIAL PROOF + ROI + SETUP CALL */}
       <section className="border-t" style={{ borderColor: BG.line }}>
         <div className="max-w-7xl mx-auto px-6 py-20 md:py-24 grid grid-cols-1 lg:grid-cols-3 gap-8">
-          {/* Testimonials */}
+          {/* Use cases */}
           <div className="lg:col-span-2">
             <div className="uppercase tracking-widest text-xs font-semibold mb-2" style={{ color: BG.text60 }}>
-              Results from users
+              Built for repeat-customer businesses
             </div>
             <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
               {[
-                ["Ariana, Salon", "“Booked 7 extra appointments first week.”"],
-                ["Marco, HVAC", "“No-reply leads finally came back.”"],
-                ["Jade, Coach", "“Replies feel like me. More yes’s.”"],
-              ].map(([name, quote]) => (
+                ["Salons & studios", "Rebooking prompts, appointment reminders, and thoughtful win-back messages."],
+                ["Home services", "Keep estimates, visits, follow-ups, and customer conversations organized."],
+                ["Coaches & consultants", "Nurture leads consistently without losing the personal tone clients expect."],
+              ].map(([name, copy]) => (
                 <div key={name} className="p-6 rounded-2xl border" style={{ background: BG.card, borderColor: BG.line }}>
                   <div className="font-semibold mb-1">{name}</div>
-                  <div className="text-sm" style={{ color: BG.text80 }}>{quote}</div>
+                  <div className="text-sm" style={{ color: BG.text80 }}>{copy}</div>
                 </div>
               ))}
             </div>

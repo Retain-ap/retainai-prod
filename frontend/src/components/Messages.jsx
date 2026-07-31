@@ -260,6 +260,17 @@ function inferParamKindsFromBody(bodyText, count, templateName = "") {
 
   // Approved templates have an explicit field contract. Apply it before
   // prose heuristics so nearby words such as "from" cannot misclassify {{2}}.
+  if (/schedule.*appointment|appointment.*schedule|technician.*visit/.test(nameLower)) {
+    return kinds.map((_, i) =>
+      i === 0 ? "lead_name" :
+      i === 1 ? "service" :
+      i === 2 ? "date" :
+      i === 3 ? "start_time" :
+      i === 4 ? "end_time" :
+      "details"
+    );
+  }
+
   if (/outreach|welcome|intro/.test(nameLower)) {
     return kinds.map((_, i) =>
       i === 0 ? "lead_name" :
@@ -430,6 +441,10 @@ function valueForKind(kind, { user, lead, input, suggestion }) {
       return suggestion?.date || "";
     case "time":
       return suggestion?.time || "";
+    case "start_time":
+      return suggestion?.start_time || suggestion?.time || "";
+    case "end_time":
+      return suggestion?.end_time || "";
     case "location":
       return lead?.location || user?.location || "";
     case "service":
@@ -468,6 +483,10 @@ function friendlyLabelForKind(kind, i, templateName = "") {
       return "Appointment date";
     case "time":
       return "Appointment time";
+    case "start_time":
+      return "Start time";
+    case "end_time":
+      return "End time";
     case "location":
       return "Location";
     case "service":
@@ -506,6 +525,10 @@ function fieldHintForKind(kind, templateName = "") {
       return "2026-05-24";
     case "time":
       return "7:00 PM";
+    case "start_time":
+      return "10:00 AM";
+    case "end_time":
+      return "2:00 PM";
     case "location":
       return "123 Main St";
     case "service":

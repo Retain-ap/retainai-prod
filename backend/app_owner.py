@@ -5,7 +5,7 @@ import time
 from collections import Counter
 from uuid import uuid4
 
-from flask import Blueprint, jsonify, request, session
+from flask import Blueprint, Response, jsonify, request, session
 
 from storage import DATA_ROOT, delete_users, load_leads, load_users, save_leads, save_users
 
@@ -133,7 +133,7 @@ def _account_row(email, record, leads_by_user, users):
         "name": record.get("name") or "",
         "business": record.get("business") or record.get("businessName") or "",
         "business_type": record.get("businessType") or "",
-        "status": record.get("status") or "unknown",
+        "status": "deletion_pending" if record.get("deletion_scheduled_for") else (record.get("status") or "unknown"),
         "created_at": record.get("created_at") or record.get("trial_start") or "",
         "trial_ends_at": trial_end.isoformat() if trial_end else "",
         "last_login": record.get("last_login") or "",
@@ -142,6 +142,34 @@ def _account_row(email, record, leads_by_user, users):
         "team_count": team_count,
         "integrations": _integration_summary(record),
         "support_note": record.get("platform_support_note") or "",
+        "deletion_requested_at": record.get("deletion_requested_at") or "",
+        "deletion_scheduled_for": record.get("deletion_scheduled_for") or "",
+    }
+
+
+def _safe_account_export(target, account, users, leads):
+    blocked = {
+        "password", "password_hash", "google_refresh_token", "meta_access_token",
+        "whatsapp_token", "access_token", "refresh_token", "totp_secret",
+        "two_factor_secret",
+    }
+    clean = lambda record: {
+        key: value
+        for key, value in record.items()
+        if key not in blocked and "token" not in key.lower() and "secret" not in key.lower()
+    }
+    team = [
+        clean(member)
+        for member in users.values()
+        if isinstance(member, dict) and _norm(member.get("org_id")) == target
+    ]
+    return {
+        "exported_at": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+        "workspace": target,
+        "profile": clean(account),
+        "team": team,
+        "contacts": leads.get(target, []) if isinstance(leads, dict) else [],
+        "notice": "Credentials, session data, encryption secrets and access tokens are excluded.",
     }
 
 
@@ -204,6 +232,25 @@ def owner_accounts():
     return jsonify({"accounts": rows}), 200
 
 
+@owner_bp.get("/api/owner/accounts/<path:email>/export")
+def owner_account_export(email):
+    actor, error = _require_owner()
+    if error:
+        return error
+    target = _norm(email)
+    users = load_users() or {}
+    account = users.get(target)
+    if not isinstance(account, dict):
+        return jsonify({"error": "account_not_found"}), 404
+    payload = _safe_account_export(target, account, users, load_leads() or {})
+    _audit(actor, "account_export", target, {"team_records": len(payload["team"])})
+    return Response(
+        json.dumps(payload, indent=2, ensure_ascii=False),
+        mimetype="application/json",
+        headers={"Content-Disposition": f'attachment; filename="retainai-{target}-export.json"'},
+    )
+
+
 @owner_bp.post("/api/owner/accounts/<path:email>/action")
 def owner_account_action(email):
     actor, error = _require_owner()
@@ -240,9 +287,22 @@ def owner_account_action(email):
         note = str(data.get("note") or "").strip()[:1000]
         account["platform_support_note"] = note
         details["note_length"] = len(note)
-    elif action == "delete":
-        confirmation = _norm(data.get("confirmation"))
-        if confirmation != target:
+    elif action == "schedule_delete":
+        now = datetime.datetime.now(datetime.timezone.utc)
+        account["deletion_requested_at"] = now.isoformat().replace("+00:00", "Z")
+        account["deletion_scheduled_for"] = (
+            now + datetime.timedelta(days=14)
+        ).isoformat().replace("+00:00", "Z")
+        details["scheduled_for"] = account["deletion_scheduled_for"]
+    elif action == "cancel_delete":
+        if not account.get("deletion_scheduled_for"):
+            return jsonify({"error": "deletion_not_pending"}), 400
+        account.pop("status_before_deletion", None)
+        account.pop("deletion_requested_at", None)
+        account.pop("deletion_scheduled_for", None)
+    elif action == "delete_now":
+        confirmation = str(data.get("confirmation") or "").strip()
+        if confirmation != f"DELETE {target}":
             return jsonify({"error": "email_confirmation_required"}), 400
         removed_keys = []
         for key, record in list(users.items()):

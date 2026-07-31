@@ -120,10 +120,45 @@ export default function OwnerConsole() {
 
   async function permanentlyDeleteAccount(email) {
     const confirmation = window.prompt(
-      `Permanent deletion removes the account, team access, and CRM contacts. Type ${email} to confirm.`
+      `This permanently removes the account after you have exported its data. Type DELETE ${email} to confirm.`
+    );
+    if (confirmation !== `DELETE ${email}`) return;
+    await accountAction(email, "delete_now", { confirmation });
+  }
+
+  async function scheduleDeletion(email) {
+    const confirmation = window.prompt(
+      `Schedule this workspace for deletion in 14 days? Type ${email} to confirm. You can cancel during the recovery window.`
     );
     if (confirmation !== email) return;
-    await accountAction(email, "delete", { confirmation });
+    await accountAction(email, "schedule_delete");
+  }
+
+  async function exportAccount(email) {
+    setBusy(`${email}:export`);
+    setError("");
+    try {
+      const response = await fetch(apiUrl(`owner/accounts/${encodeURIComponent(email)}/export`), {
+        credentials: "include",
+      });
+      if (!response.ok) {
+        const data = await response.json().catch(() => ({}));
+        throw new Error(data.error || "Account export failed.");
+      }
+      const blob = await response.blob();
+      const href = URL.createObjectURL(blob);
+      const anchor = document.createElement("a");
+      anchor.href = href;
+      anchor.download = `retainai-${email}-export.json`;
+      document.body.appendChild(anchor);
+      anchor.click();
+      anchor.remove();
+      URL.revokeObjectURL(href);
+    } catch (requestError) {
+      setError(requestError.message || "Account export failed.");
+    } finally {
+      setBusy("");
+    }
   }
 
   async function toggleFeature(key, enabled) {
@@ -230,8 +265,18 @@ export default function OwnerConsole() {
                           <button className="product-button danger" disabled={Boolean(busy)} onClick={() => accountAction(account.email, "suspend")}>Suspend</button>
                         )}
                         <button className="product-button" disabled={Boolean(busy)} onClick={() => accountAction(account.email, "extend_trial", { days: 7 })}>+7 trial days</button>
-                        <button className="product-button" disabled={Boolean(busy)} onClick={() => accountAction(account.email, "archive")}>Archive</button>
-                        <button className="product-button danger" disabled={Boolean(busy)} onClick={() => permanentlyDeleteAccount(account.email)}>Delete</button>
+                        <button className="product-button" disabled={Boolean(busy)} onClick={() => exportAccount(account.email)}>Export</button>
+                        {account.status === "deletion_pending" ? (
+                          <>
+                            <button className="product-button" disabled={Boolean(busy)} onClick={() => accountAction(account.email, "cancel_delete")}>Cancel deletion</button>
+                            <button className="product-button danger" disabled={Boolean(busy)} onClick={() => permanentlyDeleteAccount(account.email)}>Delete now</button>
+                          </>
+                        ) : (
+                          <>
+                            <button className="product-button" disabled={Boolean(busy)} onClick={() => accountAction(account.email, "archive")}>Archive</button>
+                            <button className="product-button danger" disabled={Boolean(busy)} onClick={() => scheduleDeletion(account.email)}>Schedule deletion</button>
+                          </>
+                        )}
                       </div>
                     </td>
                   </tr>

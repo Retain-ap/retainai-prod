@@ -11,7 +11,7 @@ import Notifications from "./Notifications";
 import AiPromptsDashboard from "./AiPromptsDashboard";
 import Settings from "./Settings";
 import logo from "../assets/logo.png";
-import Analytics from "./Analytics";
+import Insights from "./Insights";
 import Invoices from "./Invoices";
 import { useNavigate, useLocation } from "react-router-dom";
 import { useSettings } from "./SettingsContext";
@@ -122,6 +122,17 @@ function CrmDashboard({ authenticatedUser }) {
       setSection("settings");
     }
   }, [location.pathname, location.search]);
+
+  useEffect(() => {
+    const handleNavigate = (event) => {
+      const nextSection = String(event?.detail || "");
+      if (Object.prototype.hasOwnProperty.call(SECTION_LABELS, nextSection)) {
+        setSection(nextSection);
+      }
+    };
+    window.addEventListener("retainai:navigate", handleNavigate);
+    return () => window.removeEventListener("retainai:navigate", handleNavigate);
+  }, []);
 
   // user state (single source of truth)
   const [user, setUserState] = useState(() => {
@@ -1092,7 +1103,7 @@ function CrmDashboard({ authenticatedUser }) {
           />
         )}
 
-        {section === "analytics" && <Analytics leads={leads} events={crmAppointments} user={user} />}
+        {section === "analytics" && <Insights leads={leads} events={crmAppointments} user={user} />}
 
         {section === "invoices" && (
           <Invoices user={user} leads={leads} refreshUser={handleRefreshUser} />
