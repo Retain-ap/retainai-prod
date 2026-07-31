@@ -51,6 +51,17 @@ class PasswordResetSecurityTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertNotIn("missing", response.get_json()["message"].lower())
 
+    def test_email_verification_token_is_signed(self):
+        token = retainai._email_verification_token(self.email)
+        self.assertEqual(
+            retainai._decode_email_verification_token(token),
+            self.email,
+        )
+        encoded, signature = token.split(".", 1)
+        tampered = f"{encoded}.{signature[:-1]}0"
+        with self.assertRaises(ValueError):
+            retainai._decode_email_verification_token(tampered)
+
 
 if __name__ == "__main__":
     unittest.main()

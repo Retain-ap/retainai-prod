@@ -151,6 +151,8 @@ _PUBLIC_API_PATHS = {
     "/api/auth/signup",
     "/api/auth/password/forgot",
     "/api/auth/password/reset",
+    "/api/auth/email/verify",
+    "/api/auth/email/resend",
     "/api/oauth/google",
     "/api/auth/2fa/verify-login",
     "/api/stripe/webhook",
@@ -183,6 +185,9 @@ def _start_user_session(email: str, user_payload: dict, remember: bool = True) -
         or ""
     ).strip().lower()
     session["role"] = str((user_payload or {}).get("role") or "owner").lower()
+    users = load_users() or {}
+    account = users.get(str(email or "").strip().lower()) if isinstance(users, dict) else {}
+    session["security_version"] = int((account or {}).get("security_version") or 0)
 
 
 @app.before_request
@@ -229,6 +234,11 @@ def require_authenticated_api_session():
     users = load_users() or {}
     actor_record = users.get(actor) if isinstance(users, dict) else None
     if isinstance(actor_record, dict):
+        if int(session.get("security_version") or 0) != int(
+            actor_record.get("security_version") or 0
+        ):
+            session.clear()
+            return jsonify({"error": "session_revoked"}), 401
         stored_org = str(
             actor_record.get("org_id")
             or actor_record.get("orgOwnerEmail")
@@ -375,6 +385,68 @@ def _decode_password_reset_token(token: str, users: dict) -> Tuple[str, dict]:
     if not hmac.compare_digest(str(payload.get("pf") or ""), current_fingerprint):
         raise ValueError("used")
     return email, user
+
+
+def _email_verification_token(email: str) -> str:
+    issued_at = int(time.time())
+    payload = json.dumps(
+        {"email": _norm_email(email), "iat": issued_at, "purpose": "verify_email"},
+        separators=(",", ":"),
+        sort_keys=True,
+    ).encode("utf-8")
+    encoded = base64.urlsafe_b64encode(payload).decode("ascii").rstrip("=")
+    signature = hmac.new(
+        str(SESSION_SECRET).encode("utf-8"),
+        encoded.encode("ascii"),
+        hashlib.sha256,
+    ).hexdigest()
+    return f"{encoded}.{signature}"
+
+
+def _decode_email_verification_token(token: str) -> str:
+    encoded, supplied_signature = str(token or "").split(".", 1)
+    expected_signature = hmac.new(
+        str(SESSION_SECRET).encode("utf-8"),
+        encoded.encode("ascii"),
+        hashlib.sha256,
+    ).hexdigest()
+    if not hmac.compare_digest(expected_signature, supplied_signature):
+        raise ValueError("invalid")
+    padded = encoded + ("=" * ((4 - len(encoded) % 4) % 4))
+    payload = json.loads(base64.urlsafe_b64decode(padded.encode("ascii")).decode("utf-8"))
+    if payload.get("purpose") != "verify_email":
+        raise ValueError("invalid")
+    issued_at = int(payload.get("iat") or 0)
+    if issued_at <= 0 or time.time() - issued_at > 24 * 60 * 60:
+        raise ValueError("expired")
+    return _norm_email(payload.get("email"))
+
+
+def _send_verification_email(email: str) -> bool:
+    if not SENDGRID_API_KEY:
+        return False
+    token = _email_verification_token(email)
+    verify_url = f"{API_PUBLIC_URL}/api/auth/email/verify?token={urllib.parse.quote(token)}"
+    message = Mail(
+        from_email=Email(SENDER_EMAIL, "RetainAI"),
+        to_emails=email,
+        subject="Verify your RetainAI email",
+        html_content=(
+            "<div style='font-family:Arial,sans-serif;color:#18191c;line-height:1.6'>"
+            "<h2>Verify your email</h2><p>Confirm this email belongs to you to secure "
+            "your RetainAI account.</p>"
+            f"<p><a href='{html.escape(verify_url, quote=True)}' "
+            "style='display:inline-block;background:#d7bb66;color:#111;padding:12px 18px;"
+            "border-radius:8px;text-decoration:none;font-weight:700'>Verify email</a></p>"
+            "<p>This link expires in 24 hours.</p></div>"
+        ),
+    )
+    try:
+        response = SendGridAPIClient(SENDGRID_API_KEY).send(message)
+        return 200 <= int(response.status_code) < 300
+    except Exception:
+        app.logger.exception("[EMAIL VERIFY] Delivery failed")
+        return False
 
 
 def _mfa_cipher() -> Fernet:
@@ -568,6 +640,11 @@ if FRONTEND_URL == "https://retainai-prod-1-frontend.onrender.com":
     # Stripe and OAuth must return to the canonical site. On the temporary
     # Render hostname the api.retainai.ca session cookie becomes cross-site.
     FRONTEND_URL = "https://www.retainai.ca"
+API_PUBLIC_URL = (
+    os.getenv("PUBLIC_API_URL")
+    or os.getenv("BACKEND_URL")
+    or "https://api.retainai.ca"
+).rstrip("/")
 
 if STRIPE_SECRET_KEY:
     stripe.api_key = STRIPE_SECRET_KEY
@@ -2938,6 +3015,31 @@ def stripe_webhook():
             subscription_status = str(event_object.get("status") or "")
             user["stripe_subscription_id"] = event_object.get("id")
             user["billing_status"] = subscription_status
+            items = ((event_object.get("items") or {}).get("data") or [])
+            monthly_value = 0.0
+            currency = ""
+            for item in items:
+                price = (item or {}).get("price") or {}
+                unit_amount = price.get("unit_amount")
+                recurring = price.get("recurring") or {}
+                interval = str(recurring.get("interval") or "month")
+                interval_count = max(1, int(recurring.get("interval_count") or 1))
+                quantity = max(1, int((item or {}).get("quantity") or 1))
+                if unit_amount is None:
+                    continue
+                amount = (float(unit_amount) / 100.0) * quantity
+                if interval == "year":
+                    amount /= 12 * interval_count
+                elif interval == "week":
+                    amount *= 52 / (12 * interval_count)
+                elif interval == "day":
+                    amount *= 365 / (12 * interval_count)
+                else:
+                    amount /= interval_count
+                monthly_value += amount
+                currency = str(price.get("currency") or currency).upper()
+            user["subscription_mrr"] = round(monthly_value, 2)
+            user["subscription_currency"] = currency
             if subscription_status in {"active", "trialing", "past_due"}:
                 user["status"] = "active"
             elif subscription_status in {"unpaid", "incomplete_expired", "canceled"}:
@@ -3049,6 +3151,7 @@ def _user_payload(email: str, user: dict) -> dict:
         "canEditBusiness": role == "owner",
         "canManageBilling": role == "owner",
         "platformOwner": _is_platform_owner(email),
+        "emailVerified": bool(base.get("email_verified") or _is_platform_owner(email)),
     }
 
 def _bootstrap_platform_owner() -> None:
@@ -3082,6 +3185,7 @@ def _bootstrap_platform_owner() -> None:
             "role": "owner",
             "org_id": email,
             "status": "active",
+            "email_verified": True,
             "password": generate_password_hash(password),
         }
     )
@@ -3137,6 +3241,7 @@ def reset_password():
 
     user["password"] = generate_password_hash(password)
     user["password_changed_at"] = datetime.datetime.utcnow().isoformat() + "Z"
+    user["security_version"] = int(user.get("security_version") or 0) + 1
     users[email] = user
     save_users(users)
     session.clear()
@@ -3145,6 +3250,42 @@ def reset_password():
         "ok": True,
         "message": "Password updated. Sign in with your new password.",
     }), 200
+
+
+@app.get("/api/auth/email/verify")
+def verify_email():
+    token = str(request.args.get("token") or "")
+    try:
+        email = _decode_email_verification_token(token)
+    except Exception:
+        return redirect(f"{FRONTEND_URL}/login?email_verified=invalid")
+    users = load_users() or {}
+    user = users.get(email) if isinstance(users, dict) else None
+    if not isinstance(user, dict):
+        return redirect(f"{FRONTEND_URL}/login?email_verified=invalid")
+    user["email_verified"] = True
+    user["email_verified_at"] = datetime.datetime.utcnow().isoformat() + "Z"
+    users[email] = user
+    save_users(users)
+    return redirect(f"{FRONTEND_URL}/login?email_verified=success")
+
+
+@app.post("/api/auth/email/resend")
+def resend_verification_email():
+    data = request.get_json(silent=True) or {}
+    email = _session_email() or _norm_email(data.get("email"))
+    generic = {"ok": True, "message": "If verification is required, a new email is on its way."}
+    if not email or _password_reset_rate_limited(f"verify:{email}"):
+        return jsonify(generic), 200
+    users = load_users() or {}
+    user = users.get(email) if isinstance(users, dict) else None
+    if not isinstance(user, dict):
+        return jsonify(generic), 200
+    if user.get("email_verified"):
+        return jsonify(generic), 200
+    if not _send_verification_email(email):
+        return jsonify({"error": "verification_email_unavailable"}), 503
+    return jsonify(generic), 200
 
 
 def _complete_login_response(email: str, user: dict, payload: dict, remember: bool, message: str):
@@ -3212,10 +3353,12 @@ def signup():
         "instagram": instagram,
         "location": location,
         "status": "pending_payment",
+        "email_verified": False,
         "trial_start": trial_start,
         "trial_ending_notice_sent": False,
     }
     save_users(users)
+    _send_verification_email(email)
 
     try:
         send_email_with_template(
@@ -3377,6 +3520,11 @@ def login():
     user = users.get(email)
     if isinstance(user, dict):
         password_valid = _password_matches(user.get("password", ""), password)
+        if password_valid and user.get("email_verified") is False:
+            return jsonify({
+                "error": "Verify your email before signing in.",
+                "code": "email_verification_required",
+            }), 403
         allowed = password_valid and (
             _is_platform_owner(email)
             or (user.get("status") == "active")
@@ -3622,6 +3770,9 @@ def session_status():
     user = users.get(email) if isinstance(users, dict) else None
     if not isinstance(user, dict):
         return jsonify({"authenticated": False}), 401
+    if int(session.get("security_version") or 0) != int(user.get("security_version") or 0):
+        session.clear()
+        return jsonify({"authenticated": False, "error": "session_revoked"}), 401
     return jsonify({"authenticated": True, "user": _user_payload(email, user)}), 200
 
 @app.route("/api/oauth/google", methods=["POST"])
@@ -3656,6 +3807,10 @@ def google_oauth():
             changed = True
         if user.get("picture") and not user.get("logo"):
             user["logo"] = user["picture"]
+            changed = True
+        if idinfo.get("email_verified") and not user.get("email_verified"):
+            user["email_verified"] = True
+            user["email_verified_at"] = datetime.datetime.utcnow().isoformat() + "Z"
             changed = True
 
         if changed:
@@ -7961,6 +8116,12 @@ scheduler.add_job(
     replace_existing=True
 )
 
+def create_daily_platform_backup():
+    from app_owner import _backup_files
+    path, manifest = _backup_files()
+    print(f"[BACKUP] Created {path} with {len(manifest.get('files') or [])} files")
+
+
 def _start_scheduler_once():
     try:
         if scheduler.running:
@@ -7997,6 +8158,15 @@ def _start_scheduler_once():
             func=send_post_appointment_update_prompts,
             trigger="interval",
             minutes=15,
+            replace_existing=True
+        )
+
+        scheduler.add_job(
+            id="daily_platform_backup",
+            func=create_daily_platform_backup,
+            trigger="cron",
+            hour=3,
+            minute=20,
             replace_existing=True
         )
 

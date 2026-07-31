@@ -3,6 +3,7 @@ import {
   FaChartPie,
   FaClipboardList,
   FaCog,
+  FaDatabase,
   FaHeartbeat,
   FaSearch,
   FaShieldAlt,
@@ -59,6 +60,7 @@ export default function OwnerConsole() {
   const [health, setHealth] = useState(null);
   const [audit, setAudit] = useState([]);
   const [features, setFeatures] = useState({});
+  const [backups, setBackups] = useState([]);
   const [query, setQuery] = useState("");
   const [statusFilter, setStatusFilter] = useState("all");
   const [integrationFilter, setIntegrationFilter] = useState("all");
@@ -72,7 +74,7 @@ export default function OwnerConsole() {
     setLoading(true);
     setError("");
     try {
-      const [summary, accountData, queueData, healthData, auditData, featureData] =
+      const [summary, accountData, queueData, healthData, auditData, featureData, backupData] =
         await Promise.all([
           ownerRequest("overview"),
           ownerRequest("accounts"),
@@ -80,6 +82,7 @@ export default function OwnerConsole() {
           ownerRequest("health"),
           ownerRequest("audit"),
           ownerRequest("features"),
+          ownerRequest("backups"),
         ]);
       setOverview(summary);
       setAccounts(accountData.accounts || []);
@@ -87,6 +90,7 @@ export default function OwnerConsole() {
       setHealth(healthData);
       setAudit(auditData.audit || []);
       setFeatures(featureData.features || {});
+      setBackups(backupData.backups || []);
     } catch (requestError) {
       setError(requestError.message || "Could not load the owner console.");
     } finally {
@@ -206,11 +210,48 @@ export default function OwnerConsole() {
     await accountAction(selectedAccount.email, "support_note", { note: supportNote });
   }
 
+  async function createBackup() {
+    setBusy("backup:create");
+    setError("");
+    try {
+      const data = await ownerRequest("backups", { method: "POST", body: JSON.stringify({}) });
+      setBackups(data.backups || []);
+    } catch (requestError) {
+      setError(requestError.message || "Backup creation failed.");
+    } finally {
+      setBusy("");
+    }
+  }
+
+  async function downloadBackup(name) {
+    setBusy(`backup:${name}`);
+    try {
+      const response = await fetch(apiUrl(`owner/backups/${encodeURIComponent(name)}`), {
+        credentials: "include",
+      });
+      if (!response.ok) throw new Error("Backup download failed.");
+      const blob = await response.blob();
+      const href = URL.createObjectURL(blob);
+      const anchor = document.createElement("a");
+      anchor.href = href;
+      anchor.download = name;
+      document.body.appendChild(anchor);
+      anchor.click();
+      anchor.remove();
+      URL.revokeObjectURL(href);
+    } catch (requestError) {
+      setError(requestError.message || "Backup download failed.");
+    } finally {
+      setBusy("");
+    }
+  }
+
   const tabs = [
     ["overview", "Overview", <FaChartPie />],
     ["accounts", "Customer Accounts", <FaUsers />],
     ["success", "Success Queue", <FaClipboardList />],
     ["health", "System Health", <FaHeartbeat />],
+    ["backups", "Backups", <FaDatabase />],
     ["audit", "Audit Log", <FaShieldAlt />],
     ["features", "Feature Controls", <FaCog />],
   ];
@@ -247,6 +288,7 @@ export default function OwnerConsole() {
             <div className="metric-card"><span>Contacts managed</span><strong>{overview.contacts_total}</strong><small>Across all customer workspaces</small></div>
             <div className="metric-card"><span>Onboarded</span><strong>{overview.onboarded_accounts}</strong><small>{overview.average_onboarding}% average completion</small></div>
             <div className="metric-card"><span>At-risk accounts</span><strong>{overview.at_risk_accounts}</strong><small>Need proactive attention</small></div>
+            <div className="metric-card"><span>Recorded MRR</span><strong>{Object.keys(overview.recorded_mrr || {}).length ? Object.entries(overview.recorded_mrr).map(([currency, amount]) => `${currency} $${amount}`).join(" · ") : "Waiting for Stripe"}</strong><small>Captured from subscription events</small></div>
           </div>
           <div className="product-grid">
             <section className="product-card">
@@ -318,6 +360,8 @@ export default function OwnerConsole() {
                 <div><span>Trial remaining</span><strong>{selectedAccount.trial_days_remaining || 0} days</strong></div>
                 <div><span>Contacts</span><strong>{selectedAccount.lead_count}</strong></div>
                 <div><span>Team</span><strong>{selectedAccount.team_count}</strong></div>
+                <div><span>Email</span><strong>{selectedAccount.email_verified ? "Verified" : "Unverified"}</strong></div>
+                <div><span>Recorded MRR</span><strong>{selectedAccount.subscription_mrr ? `${selectedAccount.subscription_currency} $${selectedAccount.subscription_mrr}` : "Not recorded"}</strong></div>
               </div>
               <div className="owner-risk-list">
                 {selectedAccount.risk_reasons?.length
@@ -329,6 +373,7 @@ export default function OwnerConsole() {
                 <textarea className="product-input" rows="3" maxLength="1000" value={supportNote} onChange={(event) => setSupportNote(event.target.value)} placeholder="Record follow-up context, customer needs, or an internal note…" />
               </label>
               <button className="product-button primary" disabled={Boolean(busy)} onClick={saveSupportNote}>Save private note</button>
+              <button className="product-button danger" style={{ marginLeft: 8 }} disabled={Boolean(busy)} onClick={() => accountAction(selectedAccount.email, "force_logout")}>Sign out all devices</button>
             </div>
           )}
           <div className="owner-table-wrap">
@@ -399,6 +444,24 @@ export default function OwnerConsole() {
             ))}
           </div>
           {health.deployment && <p className="product-card-copy">Deployment revision: <code>{health.deployment}</code></p>}
+        </section>
+      )}
+
+      {tab === "backups" && (
+        <section className="product-card" style={{ marginTop: 18 }}>
+          <div className="product-card-header">
+            <div><h2>Verified platform backups</h2><p className="product-card-copy">Encrypted transport, integrity hashes, automatic retention and owner-only downloads. Keep an off-site copy for disaster recovery.</p></div>
+            <button className="product-button primary" onClick={createBackup} disabled={Boolean(busy)}>{busy === "backup:create" ? "Creating…" : "Create backup now"}</button>
+          </div>
+          <div className="insight-list">
+            {backups.map((backup) => (
+              <div className="insight-row" key={backup.name}>
+                <div className="insight-row-main"><strong>{when(backup.created_at)}</strong><small>{backup.name} · {(backup.bytes / 1024 / 1024).toFixed(2)} MB · SHA-256 {backup.sha256.slice(0, 12)}…</small></div>
+                <button className="product-button" disabled={Boolean(busy)} onClick={() => downloadBackup(backup.name)}>Download</button>
+              </div>
+            ))}
+            {!backups.length && <div className="owner-empty-state"><strong>No verified backup yet</strong><small>Create the first snapshot now. Automatic daily backups require RUN_SCHEDULER=1.</small></div>}
+          </div>
         </section>
       )}
 

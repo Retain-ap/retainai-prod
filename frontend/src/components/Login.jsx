@@ -104,6 +104,7 @@ function normalizeUserForStorage(u = {}, fallbackEmail = "") {
     canEditBusiness: Boolean(u.canEditBusiness),
     canManageBilling: Boolean(u.canManageBilling),
     platformOwner: Boolean(u.platformOwner),
+    emailVerified: Boolean(u.emailVerified),
     trialActive: Boolean(u.trialActive),
     trialDaysRemaining: Number(u.trialDaysRemaining || 0),
     trialEndsAt: u.trialEndsAt || "",
@@ -135,6 +136,7 @@ export default function Login() {
   const [mfaRequired, setMfaRequired] = useState(false);
   const [mfaCode, setMfaCode] = useState("");
   const [billingState, setBillingState] = useState(null);
+  const [verificationRequired, setVerificationRequired] = useState(false);
   const [resetToken] = useState(
     () => new URLSearchParams(window.location.search).get("reset_token") || ""
   );
@@ -181,6 +183,14 @@ export default function Login() {
     if (savedFlag) setRemember(savedFlag === "1");
     if (new URLSearchParams(window.location.search).get("password_reset") === "success") {
       setError("Password updated. Sign in with your new password.");
+      window.history.replaceState({}, "", "/login");
+    }
+    const emailVerification = new URLSearchParams(window.location.search).get("email_verified");
+    if (emailVerification === "success") {
+      setError("Email verified. You can now sign in.");
+      window.history.replaceState({}, "", "/login");
+    } else if (emailVerification === "invalid") {
+      setError("That verification link is invalid or expired. Sign in to request another.");
       window.history.replaceState({}, "", "/login");
     }
   }, []);
@@ -287,6 +297,7 @@ export default function Login() {
 
     setError("");
     setBillingState(null);
+    setVerificationRequired(false);
 
     if (!email || !password) {
       setError("All fields required.");
@@ -319,6 +330,12 @@ export default function Login() {
         return;
       }
       if (!res.ok) {
+        if (res.status === 403 && data.code === "email_verification_required") {
+          setVerificationRequired(true);
+          setError(data.error || "Verify your email before signing in.");
+          setSubmitting(false);
+          return;
+        }
         setError(data.error || "Login failed.");
         setSubmitting(false);
         return;
@@ -327,6 +344,25 @@ export default function Login() {
       await enterWorkspace(data.user || {}, cleanedEmail);
     } catch (requestError) {
       setError(requestError.message || "Login error.");
+      setSubmitting(false);
+    }
+  }
+
+  async function resendVerification() {
+    setSubmitting(true);
+    try {
+      const response = await fetch(apiUrl("auth/email/resend"), {
+        method: "POST",
+        credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email: normEmail(email) }),
+      });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(data.error || "Could not send verification email.");
+      setError(data.message || "Check your email for a new verification link.");
+    } catch (requestError) {
+      setError(requestError.message || "Could not send verification email.");
+    } finally {
       setSubmitting(false);
     }
   }
@@ -683,6 +719,17 @@ export default function Login() {
                 >
                   {error}
                 </div>
+              )}
+              {verificationRequired && (
+                <button
+                  type="button"
+                  className="product-button"
+                  onClick={resendVerification}
+                  disabled={submitting}
+                  style={{ width: "100%" }}
+                >
+                  Send a new verification email
+                </button>
               )}
 
               {billingState && (

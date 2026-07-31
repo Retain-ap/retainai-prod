@@ -1,19 +1,24 @@
 import datetime
+import hashlib
 import json
 import os
+import sqlite3
 import time
+import zipfile
 from collections import Counter
 from uuid import uuid4
 
-from flask import Blueprint, Response, jsonify, request, session
+from flask import Blueprint, Response, jsonify, request, send_file, session
 
-from storage import DATA_ROOT, load_leads, load_users, save_users
+from storage import DATA_ROOT, SQLITE_PATH, USE_SQLITE, load_leads, load_users, save_users
 
 
 owner_bp = Blueprint("owner_bp", __name__)
 
 AUDIT_FILE = os.path.join(DATA_ROOT, "platform_audit.json")
 FEATURE_FLAGS_FILE = os.path.join(DATA_ROOT, "platform_features.json")
+BACKUP_ROOT = os.path.join(DATA_ROOT, "backups")
+OWNER_MODULE_STARTED_AT = time.time()
 CANONICAL_PLATFORM_OWNER = "owner@retainai.ca"
 
 
@@ -57,6 +62,100 @@ def _save_json(path, value):
     with open(temp_path, "w", encoding="utf-8") as handle:
         json.dump(value, handle, indent=2, ensure_ascii=False)
     os.replace(temp_path, path)
+
+
+def _sha256(path):
+    digest = hashlib.sha256()
+    with open(path, "rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _backup_files():
+    os.makedirs(BACKUP_ROOT, exist_ok=True)
+    stamp = datetime.datetime.now(datetime.timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    archive_path = os.path.join(BACKUP_ROOT, f"retainai-backup-{stamp}.zip")
+    staged_db = ""
+    files = []
+    try:
+        if USE_SQLITE and os.path.isfile(SQLITE_PATH):
+            staged_db = os.path.join(BACKUP_ROOT, f".snapshot-{uuid4().hex}.db")
+            source = sqlite3.connect(SQLITE_PATH)
+            destination = sqlite3.connect(staged_db)
+            try:
+                source.backup(destination)
+            finally:
+                destination.close()
+                source.close()
+            files.append((staged_db, "retainai.db"))
+        for name in os.listdir(DATA_ROOT):
+            path = os.path.join(DATA_ROOT, name)
+            if os.path.isfile(path) and name.lower().endswith(".json"):
+                files.append((path, f"json/{name}"))
+        manifest = {
+            "created_at": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+            "storage_mode": "sqlite" if USE_SQLITE else "json",
+            "files": [
+                {"name": arcname, "bytes": os.path.getsize(path), "sha256": _sha256(path)}
+                for path, arcname in files
+            ],
+        }
+        with zipfile.ZipFile(archive_path, "w", zipfile.ZIP_DEFLATED) as archive:
+            for path, arcname in files:
+                archive.write(path, arcname)
+            archive.writestr("manifest.json", json.dumps(manifest, indent=2))
+        with zipfile.ZipFile(archive_path, "r") as archive:
+            bad_file = archive.testzip()
+            if bad_file:
+                raise RuntimeError(f"backup_verification_failed:{bad_file}")
+        with open(f"{archive_path}.sha256", "w", encoding="ascii") as checksum_file:
+            checksum_file.write(_sha256(archive_path))
+        retention = max(3, min(int(os.getenv("BACKUP_RETENTION_COUNT") or 14), 90))
+        archives = sorted(
+            (
+                os.path.join(BACKUP_ROOT, name)
+                for name in os.listdir(BACKUP_ROOT)
+                if name.startswith("retainai-backup-") and name.endswith(".zip")
+            ),
+            key=os.path.getmtime,
+            reverse=True,
+        )
+        for old_path in archives[retention:]:
+            os.remove(old_path)
+            checksum_path = f"{old_path}.sha256"
+            if os.path.isfile(checksum_path):
+                os.remove(checksum_path)
+        return archive_path, manifest
+    finally:
+        if staged_db and os.path.isfile(staged_db):
+            os.remove(staged_db)
+
+
+def _backup_rows():
+    if not os.path.isdir(BACKUP_ROOT):
+        return []
+    rows = []
+    for name in os.listdir(BACKUP_ROOT):
+        path = os.path.join(BACKUP_ROOT, name)
+        if not name.startswith("retainai-backup-") or not name.endswith(".zip") or not os.path.isfile(path):
+            continue
+        checksum_path = f"{path}.sha256"
+        checksum = ""
+        try:
+            with open(checksum_path, "r", encoding="ascii") as checksum_file:
+                checksum = checksum_file.read().strip()
+        except Exception:
+            checksum = _sha256(path)
+        rows.append({
+            "name": name,
+            "bytes": os.path.getsize(path),
+            "created_at": datetime.datetime.fromtimestamp(
+                os.path.getmtime(path), datetime.timezone.utc
+            ).isoformat(),
+            "sha256": checksum,
+        })
+    return sorted(rows, key=lambda row: row["created_at"], reverse=True)
 
 
 def _audit(actor, action, target="", details=None):
@@ -182,6 +281,10 @@ def _account_row(email, record, leads_by_user, users):
         "onboarding_checks": onboarding_checks,
         "risk_reasons": risk_reasons,
         "risk_level": "high" if len(risk_reasons) >= 3 else ("medium" if risk_reasons else "healthy"),
+        "email_verified": bool(record.get("email_verified") or record.get("google_sub")),
+        "subscription_mrr": float(record.get("subscription_mrr") or 0),
+        "subscription_currency": record.get("subscription_currency") or "",
+        "security_version": int(record.get("security_version") or 0),
         "support_note": record.get("platform_support_note") or "",
         "deletion_requested_at": record.get("deletion_requested_at") or "",
         "deletion_scheduled_for": record.get("deletion_scheduled_for") or "",
@@ -242,6 +345,14 @@ def owner_overview():
         if (_parse_datetime(row["created_at"]) or datetime.datetime.min.replace(tzinfo=datetime.timezone.utc))
         >= recent_cutoff
     )
+    revenue_by_currency = {}
+    for row in rows:
+        currency = str(row.get("subscription_currency") or "").upper()
+        amount = float(row.get("subscription_mrr") or 0)
+        if currency and amount:
+            revenue_by_currency[currency] = round(
+                float(revenue_by_currency.get(currency) or 0) + amount, 2
+            )
     return jsonify(
         {
             "accounts_total": len(rows),
@@ -258,6 +369,7 @@ def owner_overview():
                 sum(row["onboarding_score"] for row in rows) / len(rows)
             ) if rows else 0,
             "status_breakdown": dict(status_counts),
+            "recorded_mrr": revenue_by_currency,
             "integrations": dict(connected),
             "generated_at": int(time.time()),
         }
@@ -332,6 +444,11 @@ def owner_account_action(email):
         note = str(data.get("note") or "").strip()[:1000]
         account["platform_support_note"] = note
         details["note_length"] = len(note)
+    elif action == "force_logout":
+        account["security_version"] = int(account.get("security_version") or 0) + 1
+        account["sessions_revoked_at"] = (
+            datetime.datetime.now(datetime.timezone.utc).isoformat().replace("+00:00", "Z")
+        )
     elif action == "schedule_delete":
         now = datetime.datetime.now(datetime.timezone.utc)
         account["deletion_requested_at"] = now.isoformat().replace("+00:00", "Z")
@@ -407,6 +524,8 @@ def owner_health():
     actor, error = _require_owner()
     if error:
         return error
+    backup_rows = _backup_rows()
+    latest_backup = backup_rows[0] if backup_rows else None
     checks = {
         "database": True,
         "session_secret": bool(os.getenv("SESSION_SECRET") or os.getenv("FLASK_SECRET_KEY")),
@@ -417,6 +536,7 @@ def owner_health():
         "stripe_webhook": bool(os.getenv("STRIPE_WEBHOOK_SECRET")),
         "google_oauth": bool(os.getenv("GOOGLE_CLIENT_ID") and os.getenv("GOOGLE_CLIENT_SECRET")),
         "sendgrid": bool(os.getenv("SENDGRID_API_KEY")),
+        "backup_available": bool(latest_backup),
     }
     return jsonify(
         {
@@ -425,8 +545,43 @@ def owner_health():
             "deployment": os.getenv("RENDER_GIT_COMMIT", ""),
             "service": os.getenv("RENDER_SERVICE_NAME", ""),
             "checked_at": int(time.time()),
+            "uptime_seconds": int(time.time() - OWNER_MODULE_STARTED_AT),
+            "latest_backup": latest_backup,
         }
     ), 200
+
+
+@owner_bp.route("/api/owner/backups", methods=["GET", "POST"])
+def owner_backups():
+    actor, error = _require_owner()
+    if error:
+        return error
+    if request.method == "POST":
+        try:
+            path, manifest = _backup_files()
+        except Exception as exc:
+            _audit(actor, "backup_failed", details={"error": type(exc).__name__})
+            return jsonify({"error": "backup_failed"}), 500
+        _audit(actor, "backup_created", details={
+            "name": os.path.basename(path),
+            "file_count": len(manifest["files"]),
+        })
+    return jsonify({"backups": _backup_rows()}), 200
+
+
+@owner_bp.get("/api/owner/backups/<path:name>")
+def owner_backup_download(name):
+    actor, error = _require_owner()
+    if error:
+        return error
+    safe_name = os.path.basename(name)
+    if safe_name != name or not safe_name.startswith("retainai-backup-") or not safe_name.endswith(".zip"):
+        return jsonify({"error": "invalid_backup_name"}), 400
+    path = os.path.join(BACKUP_ROOT, safe_name)
+    if not os.path.isfile(path):
+        return jsonify({"error": "backup_not_found"}), 404
+    _audit(actor, "backup_downloaded", details={"name": safe_name})
+    return send_file(path, as_attachment=True, download_name=safe_name)
 
 
 @owner_bp.get("/api/owner/audit")

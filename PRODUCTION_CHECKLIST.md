@@ -14,6 +14,7 @@ It returns only yes/no configuration checks and never returns secret values.
 - `STRIPE_WEBHOOK_SECRET`: signing secret for the production webhook.
 - `SENDGRID_API_KEY`: transactional email delivery, including password resets.
 - Persistent storage: `USE_SQLITE=true`, with `SQLITE_PATH` on Render's persistent disk.
+- `RUN_SCHEDULER=1`: enables the verified daily backup job and scheduled automations.
 
 ## Strongly recommended
 
@@ -21,7 +22,11 @@ It returns only yes/no configuration checks and never returns secret values.
 - `GOOGLE_CLIENT_ID`: production Google sign-in client.
 - `WHATSAPP_TOKEN`, `WHATSAPP_PHONE_ID`, and `APP_SECRET`: Meta messaging.
 - An external uptime monitor checking `/api/readiness` every five minutes.
-- A daily copy of the persistent SQLite file to storage outside Render.
+- Download verified snapshots from Owner Console → Backups and copy them to
+  storage outside Render. On-platform backups do not protect against losing the
+  entire Render disk.
+- Configure the external monitor to alert `owner@retainai.ca` when readiness is
+  unavailable or returns a degraded result.
 
 ## Stripe webhook events
 
@@ -44,3 +49,11 @@ Run the backend security checks:
 Run the frontend production build:
 
 `npm --prefix frontend run build`
+
+## Monthly recovery drill
+
+1. Create a backup from Owner Console → Backups.
+2. Download it and verify the SHA-256 value shown in the Owner Console.
+3. Extract it in an isolated folder.
+4. Confirm `manifest.json` lists the database and workspace JSON files.
+5. Restore the snapshot only into a non-production test service.
