@@ -12,7 +12,8 @@ export default function LeadsDashboard({
   drawerLead,
   setDrawerLead,
   onContactedLead,
-  onUpdateLead
+  onUpdateLead,
+  onImportLeads,
 }) {
   const [search, setSearch] = useState("");
 
@@ -58,6 +59,10 @@ export default function LeadsDashboard({
   };
 
   function handleImportLeads() {
+    if (typeof onImportLeads === "function") {
+      onImportLeads();
+      return;
+    }
     const u = user || JSON.parse(localStorage.getItem("user") || "null");
     const email = u?.email || "";
 

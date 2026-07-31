@@ -7,7 +7,7 @@ from uuid import uuid4
 import stripe
 from flask import Blueprint, Response, jsonify, request, session
 
-from storage import DATA_ROOT, delete_users, load_leads, load_users, save_leads, save_users
+from storage import DATA_ROOT, delete_users, load_users, save_user_leads, save_users
 from account_history import record_account_deletion
 
 
@@ -104,11 +104,10 @@ def _purge_workspace(workspace, users):
         if _norm(key) == workspace
         or (isinstance(record, dict) and _norm(record.get("org_id")) == workspace)
     ]
+    # Remove dependent contacts before deleting the owner row. The SQLite
+    # storage helper ensures an owner exists while replacing contacts.
+    save_user_leads(workspace, [])
     delete_users(removed)
-    leads = load_leads() or {}
-    if isinstance(leads, dict) and workspace in leads:
-        leads.pop(workspace, None)
-        save_leads(leads)
     _purge_workspace_json(workspace)
     return len(removed)
 
@@ -122,19 +121,28 @@ def _cancel_workspace_subscriptions(owner):
     if not secret:
         raise RuntimeError("billing_cancellation_unavailable")
     stripe.api_key = secret
-    subscriptions = []
-    if subscription_id:
-        subscriptions.append(subscription_id)
-    elif customer_id:
+    subscriptions = set()
+    cancellable_statuses = {
+        "active", "trialing", "past_due", "unpaid", "incomplete", "paused"
+    }
+    if customer_id:
         page = stripe.Subscription.list(customer=customer_id, status="all", limit=100)
-        subscriptions.extend(
-            item.get("id")
+        subscriptions.update(
+            str(item.get("id") or "")
             for item in page.auto_paging_iter()
             if str(item.get("status") or "").lower()
-            in {"active", "trialing", "past_due", "unpaid"}
+            in cancellable_statuses
         )
+    if subscription_id and subscription_id not in subscriptions:
+        try:
+            stored = stripe.Subscription.retrieve(subscription_id)
+            if str(stored.get("status") or "").lower() in cancellable_statuses:
+                subscriptions.add(subscription_id)
+        except stripe.error.InvalidRequestError:
+            # A deleted/unknown stored subscription cannot renew.
+            pass
     cancelled = 0
-    for current_id in filter(None, subscriptions):
+    for current_id in sorted(filter(None, subscriptions)):
         cancel_method = getattr(stripe.Subscription, "cancel", None)
         if callable(cancel_method):
             cancel_method(current_id)

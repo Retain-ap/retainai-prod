@@ -37,7 +37,7 @@ from google.auth.transport import requests as grequests
 
 from storage import (
     load_users, save_users, get_user, create_user,
-    load_leads, save_leads, migrate_json_to_sqlite_if_needed,
+    load_leads, save_leads, save_user_leads, migrate_json_to_sqlite_if_needed,
     DATA_ROOT, USE_SQLITE, SQLITE_PATH
 )
 
@@ -199,6 +199,14 @@ def require_authenticated_api_session():
         return None
     if request.path.startswith("/api/team/invite/"):
         return None
+
+    # Reject browser writes from origins outside the RetainAI allowlist.
+    if request.method in {"POST", "PUT", "PATCH", "DELETE"}:
+        origin = (request.headers.get("Origin") or "").rstrip("/")
+        if origin and origin not in ALLOWED:
+            return jsonify({"error": "untrusted_request_origin"}), 403
+        if not origin and request.headers.get("Sec-Fetch-Site") == "cross-site":
+            return jsonify({"error": "cross_site_request_blocked"}), 403
 
     actor = _session_email()
     org = _session_org_email()
@@ -547,6 +555,19 @@ def add_cors_headers(resp):
         resp.headers["Access-Control-Allow-Headers"] = (
             "Content-Type, Authorization, X-Requested-With, "
             "X-User-Email, X-Owner-Email, X-Auth-Email"
+        )
+
+    resp.headers.setdefault("X-Content-Type-Options", "nosniff")
+    resp.headers.setdefault("X-Frame-Options", "DENY")
+    resp.headers.setdefault("Referrer-Policy", "strict-origin-when-cross-origin")
+    resp.headers.setdefault(
+        "Permissions-Policy",
+        "camera=(), microphone=(), geolocation=(), payment=(self)"
+    )
+    if not IS_LOCAL:
+        resp.headers.setdefault(
+            "Strict-Transport-Security",
+            "max-age=31536000; includeSubDomains"
         )
 
     return resp
@@ -2025,8 +2046,7 @@ def api_get_leads():
             normalized.append(item)
 
         if changed:
-            all_leads[email] = normalized
-            save_leads(all_leads)
+            save_user_leads(email, normalized)
 
         return jsonify({
             "ok": True,
@@ -2054,17 +2074,39 @@ def api_save_leads():
         return jsonify({"ok": False, "error": "body_must_include_leads_array"}), 400
 
     try:
-        all_leads = load_leads() or {}
-        if not isinstance(all_leads, dict):
-            all_leads = {}
-
-        # Save ONLY this user's list (full replace)
-        all_leads[email] = leads
-        save_leads(all_leads)
+        save_user_leads(email, leads)
 
         return jsonify({"ok": True, "email": email, "count": len(leads)}), 200
     except Exception as e:
         return jsonify({"ok": False, "error": str(e)[:300]}), 500
+
+
+@app.post("/api/leads/contacted")
+def api_mark_lead_contacted():
+    email = _req_user_email()
+    payload = request.get_json(silent=True) or {}
+    lead_id = str(payload.get("leadId") or payload.get("lead_id") or "").strip()
+    contacted_at = str(payload.get("at") or "").strip() or (
+        datetime.datetime.now(datetime.timezone.utc).isoformat().replace("+00:00", "Z")
+    )
+    if not email or not lead_id:
+        return jsonify({"ok": False, "error": "user and leadId are required"}), 400
+
+    leads_by_user = load_leads() or {}
+    leads = leads_by_user.get(email, []) if isinstance(leads_by_user, dict) else []
+    updated = None
+    for lead in leads:
+        if isinstance(lead, dict) and str(lead.get("id") or "") == lead_id:
+            lead["last_contacted"] = contacted_at
+            lead["last_activity_at"] = contacted_at
+            lead["updated_at"] = contacted_at
+            lead["status"] = "active"
+            updated = lead
+            break
+    if updated is None:
+        return jsonify({"ok": False, "error": "lead_not_found"}), 404
+    save_user_leads(email, leads)
+    return jsonify({"ok": True, "lead": updated}), 200
 
 # Notifications
 
@@ -2164,6 +2206,16 @@ def mark_notification_read(user_email, notif_id):
         return jsonify({"error": "Failed to save notification state"}), 500
 
     return jsonify({"ok": True}), 200
+
+
+@app.post("/api/notifications/<path:user_email>/read")
+def mark_notification_read_legacy(user_email):
+    """Compatibility endpoint for older clients that send the ID in JSON."""
+    payload = request.get_json(silent=True) or {}
+    notif_id = str(payload.get("id") or payload.get("notification_id") or "").strip()
+    if not notif_id:
+        return jsonify({"error": "Notification id is required"}), 400
+    return mark_notification_read(user_email, notif_id)
 
 @app.route("/api/email/inbound", methods=["POST"])
 def inbound_email_webhook():
@@ -2265,8 +2317,7 @@ def inbound_email_webhook():
                     arr[i]["last_inbound_at"] = datetime.datetime.utcnow().isoformat()
                     arr[i]["last_activity_at"] = datetime.datetime.utcnow().isoformat()
                     break
-            leads_by_user[owner_email] = arr
-            save_leads(leads_by_user)
+            save_user_leads(owner_email, arr)
         except Exception:
             pass
 
@@ -4788,8 +4839,7 @@ def _wa_append_inbound(user_email: str, lead_id: str, lead: dict, sender_waid: s
                 if "wa_opt_out" in lead:
                     item["wa_opt_out"] = bool(lead.get("wa_opt_out"))
                 break
-        leads_by_user[user_email] = owner_leads
-        save_leads(leads_by_user)
+        save_user_leads(user_email, owner_leads)
     except Exception as exc:
         try:
             app.logger.warning("[WA WEBHOOK] lead activity update failed: %s", exc)
@@ -5720,8 +5770,7 @@ def reconcile_whatsapp_replies():
                 item["last_message"] = _wa_readable_text(newest.get("text"))
                 item["last_message_direction"] = "inbound"
                 break
-        leads_by_user[user_email] = owner_leads
-        save_leads(leads_by_user)
+        save_user_leads(user_email, owner_leads)
         _MSG_CACHE.pop((user_email, lead_id), None)
 
     return jsonify({"ok": True, "matched_count": len(matched)}), 200
@@ -5751,8 +5800,7 @@ def set_optout():
     for ld in arr:
         if str(ld.get("id")) == str(lead_id):
             ld["wa_opt_out"] = bool(opt_out)
-    leads[user_email] = arr
-    save_leads(leads)
+    save_user_leads(user_email, arr)
 
     return jsonify({"ok": True, "opt_out": opt_out}), 200
 
@@ -7327,8 +7375,7 @@ def execute_step(flow: Dict[str, Any], step: Dict[str, Any], lead: Dict[str, Any
                     if (ld.get("id") == lead.get("id")) or (ld.get("email") == lead.get("email")):
                         arr[i] = lead
                         break
-                leads_by_user[owner] = arr
-                save_leads(leads_by_user)
+                save_user_leads(owner, arr)
         return True
 
     return True

@@ -16,7 +16,7 @@ const HTML_CACHE = `${VERSION}-html`;
 const PRECACHE_HTML = ["/index.html"];
 
 // If you optionally inject these in index.html, we won't break:
-self.API_BASE = self.API_BASE || "https://retainai-prod.onrender.com";
+self.API_BASE = self.API_BASE || "https://api.retainai.ca";
 self.FRONTEND_URL = self.FRONTEND_URL || "/";
 
 function isHttp(url) {

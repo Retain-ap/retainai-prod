@@ -1,13 +1,8 @@
 // src/pages/AcceptInvite.jsx
 import React, { useEffect, useState } from "react";
+import { apiUrl } from "../apiBase";
 
 export default function AcceptInvite() {
-  // CRA/Webpack-friendly env detection (no import.meta)
-  const apiBase =
-    (typeof window !== "undefined" && window.__API_BASE__) ||
-    process.env.REACT_APP_API_BASE ||
-    "API_BASE";
-
   // ===== Inline CSS (scoped) =====
   const css = `
   :root { --accent:#f2c44c; --bg:#0f1115; --panel:#1b1d21; --border:#292b30; --fg:#e9edef; }
@@ -46,7 +41,7 @@ export default function AcceptInvite() {
       setMsg({ type: "", text: "" });
       try {
         if (!token) throw new Error("Missing invite token.");
-        const res = await fetch(`${apiBase}/api/team/invite/${encodeURIComponent(token)}`);
+        const res = await fetch(apiUrl(`team/invite/${encodeURIComponent(token)}`));
         const data = await res.json();
         if (!res.ok) throw new Error(data.error || "Invite not found");
         if (mounted) {
@@ -60,7 +55,7 @@ export default function AcceptInvite() {
       }
     })();
     return () => { mounted = false; };
-  }, [token, apiBase]);
+  }, [token]);
 
   async function accept() {
     if (!name.trim()) {
@@ -70,7 +65,7 @@ export default function AcceptInvite() {
     setBusy(true);
     setMsg({ type: "", text: "" });
     try {
-      const res = await fetch(`${apiBase}/api/team/accept`, {
+      const res = await fetch(apiUrl("team/accept"), {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ token, name: name.trim(), email })

@@ -3,14 +3,7 @@ from flask import Blueprint, request, jsonify, redirect, Response
 import os, time, json, requests, hashlib
 from urllib.parse import urlencode
 from uuid import uuid4
-
-# ---------- Unified leads store ----------
-# Read/write the same leads.json the rest of the app uses.
-FILE_LEADS = (
-    os.getenv("LEADS_FILE")           # if the main app exposes this
-    or os.getenv("FILE_LEADS")        # fallback env
-    or "leads.json"                   # default
-)
+from storage import load_leads, save_user_leads
 
 def _load_json_file(path, default):
     try:
@@ -22,12 +15,6 @@ def _load_json_file(path, default):
 def _save_json_file(path, data):
     with open(path, "w", encoding="utf-8") as f:
         json.dump(data, f, ensure_ascii=False, indent=2)
-
-def load_leads():
-    return _load_json_file(FILE_LEADS, {})
-
-def save_leads(data):
-    _save_json_file(FILE_LEADS, data)
 
 # ---------- Config ----------
 GOOGLE_CLIENT_ID = os.getenv("GOOGLE_CLIENT_ID", "")
@@ -78,9 +65,7 @@ def _load_leads_bucket(user_email):
     return all_leads.get(user_email) or []
 
 def _save_leads_bucket(user_email, leads):
-    all_leads = load_leads()
-    all_leads[user_email] = leads
-    save_leads(all_leads)
+    save_user_leads(user_email, leads)
 
 # ---------- Token helpers ----------
 def _set_token(user_email, token_payload):

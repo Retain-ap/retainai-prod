@@ -19,6 +19,7 @@ Env:
 import os
 import json
 import uuid
+import threading
 from pathlib import Path
 from typing import List, Dict, Any, Optional
 
@@ -38,6 +39,7 @@ Path(DATA_ROOT).mkdir(parents=True, exist_ok=True)
 USERS_JSON = os.path.join(DATA_ROOT, "users.json")
 LEADS_JSON = os.path.join(DATA_ROOT, "leads.json")
 TEAM_JSON = os.path.join(DATA_ROOT, "team.json")  # kept for legacy compatibility
+_JSON_WRITE_LOCK = threading.RLock()
 
 
 # ----------------------------
@@ -54,10 +56,11 @@ def _read_json(path: str, default):
 
 
 def _write_json(path: str, data) -> None:
-    tmp = f"{path}.{os.getpid()}.{uuid.uuid4().hex}.tmp"
-    with open(tmp, "w", encoding="utf-8") as f:
-        json.dump(data, f, indent=2, ensure_ascii=False)
-    os.replace(tmp, path)
+    with _JSON_WRITE_LOCK:
+        tmp = f"{path}.{os.getpid()}.{uuid.uuid4().hex}.tmp"
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(data, f, indent=2, ensure_ascii=False)
+        os.replace(tmp, path)
 
 
 def _safe_json_dumps(obj: Any) -> str:
@@ -421,6 +424,57 @@ def save_leads(leads_by_user: Dict[str, List[Dict[str, Any]]]) -> None:
                     )
                 )
 
+        s.commit()
+
+
+def save_user_leads(user_email: str, leads: List[Dict[str, Any]]) -> None:
+    """Atomically replace one workspace's contacts without touching others."""
+    email = str(user_email or "").strip().lower()
+    if not email:
+        raise ValueError("user_email is required")
+    if not isinstance(leads, list):
+        raise ValueError("leads must be a list")
+
+    if not USE_SQLITE:
+        with _JSON_WRITE_LOCK:
+            current = _read_json(LEADS_JSON, {})
+            if not isinstance(current, dict):
+                current = {}
+            current[email] = leads
+            _write_json(LEADS_JSON, current)
+        return
+
+    _ensure_sqlite()
+    with SessionLocal() as s:
+        if not s.get(UserRow, email):
+            s.add(UserRow(email=email, data=_safe_json_dumps({"email": email})))
+        s.query(LeadRow).filter(LeadRow.user_email == email).delete(
+            synchronize_session=False
+        )
+        used_row_ids = set()
+        for lead in leads:
+            if not isinstance(lead, dict):
+                continue
+            payload = dict(lead)
+            lead_id = str(payload.get("id") or "").strip()
+            if not lead_id:
+                lead_id = f"lead_{email}_{uuid.uuid4().hex}"
+                payload["id"] = lead_id
+            row_id = lead_id
+            existing = s.get(LeadRow, row_id)
+            if (
+                row_id in used_row_ids
+                or (existing is not None and existing.user_email != email)
+            ):
+                row_id = f"{email}:{lead_id}:{uuid.uuid4().hex[:8]}"
+            used_row_ids.add(row_id)
+            s.add(
+                LeadRow(
+                    id=row_id,
+                    user_email=email,
+                    data=_safe_json_dumps(payload),
+                )
+            )
         s.commit()
 
 

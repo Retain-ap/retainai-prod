@@ -6,6 +6,7 @@ import React, {
   useCallback,
   useContext,
 } from "react";
+import { apiUrl } from "../apiBase";
 
 // 1) Create context
 const UserContext = createContext({
@@ -27,7 +28,10 @@ export function UserProvider({ children }) {
       return;
     }
     try {
-      const res = await fetch(`/api/user/${encodeURIComponent(email)}`);
+      const res = await fetch(apiUrl(`user/${encodeURIComponent(email)}`), {
+        credentials: "include",
+        cache: "no-store",
+      });
       if (!res.ok) throw new Error("Failed to load user");
       const data = await res.json();
       setUser(data);
