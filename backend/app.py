@@ -1838,14 +1838,9 @@ def _norm_email(e: str) -> str:
     return (e or "").strip().lower()
 
 def _platform_owner_emails() -> set:
-    return {
-        _norm_email(value)
-        for value in os.getenv(
-            "PLATFORM_OWNER_EMAILS",
-            "owner@retainai.ca,mateo.zuf23@gmail.com",
-        ).split(",")
-        if _norm_email(value)
-    }
+    # Platform control is restricted to the dedicated RetainAI identity.
+    # Customer accounts can still own and manage their own workspaces.
+    return {"owner@retainai.ca"}
 
 def _is_platform_owner(email: str) -> bool:
     return _norm_email(email) in _platform_owner_emails()
@@ -3063,7 +3058,7 @@ def _bootstrap_platform_owner() -> None:
     configured, it becomes the authoritative password after every safe restart.
     """
     password = str(os.getenv("PLATFORM_OWNER_PASSWORD") or "").strip()
-    email = _norm_email(os.getenv("PLATFORM_OWNER_EMAIL") or "owner@retainai.ca")
+    email = "owner@retainai.ca"
     if not password or not email:
         return
     if len(password) < 12:
@@ -3283,9 +3278,7 @@ def login():
     # The dedicated platform-owner login can repair itself from Render secrets.
     # This makes owner recovery reliable even when storage was unavailable during
     # application startup. The secret itself is never returned or logged.
-    configured_owner_email = _norm_email(
-        os.getenv("PLATFORM_OWNER_EMAIL") or "owner@retainai.ca"
-    )
+    configured_owner_email = "owner@retainai.ca"
     if email == configured_owner_email and _is_platform_owner(email):
         configured_owner_password = str(
             os.getenv("PLATFORM_OWNER_PASSWORD") or ""

@@ -14,7 +14,7 @@ owner_bp = Blueprint("owner_bp", __name__)
 
 AUDIT_FILE = os.path.join(DATA_ROOT, "platform_audit.json")
 FEATURE_FLAGS_FILE = os.path.join(DATA_ROOT, "platform_features.json")
-DEFAULT_PLATFORM_OWNERS = "owner@retainai.ca,mateo.zuf23@gmail.com"
+CANONICAL_PLATFORM_OWNER = "owner@retainai.ca"
 
 
 def _norm(value):
@@ -22,8 +22,7 @@ def _norm(value):
 
 
 def platform_owner_emails():
-    raw = os.getenv("PLATFORM_OWNER_EMAILS", DEFAULT_PLATFORM_OWNERS)
-    return {_norm(value) for value in raw.split(",") if _norm(value)}
+    return {CANONICAL_PLATFORM_OWNER}
 
 
 def is_platform_owner(email):

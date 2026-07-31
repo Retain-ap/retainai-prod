@@ -149,12 +149,7 @@ def _purge_due_deletions():
     users = load_users() or {}
     if not isinstance(users, dict):
         return
-    platform_owners = {
-        _norm(value)
-        for value in os.getenv(
-            "PLATFORM_OWNER_EMAILS", "owner@retainai.ca,mateo.zuf23@gmail.com"
-        ).split(",")
-    }
+    platform_owners = {"owner@retainai.ca"}
     now = datetime.datetime.now(datetime.timezone.utc)
     due = []
     for email, record in users.items():
@@ -225,12 +220,7 @@ def account_deletion():
     data = request.get_json(silent=True) or {}
     action = str(data.get("action") or "").strip().lower()
     if action == "schedule":
-        if workspace in {
-            _norm(value)
-            for value in os.getenv(
-                "PLATFORM_OWNER_EMAILS", "owner@retainai.ca,mateo.zuf23@gmail.com"
-            ).split(",")
-        }:
+        if workspace == "owner@retainai.ca":
             return jsonify({"error": "platform_owner_account_locked"}), 403
         if _norm(data.get("confirmation")) != workspace:
             return jsonify({"error": "email_confirmation_required"}), 400
@@ -246,12 +236,7 @@ def account_deletion():
         owner.pop("deletion_requested_at", None)
         owner.pop("deletion_scheduled_for", None)
     elif action == "delete_now":
-        platform_owners = {
-            _norm(value)
-            for value in os.getenv(
-                "PLATFORM_OWNER_EMAILS", "owner@retainai.ca,mateo.zuf23@gmail.com"
-            ).split(",")
-        }
+        platform_owners = {"owner@retainai.ca"}
         if workspace in platform_owners:
             return jsonify({"error": "platform_owner_account_locked"}), 403
         confirmation = str(data.get("confirmation") or "").strip()
