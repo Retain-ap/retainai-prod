@@ -29,9 +29,9 @@ function OAuthPopupBridge() {
 
 const ROUTE_META = {
   "/": {
-    title: "RetainAI — AI Customer Retention CRM for Small Business",
+    title: "RetainAI — Keep More Customers and Miss Fewer Follow-Ups",
     description:
-      "RetainAI is a Canadian AI customer retention CRM for relationship health, WhatsApp follow-ups, appointments, invoices, rebooking, and repeat revenue.",
+      "Bring WhatsApp conversations, customer follow-ups, appointments, invoices, and retention priorities into one clear workspace with RetainAI.",
   },
   "/signup": {
     title: "Start Your RetainAI Trial — Customer Retention CRM",

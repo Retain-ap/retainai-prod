@@ -1,645 +1,354 @@
-// src/components/LandingPage.jsx
-import React, { useMemo, useState } from "react";
-import { motion } from "framer-motion";
+import React, { useState } from "react";
+import {
+  FaArrowRight,
+  FaBolt,
+  FaCalendarCheck,
+  FaCheck,
+  FaChevronDown,
+  FaClock,
+  FaComments,
+  FaFileInvoiceDollar,
+  FaHeart,
+  FaMagic,
+  FaRegBell,
+  FaShieldAlt,
+  FaWhatsapp,
+} from "react-icons/fa";
 import brandLogo from "../assets/logo.png";
+import "./LandingPage.css";
 
-/**
- * Booking link (Calendly popup + fallback)
- * Add to public/index.html (in <head>):
- * <link href="https://assets.calendly.com/assets/external/widget.css" rel="stylesheet">
- * <script src="https://assets.calendly.com/assets/external/widget.js" async></script>
- */
 const BOOKING_URL =
   "https://calendly.com/mateozufic1/retainai-setup-10-minutes?hide_gdpr_banner=1&primary_color=D6B25E";
 
-// ---------- THEME ----------
-const BG = {
-  page: "#0B0C0E",
-  card: "#15171B",
-  line: "#24262B",
-  gold: "#F5D87E",
-  goldDeep: "#D7BB66",
-  text60: "rgba(255,255,255,.60)",
-  text80: "rgba(255,255,255,.80)",
-};
+const features = [
+  {
+    icon: <FaWhatsapp />,
+    title: "One WhatsApp inbox",
+    copy: "See customer conversations, replies, and context without jumping between tools.",
+  },
+  {
+    icon: <FaMagic />,
+    title: "AI that uses context",
+    copy: "Draft thoughtful replies using the customer’s history, tags, and your preferred tone.",
+  },
+  {
+    icon: <FaHeart />,
+    title: "Retention priorities",
+    copy: "Know who needs attention, who is ready to rebook, and what to do next.",
+  },
+  {
+    icon: <FaCalendarCheck />,
+    title: "Appointments together",
+    copy: "Keep bookings, reminders, customer records, and follow-up actions connected.",
+  },
+  {
+    icon: <FaBolt />,
+    title: "Reliable playbooks",
+    copy: "Build win-back, reminder, review, and no-response workflows with visible controls.",
+  },
+  {
+    icon: <FaFileInvoiceDollar />,
+    title: "Revenue follow-through",
+    copy: "Create invoices, track payment status, and follow up from the same customer view.",
+  },
+];
 
-// ---------- ASSETS ----------
-const DEMO_SRC = "/crm-demo.mp4"; // put your mp4 at public/crm-demo.mp4
+const useCases = [
+  ["Salons & studios", "Turn first visits into repeat bookings with reminders and personal rebooking prompts."],
+  ["Home services", "Keep estimates, scheduled visits, missed calls, and follow-ups from slipping through."],
+  ["Coaches & consultants", "Nurture warm leads consistently while keeping every message personal."],
+  ["Local service teams", "Give the whole team one clear customer history and a shared next action."],
+];
 
-// ---------- MONDAY-STYLE TIP BAR ----------
-function TipBar() {
-  const [open, setOpen] = useState(false);
+const faqs = [
+  [
+    "What happens during the 14-day trial?",
+    "You can set up your business profile, import contacts, connect supported integrations, and use the RetainAI workspace. Your billing and trial status remain visible inside the app.",
+  ],
+  [
+    "Does RetainAI send messages without my approval?",
+    "You control how messages are sent. AI drafts can be reviewed and edited, while automations show their triggers and actions before you activate them.",
+  ],
+  [
+    "Can I use my existing WhatsApp Business account?",
+    "Yes. RetainAI connects through Meta’s WhatsApp Business platform. Approved templates are used when a conversation is outside WhatsApp’s customer-service window.",
+  ],
+  [
+    "Can I cancel or download my data?",
+    "Yes. Billing controls, workspace export, and account-deletion controls are available in Settings. Account deletion includes a recovery window.",
+  ],
+  [
+    "Is RetainAI only for large teams?",
+    "No. It is designed for owner-led and growing service businesses that want a clear system without enterprise CRM complexity.",
+  ],
+  [
+    "Will AI sound exactly like me?",
+    "RetainAI uses your business context and tone preferences to prepare a useful draft. You can review and adjust the final message before sending.",
+  ],
+];
+
+function AppPreview() {
   return (
-    <div className="w-full border-b" style={{ background: "#0C0D10", borderColor: BG.line }}>
-      <div className="max-w-7xl mx-auto px-6 py-2 flex items-center gap-3 text-sm">
-        <span
-          className="px-2 py-[2px] rounded-full text-[11px] font-semibold"
-          style={{ background: "#121417", border: `1px solid ${BG.line}`, color: BG.goldDeep }}
-        >
-          Tip
-        </span>
-        <button
-          onClick={() => setOpen((v) => !v)}
-          className="text-left flex-1 hover:opacity-90"
-          style={{ color: BG.text80 }}
-          aria-expanded={open}
-        >
-          Start with an AI draft, then personalize it before sending.
-        </button>
-        <button
-          onClick={() => setOpen((v) => !v)}
-          className="text-xs px-2 py-1 rounded-lg border"
-          style={{ borderColor: BG.line, color: BG.text60 }}
-        >
-          {open ? "Hide" : "Details"}
-        </button>
+    <div className="lp-preview" aria-label="RetainAI product preview">
+      <div className="lp-preview-top">
+        <div className="lp-window-dots"><i /><i /><i /></div>
+        <span>Today’s retention briefing</span>
+        <b><i /> Live</b>
       </div>
-      {open && (
-        <div className="max-w-7xl mx-auto px-6 pb-3 text-sm" style={{ color: BG.text60 }}>
-          AI drafts use the contact’s tags, conversation context, and your preferred tone. You stay in control:
-          review the message, adjust the opener, then send it through WhatsApp.
+      <div className="lp-preview-grid">
+        <aside className="lp-preview-sidebar">
+          <div className="lp-mini-brand"><img src={brandLogo} alt="" /> RetainAI</div>
+          {["Overview", "Contacts", "Calendar", "Messages", "Insights"].map((item, index) => (
+            <span className={index === 0 ? "active" : ""} key={item}>{item}</span>
+          ))}
+        </aside>
+        <div className="lp-preview-main">
+          <div className="lp-preview-heading">
+            <div><small>GOOD MORNING</small><strong>Your relationships, prioritized.</strong></div>
+            <button type="button">Open actions</button>
+          </div>
+          <div className="lp-preview-stats">
+            <div><small>Needs attention</small><strong>4</strong><span>Review today</span></div>
+            <div><small>Ready to rebook</small><strong>7</strong><span>Warm opportunities</span></div>
+            <div><small>Upcoming</small><strong>5</strong><span>Next 7 days</span></div>
+          </div>
+          <div className="lp-preview-lower">
+            <div className="lp-priority-card">
+              <div className="lp-card-title"><span>Priority queue</span><small>Next best action</small></div>
+              {[
+                ["MP", "Maya P.", "Waiting on reply", "Send follow-up"],
+                ["JR", "Jordan R.", "Ready to rebook", "Offer a time"],
+                ["AL", "Alex L.", "Visit tomorrow", "Confirm"],
+              ].map(([initials, name, status, action]) => (
+                <div className="lp-priority-row" key={name}>
+                  <i>{initials}</i><span><b>{name}</b><small>{status}</small></span><button type="button">{action}</button>
+                </div>
+              ))}
+            </div>
+            <div className="lp-ai-card">
+              <span><FaMagic /> AI briefing</span>
+              <strong>Start with Maya.</strong>
+              <p>Her last message showed clear interest. A short, personal check-in is the strongest next move.</p>
+              <div>Draft ready <FaArrowRight /></div>
+            </div>
+          </div>
         </div>
-      )}
-    </div>
-  );
-}
-
-// ---------- MINI HERO CARDS ----------
-function KpiCard() {
-  return (
-    <div className="rounded-2xl p-4 border shadow-xl" style={{ background: BG.card, borderColor: BG.line }}>
-      <div className="text-xs" style={{ color: BG.text60 }}>Follow-ups complete</div>
-      <div className="flex items-end gap-2 mt-1">
-        <div className="text-3xl font-extrabold">55%</div>
-        <div className="text-xs" style={{ color: BG.text60 }}>this week</div>
-      </div>
-      <div className="mt-3 h-2 rounded-full overflow-hidden bg-[#0f1113] border" style={{ borderColor: BG.line }}>
-        <div className="h-full" style={{ width: "55%", background: BG.gold }} />
-      </div>
-    </div>
-  );
-}
-function ChatCard() {
-  return (
-    <div className="rounded-2xl p-4 border shadow-xl" style={{ background: BG.card, borderColor: BG.line }}>
-      <div className="text-xs mb-2" style={{ color: BG.text60 }}>New Reply • WhatsApp</div>
-      <div className="rounded-xl p-3 text-sm" style={{ background: "#0E1013", border: `1px solid ${BG.line}` }}>
-        “Sounds good — can we book Thursday at 3pm?”
-      </div>
-      <div className="flex gap-2 mt-3">
-        <span className="px-2 py-1 text-[11px] rounded-lg" style={{ background: "#0E1013", border: `1px solid ${BG.line}`, color: BG.text60 }}>Lead</span>
-        <span className="px-2 py-1 text-[11px] rounded-lg" style={{ background: "#0E1013", border: `1px solid ${BG.line}`, color: BG.text60 }}>AI draft ready</span>
-      </div>
-    </div>
-  );
-}
-function SparklineCard() {
-  return (
-    <div className="rounded-2xl p-4 border shadow-xl" style={{ background: BG.card, borderColor: BG.line }}>
-      <div className="flex items-center justify-between">
-        <div className="text-sm font-semibold">Work Summary</div>
-        <div className="text-[11px]" style={{ color: BG.text60 }}>Last 6 months</div>
-      </div>
-      <div className="mt-4 h-24 rounded-lg relative overflow-hidden" style={{ background: "#0E1013", border: `1px solid ${BG.line}` }}>
-        <div
-          className="absolute inset-0"
-          style={{
-            background:
-              "linear-gradient(180deg, rgba(245,216,126,.18), rgba(245,216,126,0) 60%), radial-gradient(120% 120% at 0% 100%, rgba(255,255,255,.05), transparent 60%)",
-          }}
-        />
-        <svg viewBox="0 0 300 100" className="absolute inset-0">
-          <path
-            d="M0 80 C40 30, 80 60, 120 42 C160 25, 200 70, 240 50 C270 38, 300 60, 300 60"
-            fill="none" stroke={BG.gold} strokeWidth="2.5" strokeLinecap="round"
-          />
-        </svg>
       </div>
     </div>
   );
 }
 
-// ---------- ROI MINI CALCULATOR ----------
-function ROINumbers({ leadsPerWeek, closeRate }) {
-  const base = useMemo(
-    () => Math.max(0, (Number(leadsPerWeek) || 0) * ((Number(closeRate) || 0) / 100) * 4),
-    [leadsPerWeek, closeRate]
-  );
-  const uplift = 0.2;
-  const withRetain = base * (1 + uplift);
+function FAQItem({ question, answer, open, onClick }) {
   return (
-    <div className="mt-4 text-sm" style={{ color: BG.text80 }}>
-      <div>Est. bookings/month now: <b>{base.toFixed(1)}</b></div>
-      <div>With RetainAI (+20%): <b style={{ color: BG.gold }}>{withRetain.toFixed(1)}</b></div>
-      <div className="text-xs mt-1" style={{ color: BG.text60 }}>
-        Illustration only. Actual results depend on lead volume, response rate, offer, and follow-up process.
-      </div>
+    <div className={`lp-faq-item ${open ? "open" : ""}`}>
+      <button type="button" onClick={onClick} aria-expanded={open}>
+        <span>{question}</span><FaChevronDown />
+      </button>
+      {open && <p>{answer}</p>}
     </div>
   );
 }
 
-// ---------- SMALL BADGE ----------
-function Badge({ children }) {
-  return (
-    <span className="px-3 py-1 rounded-full text-sm" style={{ background: "#0E1013", border: `1px solid ${BG.line}` }}>
-      {children}
-    </span>
-  );
-}
-
-// ---------- MAIN ----------
 export default function LandingPage() {
-  const [leadsPerWeek, setLeadsPerWeek] = useState(20);
-  const [closeRate, setCloseRate] = useState(20);
-  const [videoError, setVideoError] = useState(false);
+  const [openFaq, setOpenFaq] = useState(0);
 
-  const fadeUp = {
-    hidden: { opacity: 0, y: 24 },
-    visible: (i = 1) => ({ opacity: 1, y: 0, transition: { delay: 0.08 * i } }),
+  const bookDemo = () => {
+    if (window.Calendly?.initPopupWidget) {
+      window.Calendly.initPopupWidget({ url: BOOKING_URL });
+    } else {
+      window.open(BOOKING_URL, "_blank", "noopener,noreferrer");
+    }
   };
 
   return (
-    <div className="min-h-screen flex flex-col" style={{ background: BG.page, color: "#fff" }}>
-      {/* BACKGROUND GLOWS */}
-      <div aria-hidden className="pointer-events-none fixed inset-0 -z-10">
-        <div className="absolute -top-40 -right-32 w-[900px] h-[900px] blur-[140px] opacity-20 rounded-full" style={{ background: BG.gold }} />
-        <div className="absolute top-1/3 left-1/2 -translate-x-1/2 w-[70vw] h-[70vh] blur-[120px] opacity-[.10] rounded-full" style={{ background: `linear-gradient(90deg, ${BG.gold}, transparent)` }} />
-      </div>
-
-      {/* NAVBAR */}
-      <nav className="sticky top-0 z-40 w-full" style={{ background: "#0C0D10", borderBottom: `1px solid ${BG.line}` }}>
-        <div className="max-w-7xl mx-auto flex items-center justify-between px-6 py-3">
-          <a href="/" aria-label="RetainAI home" className="flex items-center">
-            <img src={brandLogo} alt="RetainAI" className="h-10 w-auto rounded-lg" />
-          </a>
-          <div className="hidden md:flex gap-7 text-sm font-medium">
-            <a href="#features" className="hover:opacity-80 scroll-mt-24">Features</a>
-            <a href="#how" className="hover:opacity-80 scroll-mt-24">How it works</a>
-            <a href="#pricing" className="hover:opacity-80 scroll-mt-24">Pricing</a>
-            <a href="#faq" className="hover:opacity-80 scroll-mt-24">FAQ</a>
-          </div>
-          <div className="flex gap-3">
-            <a href="/login" className="border px-4 py-2 rounded-xl font-semibold hover:opacity-85" style={{ borderColor: BG.line, background: "#101216", color: BG.gold }}>Login</a>
-            <a href="/signup" className="px-4 py-2 rounded-xl font-bold" style={{ background: BG.gold, color: "#0B0B0C" }}>
-              Start Free Trial
-            </a>
-          </div>
+    <div className="lp-page">
+      <a className="lp-skip" href="#main-content">Skip to content</a>
+      <nav className="lp-nav" aria-label="Main navigation">
+        <a className="lp-brand" href="/" aria-label="RetainAI home">
+          <img src={brandLogo} alt="" /><span>RetainAI</span>
+        </a>
+        <div className="lp-nav-links">
+          <a href="#product">Product</a>
+          <a href="#how-it-works">How it works</a>
+          <a href="#pricing">Pricing</a>
+          <a href="#faq">FAQ</a>
+        </div>
+        <div className="lp-nav-actions">
+          <a className="lp-link-button" href="/login">Log in</a>
+          <a className="lp-primary-button small" href="/signup">Start free trial <FaArrowRight /></a>
         </div>
       </nav>
 
-      {/* TIP BAR */}
-      <TipBar />
-
-      {/* HERO */}
-      <section className="relative w-full z-10 isolate" style={{ borderBottom: `1px solid ${BG.line}` }}>
-        <div className="max-w-7xl mx-auto px-6 pt-20 md:pt-28 pb-16 md:pb-20 grid md:grid-cols-2 gap-12 lg:gap-16">
-          {/* LEFT COPY */}
-          <div className="min-w-[320px]">
-            <div className="text-sm mb-3 font-semibold uppercase tracking-widest" style={{ color: BG.goldDeep }}>
-              Customer retention command centre
-            </div>
-            <motion.h1
-              className="text-5xl md:text-6xl font-extrabold leading-tight tracking-tight"
-              style={{ color: "#ffffff" }}
-              initial="hidden" whileInView="visible" viewport={{ once: true }} variants={fadeUp}
-            >
-              Turn customer conversations into lasting relationships.
-            </motion.h1>
-            <motion.p
-              className="text-xl md:text-2xl mt-6 font-medium max-w-xl"
-              style={{ color: BG.text80 }}
-              initial="hidden" whileInView="visible" viewport={{ once: true }} custom={2} variants={fadeUp}
-            >
-              Bring WhatsApp, contacts, appointments, follow-ups, invoices, and retention insights into one clear workspace.
-            </motion.p>
-
-            {/* Trust bullets */}
-            <motion.ul
-              className="mt-4 text-sm grid grid-cols-1 sm:grid-cols-3 gap-2 max-w-xl"
-              initial="hidden" whileInView="visible" viewport={{ once: true }} custom={2.5} variants={fadeUp}
-              style={{ color: BG.text60 }}
-            >
-              <li>✓ 14-day guided trial</li>
-              <li>✓ Clear billing controls</li>
-              <li>✓ Export your workspace</li>
-            </motion.ul>
-
-            <motion.div className="flex flex-wrap items-center gap-3 mt-8"
-              initial="hidden" whileInView="visible" viewport={{ once: true }} custom={3} variants={fadeUp}>
-              <a href="/signup" className="px-6 py-3 rounded-xl font-extrabold" style={{ background: BG.gold, color: "#0B0B0C" }}>
-                Start 14-Day Trial
-              </a>
-              <a href="#pricing" className="px-5 py-3 rounded-xl font-semibold border hover:opacity-85"
-                 style={{ borderColor: BG.line, background: "#101216", color: "#fff" }}>
-                See Pricing
-              </a>
-              <span className="text-sm" style={{ color: BG.text60 }}>
-                $30/mo — <span className="font-semibold" style={{ color: BG.gold }}>Launch $20/mo</span>
-              </span>
-            </motion.div>
-
-            <div className="flex flex-wrap items-center gap-2 mt-8" aria-label="Product capabilities">
-              {["WhatsApp inbox", "Human-sounding AI", "Follow-up automation", "Revenue insights"].map((item) => (
-                <Badge key={item}>{item}</Badge>
-              ))}
-            </div>
-          </div>
-
-          {/* RIGHT VISUALS */}
-          <div className="relative w-full">
-            <div className="relative mx-auto max-w-md h-[520px] pointer-events-none" aria-hidden>
-              <motion.div className="absolute left-4 right-4 top-0 rotate-[-5deg] z-30"
-                initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.15 }}>
-                <KpiCard />
-              </motion.div>
-              <motion.div className="absolute left-2 right-6 top-[170px] rotate-[5deg] z-20"
-                initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.3 }}>
-                <SparklineCard />
-              </motion.div>
-              <motion.div className="absolute left-6 right-2 bottom-0 z-10"
-                initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.45 }}>
-                <ChatCard />
-              </motion.div>
-            </div>
-          </div>
-        </div>
-      </section>
-
-      {/* PRODUCT VALUE STRIP */}
-      <section className="border-t" style={{ borderColor: BG.line }}>
-        <div className="max-w-7xl mx-auto px-6 py-10 md:py-14 grid grid-cols-1 sm:grid-cols-3 gap-6">
-          {[
-            ["Customer context", "One view"],
-            ["WhatsApp replies", "Live inbox"],
-            ["Retention priorities", "Daily"],
-          ].map(([label, stat]) => (
-            <div key={label} className="rounded-2xl p-7 border" style={{ background: BG.card, borderColor: BG.line }}>
-              <div className="text-sm mb-2" style={{ color: BG.text60 }}>{label}</div>
-              <div className="text-3xl font-extrabold" style={{ color: BG.gold }}>{stat}</div>
-            </div>
-          ))}
-        </div>
-      </section>
-
-      {/* PERSONAS */}
-      <section id="features" className="border-t" style={{ borderColor: BG.line }}>
-        <div className="max-w-7xl mx-auto px-6 py-20 md:py-24">
-          <div className="text-center">
-            <div className="uppercase tracking-widest text-xs font-semibold mb-2" style={{ color: BG.text60 }}>
-              Who it’s for
-            </div>
-            <h2 className="text-3xl md:text-4xl font-extrabold" style={{ color: BG.gold }}>
-              Everything you need to retain clients
-            </h2>
-            <p className="text-sm mt-2" style={{ color: BG.text60 }}>
-              Built for solo founders & local businesses that live in WhatsApp.
+      <main id="main-content">
+        <section className="lp-hero">
+          <div className="lp-glow one" /><div className="lp-glow two" />
+          <div className="lp-hero-copy">
+            <div className="lp-kicker"><span><FaWhatsapp /></span> Built for relationship-driven businesses</div>
+            <h1>Keep more customers.<br /><em>Miss fewer moments.</em></h1>
+            <p>
+              RetainAI brings customer conversations, follow-ups, appointments,
+              invoices, and retention priorities into one calm workspace.
             </p>
+            <div className="lp-hero-actions">
+              <a className="lp-primary-button" href="/signup">Start your 14-day trial <FaArrowRight /></a>
+              <button className="lp-secondary-button" type="button" onClick={bookDemo}>Book a 10-minute walkthrough</button>
+            </div>
+            <div className="lp-trust-row">
+              <span><FaCheck /> Guided setup</span>
+              <span><FaCheck /> Clear billing controls</span>
+              <span><FaCheck /> Export your data</span>
+              <span><FaCheck /> Cancel anytime</span>
+            </div>
           </div>
-          <div className="grid grid-cols-1 md:grid-cols-4 gap-8 mt-10">
+          <AppPreview />
+        </section>
+
+        <section className="lp-value-strip" aria-label="RetainAI value">
+          <div><FaComments /><span><b>One customer history</b><small>Conversations and context together</small></span></div>
+          <div><FaClock /><span><b>A clear next action</b><small>Priorities instead of dashboard noise</small></span></div>
+          <div><FaShieldAlt /><span><b>You stay in control</b><small>Review, edit, export, or cancel</small></span></div>
+        </section>
+
+        <section className="lp-section lp-problem">
+          <div className="lp-section-heading">
+            <span>The problem RetainAI solves</span>
+            <h2>Your next sale is often already in your customer list.</h2>
+            <p>But customer context gets scattered across inboxes, calendars, notes, and memory.</p>
+          </div>
+          <div className="lp-problem-grid">
+            <div className="before">
+              <small>WITHOUT A SYSTEM</small>
+              <h3>Important moments get buried.</h3>
+              <ul>
+                <li>Follow-ups depend on memory</li>
+                <li>Customer replies lack context</li>
+                <li>Rebooking opportunities go unnoticed</li>
+                <li>Tools show activity, not priority</li>
+              </ul>
+            </div>
+            <div className="after">
+              <small>WITH RETAINAI</small>
+              <h3>Every relationship has a next step.</h3>
+              <ul>
+                <li><FaCheck /> One organized customer timeline</li>
+                <li><FaCheck /> AI-assisted replies with context</li>
+                <li><FaCheck /> Visible retention and rebooking cues</li>
+                <li><FaCheck /> Clear actions for you and your team</li>
+              </ul>
+            </div>
+          </div>
+        </section>
+
+        <section className="lp-section" id="how-it-works">
+          <div className="lp-section-heading centered">
+            <span>Simple on the surface</span>
+            <h2>From scattered follow-up to a daily rhythm.</h2>
+          </div>
+          <div className="lp-steps">
             {[
-              ["Salon", "Organize rebooking, reminders, and personal follow-ups."],
-              ["Coaching", "Keep warm leads moving with consistent, relevant outreach."],
-              ["Home services", "Fewer missed jobs. Faster follow-ups."],
-              ["Real estate", "Human replies that drive showings."],
-            ].map(([title, desc]) => (
-              <div key={title} className="rounded-2xl p-7 border" style={{ background: BG.card, borderColor: BG.line }}>
-                <div className="text-lg font-semibold">{title}</div>
-                <div className="text-sm mt-1" style={{ color: BG.text80 }}>{desc}</div>
-              </div>
+              ["01", "Bring in your customers", "Import contacts and keep their details, tags, notes, and activity together."],
+              ["02", "Connect the work", "Link WhatsApp, calendar, and billing tools when they are relevant to your workflow."],
+              ["03", "Act on what matters", "Use the briefing, inbox, and playbooks to follow up with clarity and consistency."],
+            ].map(([number, title, copy]) => (
+              <article key={number}><b>{number}</b><h3>{title}</h3><p>{copy}</p></article>
             ))}
           </div>
-        </div>
-      </section>
+        </section>
 
-      {/* AUTOMATIONS */}
-      <section className="border-t" style={{ borderColor: BG.line }}>
-        <div className="max-w-7xl mx-auto px-6 py-20 md:py-24">
-          <div className="text-center">
-            <div className="uppercase tracking-widest text-xs font-semibold mb-2" style={{ color: BG.text60 }}>
-              Automations
-            </div>
-            <h2 className="text-3xl md:text-4xl font-extrabold" style={{ color: BG.gold }}>
-              Triggers and actions you can mix & match
-            </h2>
-            <p className="text-sm mt-2" style={{ color: BG.text60 }}>
-              No-reply 24h → Send WhatsApp template → If no response, remind tomorrow.
-            </p>
+        <section className="lp-section lp-feature-section" id="product">
+          <div className="lp-section-heading centered">
+            <span>One relationship workspace</span>
+            <h2>Everything needed to turn attention into retention.</h2>
+            <p>No bloated enterprise setup. No mystery automation. Just the context and controls your business needs.</p>
           </div>
-          <div className="mt-10 grid grid-cols-1 md:grid-cols-2 gap-8">
-            <div className="rounded-2xl p-7 border" style={{ background: BG.card, borderColor: BG.line }}>
-              <div className="font-semibold mb-2">Triggers</div>
-              <div className="flex flex-wrap gap-2">
-                {["No reply 24h", "New lead", "Missed appointment", "Tag added"].map((t) => (
-                  <span key={t} className="px-3 py-1 rounded-full text-sm" style={{ background: "#0E1013", border: `1px solid ${BG.line}` }}>
-                    {t}
-                  </span>
-                ))}
-              </div>
-            </div>
-            <div className="rounded-2xl p-7 border" style={{ background: BG.card, borderColor: BG.line }}>
-              <div className="font-semibold mb-2">Actions</div>
-              <div className="flex flex-wrap gap-2">
-                {["WhatsApp template", "Reminder", "Schedule link", "Assign tag", "Email follow-up"].map((a) => (
-                  <span key={a} className="px-3 py-1 rounded-full text-sm" style={{ background: "#0E1013", border: `1px solid ${BG.line}` }}>
-                    {a}
-                  </span>
-                ))}
-              </div>
-            </div>
+          <div className="lp-feature-grid">
+            {features.map((feature) => (
+              <article key={feature.title}>
+                <i>{feature.icon}</i><h3>{feature.title}</h3><p>{feature.copy}</p>
+              </article>
+            ))}
           </div>
-        </div>
-      </section>
+        </section>
 
-      {/* LIVE DEMO */}
-      <section id="how" className="border-t" style={{ borderColor: BG.line }}>
-        <div className="max-w-7xl mx-auto px-6 py-20 md:py-24">
-          <div className="text-center">
-            <div className="uppercase tracking-widest text-xs font-semibold mb-2" style={{ color: BG.text60 }}>
-              See it in action
-            </div>
-            <h2 className="text-3xl md:text-4xl font-extrabold" style={{ color: BG.gold }}>
-              Tag → AI Draft → Send → Auto follow-up
-            </h2>
+        <section className="lp-section lp-use-cases">
+          <div className="lp-use-copy">
+            <span>Designed around repeat business</span>
+            <h2>Built for owners who win through trust.</h2>
+            <p>RetainAI is most useful where relationships, responsiveness, and repeat visits drive growth.</p>
+            <a href="/signup">See RetainAI with your workflow <FaArrowRight /></a>
           </div>
-          <div className="mt-8">
-            {!videoError ? (
-              <video
-                className="w-full rounded-2xl border shadow-lg"
-                style={{ borderColor: BG.line, background: "#0E1013" }}
-                src={DEMO_SRC}
-                controls
-                onError={() => setVideoError(true)}
+          <div className="lp-use-list">
+            {useCases.map(([title, copy], index) => (
+              <article key={title}><b>0{index + 1}</b><span><h3>{title}</h3><p>{copy}</p></span></article>
+            ))}
+          </div>
+        </section>
+
+        <section className="lp-section lp-pricing-section" id="pricing">
+          <div className="lp-section-heading centered">
+            <span>Transparent pricing</span>
+            <h2>Start small. Keep the full system.</h2>
+            <p>Explore the workflow during your trial, then choose whether RetainAI belongs in your business.</p>
+          </div>
+          <div className="lp-pricing-card">
+            <div className="lp-price-copy">
+              <small>RETAINAI STANDARD</small>
+              <h3>One complete customer-retention workspace.</h3>
+              <p>Contacts, conversations, appointments, insights, automations, invoices, team tools, and owner controls.</p>
+              <div className="lp-price"><strong>$30</strong><span>CAD<br />per month</span></div>
+              <p className="lp-launch-note">Launch pricing may be available during checkout.</p>
+            </div>
+            <div className="lp-price-actions">
+              <ul>
+                {["14-day trial", "Guided onboarding", "WhatsApp Business connection", "AI-assisted messaging", "Retention insights", "Cancel and export controls"].map((item) => (
+                  <li key={item}><FaCheck /> {item}</li>
+                ))}
+              </ul>
+              <a className="lp-primary-button" href="/signup">Start your trial <FaArrowRight /></a>
+              <small>Payment method required. Subscription begins after the trial unless cancelled.</small>
+            </div>
+          </div>
+        </section>
+
+        <section className="lp-section lp-faq-section" id="faq">
+          <div className="lp-faq-heading">
+            <span>Questions, answered</span>
+            <h2>Know exactly what you’re signing up for.</h2>
+            <p>Clear expectations create better customer relationships—including ours.</p>
+            <button type="button" onClick={bookDemo}>Still unsure? Book a walkthrough <FaArrowRight /></button>
+          </div>
+          <div className="lp-faq-list">
+            {faqs.map(([question, answer], index) => (
+              <FAQItem
+                key={question}
+                question={question}
+                answer={answer}
+                open={openFaq === index}
+                onClick={() => setOpenFaq(openFaq === index ? -1 : index)}
               />
-            ) : (
-              <div className="rounded-2xl p-10 border text-center" style={{ background: BG.card, borderColor: BG.line }}>
-                <div className="text-lg font-semibold mb-2">Demo coming soon</div>
-                <div className="text-sm" style={{ color: BG.text60 }}>
-                  Drop your file at <code>public/crm-demo.mp4</code> to show it here.
-                </div>
-              </div>
-            )}
+            ))}
           </div>
-        </div>
-      </section>
+        </section>
 
-      {/* INTEGRATIONS + PRIVACY */}
-      <section className="border-t" style={{ borderColor: BG.line }}>
-        <div className="max-w-7xl mx-auto px-6 py-20 md:py-24 grid grid-cols-1 md:grid-cols-3 gap-8">
-          <div className="rounded-2xl p-7 border" style={{ background: BG.card, borderColor: BG.line }}>
-            <div className="uppercase tracking-widest text-xs font-semibold mb-2" style={{ color: BG.text60 }}>
-              Integrations
-            </div>
-            <div className="text-sm mb-4" style={{ color: BG.text80 }}>Connect in &lt; 2 min.</div>
-            <div className="flex items-center gap-4">
-              <Badge>WhatsApp</Badge>
-              <Badge>Gmail</Badge>
-              <Badge>Google Calendar</Badge>
-            </div>
-          </div>
-          <div className="rounded-2xl p-7 border md:col-span-2" style={{ background: BG.card, borderColor: BG.line }}>
-            <div className="uppercase tracking-widest text-xs font-semibold mb-2" style={{ color: BG.text60 }}>
-              Privacy & compliance
-            </div>
-            <div className="text-sm" style={{ color: BG.text80 }}>
-              Your data stays in your account. PIPEDA-aware. WhatsApp Cloud API compliant.{" "}
-              <a href="/privacy-policy" className="underline" style={{ color: BG.goldDeep }}>Read the policy</a>.
-            </div>
-          </div>
-        </div>
-      </section>
-
-      {/* COMPARISON GRID */}
-      <section className="border-t" style={{ borderColor: BG.line }}>
-        <div className="max-w-7xl mx-auto px-6 py-20 md:py-24">
-          <div className="text-center">
-            <div className="uppercase tracking-widest text-xs font-semibold mb-2" style={{ color: BG.text60 }}>
-              Why RetainAI
-            </div>
-            <h2 className="text-3xl md:text-4xl font-extrabold" style={{ color: BG.gold }}>
-              Built for human conversations, not just databases
-            </h2>
-          </div>
-          <div className="mt-8 overflow-x-auto">
-            <table className="w-full text-sm border" style={{ borderColor: BG.line }}>
-              <thead style={{ background: "#101216" }}>
-                <tr>
-                  <th className="text-left p-3 border-r" style={{ borderColor: BG.line }}></th>
-                  <th className="text-left p-3 border-r" style={{ borderColor: BG.line }}>RetainAI</th>
-                  <th className="text-left p-3" style={{ borderColor: BG.line }}>Big CRMs</th>
-                </tr>
-              </thead>
-              <tbody>
-                {[
-                  ["Emotional AI replies", "✓ Native & tone-aware", "Add-ons or none"],
-                  ["Native WhatsApp", "✓ Built-in", "Often missing"],
-                  ["Follow-up brain", "✓ Smart timings", "Manual or basic"],
-                  ["Setup time", "Under 10 min", "Hours to days"],
-                  ["Price", "$20–$30/mo", "$49+/mo"],
-                ].map(([row, ours, theirs]) => (
-                  <tr key={row} className="border-t" style={{ borderColor: BG.line }}>
-                    <td className="p-3 font-medium">{row}</td>
-                    <td className="p-3" style={{ color: BG.gold }}>{ours}</td>
-                    <td className="p-3" style={{ color: BG.text80 }}>{theirs}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        </div>
-      </section>
-
-      {/* PRICING */}
-      <section id="pricing" className="relative z-[30] isolate border-t" style={{ borderColor: BG.line }}>
-        <div className="max-w-5xl mx-auto px-6 py-20 md:py-24 text-center">
-          <div className="uppercase tracking-widest text-xs font-semibold mb-2" style={{ color: BG.text60 }}>
-            Simple pricing
-          </div>
-          <h2 className="text-3xl md:text-4xl font-extrabold" style={{ color: BG.gold }}>Choose your plan</h2>
-          <p className="text-sm mt-2" style={{ color: BG.text60 }}>
-            14-day free trial • Cancel anytime • Keep your data if you cancel.
-          </p>
-
-          <div className="mt-10 grid grid-cols-1 md:grid-cols-2 gap-8">
-            {/* Standard */}
-            <div className="rounded-2xl p-7 border text-left flex flex-col gap-5" style={{ background: BG.card, borderColor: BG.line }}>
-              <div>
-                <div className="text-sm mb-2" style={{ color: BG.text60 }}>Standard</div>
-                <div className="flex items-end gap-2">
-                  <div className="text-4xl font-extrabold">$30</div>
-                  <div className="mb-1 text-sm" style={{ color: BG.text60 }}>/mo</div>
-                </div>
-              </div>
-              <ul className="space-y-2 text-sm" style={{ color: BG.text80 }}>
-                <li>• Emotional-AI prompts</li>
-                <li>• WhatsApp + email inbox</li>
-                <li>• Automated follow-ups</li>
-                <li>• Lead tagging & notes</li>
-              </ul>
-              <div className="pt-1">
-                <a href="/signup" className="block w-full px-4 py-3 rounded-xl text-center font-bold border"
-                   style={{ background: "#101216", borderColor: BG.line, color: "#fff" }}>
-                  Start 14-Day Trial
-                </a>
-              </div>
-              <div className="text-xs" style={{ color: BG.text60 }}>Credit card required. Cancel anytime.</div>
-            </div>
-
-            {/* Launch */}
-            <div className="rounded-2xl p-7 border text-left relative overflow-hidden flex flex-col gap-5"
-                 style={{ background: BG.card, borderColor: BG.line }}>
-              <div className="absolute -top-10 -right-10 w-40 h-40 rounded-full blur-2xl opacity-25" style={{ background: BG.gold }} />
-              <div>
-                <div className="text-sm mb-2" style={{ color: BG.text60 }}>Grand Opening</div>
-                <div className="flex items-end gap-3">
-                  <div className="text-4xl font-extrabold" style={{ color: BG.gold }}>$20</div>
-                  <div className="mb-1 text-sm" style={{ color: BG.text60 }}>/mo</div>
-                  <div className="line-through text-sm opacity-70">$30</div>
-                </div>
-              </div>
-              <ul className="space-y-2 text-sm" style={{ color: BG.text80 }}>
-                <li>• Everything in Standard</li>
-                <li>• Live chat support</li>
-                <li>• Early access features</li>
-              </ul>
-              <div className="pt-1">
-                <a href="/signup" className="inline-block px-4 py-3 rounded-xl font-extrabold"
-                   style={{ background: BG.gold, color: "#0B0B0C" }}>
-                  Claim $20/mo
-                </a>
-              </div>
-              <div className="text-xs" style={{ color: BG.text60 }}>Limited-time launch offer.</div>
-            </div>
-          </div>
-        </div>
-      </section>
-
-      {/* SOCIAL PROOF + ROI + SETUP CALL */}
-      <section className="border-t" style={{ borderColor: BG.line }}>
-        <div className="max-w-7xl mx-auto px-6 py-20 md:py-24 grid grid-cols-1 lg:grid-cols-3 gap-8">
-          {/* Use cases */}
-          <div className="lg:col-span-2">
-            <div className="uppercase tracking-widest text-xs font-semibold mb-2" style={{ color: BG.text60 }}>
-              Built for repeat-customer businesses
-            </div>
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-              {[
-                ["Salons & studios", "Rebooking prompts, appointment reminders, and thoughtful win-back messages."],
-                ["Home services", "Keep estimates, visits, follow-ups, and customer conversations organized."],
-                ["Coaches & consultants", "Nurture leads consistently without losing the personal tone clients expect."],
-              ].map(([name, copy]) => (
-                <div key={name} className="p-6 rounded-2xl border" style={{ background: BG.card, borderColor: BG.line }}>
-                  <div className="font-semibold mb-1">{name}</div>
-                  <div className="text-sm" style={{ color: BG.text80 }}>{copy}</div>
-                </div>
-              ))}
-            </div>
-          </div>
-
-          {/* ROI + Book call */}
+        <section className="lp-final-cta">
           <div>
-            <div className="uppercase tracking-widest text-xs font-semibold mb-2" style={{ color: BG.text60 }}>
-              ROI mini-calculator
-            </div>
-            <div className="p-6 rounded-2xl border" style={{ background: BG.card, borderColor: BG.line }}>
-              <label className="text-sm" style={{ color: BG.text80 }}>Leads per week</label>
-              <input
-                type="number"
-                value={leadsPerWeek}
-                onChange={(e) => setLeadsPerWeek(e.target.value)}
-                className="w-full mt-1 mb-3 px-3 py-2 rounded-lg bg-[#0E1013] border"
-                style={{ borderColor: BG.line, color: "#fff" }}
-              />
-              <label className="text-sm" style={{ color: BG.text80 }}>Close rate (%)</label>
-              <input
-                type="number"
-                value={closeRate}
-                onChange={(e) => setCloseRate(e.target.value)}
-                className="w-full mt-1 px-3 py-2 rounded-lg bg-[#0E1013] border"
-                style={{ borderColor: BG.line, color: "#fff" }}
-              />
-              <ROINumbers leadsPerWeek={leadsPerWeek} closeRate={closeRate} />
-              <a href="/signup" className="mt-4 inline-block px-4 py-3 rounded-xl font-bold"
-                 style={{ background: BG.gold, color: "#0B0B0C" }}>
-                See it with your leads → Start free
-              </a>
-            </div>
+            <span><FaRegBell /> Your next best customer action is waiting.</span>
+            <h2>Build a business customers remember.</h2>
+            <p>Start organizing the relationships you already worked hard to earn.</p>
+          </div>
+          <div>
+            <a className="lp-primary-button" href="/signup">Start your 14-day trial <FaArrowRight /></a>
+            <button type="button" onClick={bookDemo}>Book a walkthrough</button>
+          </div>
+        </section>
+      </main>
 
-            <div className="mt-4 p-6 rounded-2xl border" style={{ background: BG.card, borderColor: BG.line }}>
-              <div className="font-semibold mb-1">Guided setup</div>
-              <div className="text-sm mb-3" style={{ color: BG.text80 }}>
-                We’ll get you running in under 10 minutes.
-              </div>
-              <button
-                onClick={() => {
-                  if (window.Calendly) {
-                    window.Calendly.initPopupWidget({ url: BOOKING_URL });
-                  } else {
-                    window.open(BOOKING_URL, "_blank", "noopener,noreferrer");
-                  }
-                }}
-                className="inline-block px-4 py-2 rounded-xl border"
-                style={{ borderColor: BG.line, color: "#fff", background: "#101216" }}
-              >
-                Book a 10-min setup call
-              </button>
-            </div>
-          </div>
-        </div>
-      </section>
-
-      {/* FAQ */}
-      <section id="faq" className="border-t" style={{ borderColor: BG.line }}>
-        <div className="max-w-7xl mx-auto px-6 py-20 md:py-24">
-          <div className="text-center">
-            <div className="uppercase tracking-widest text-xs font-semibold mb-2" style={{ color: BG.text60 }}>
-              Answered quickly
-            </div>
-            <h2 className="text-3xl md:text-4xl font-extrabold" style={{ color: BG.gold }}>FAQ</h2>
-          </div>
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-8 mt-8">
-            {[
-              ["Do I need a WhatsApp business number?", "You can start with a regular number; business number recommended for scale."],
-              ["Will AI sound like me?", "Yes. It uses your notes & tags, and you can edit the tone presets."],
-              ["Can I import leads later?", "Yes — CSV import and form integrations are supported."],
-              ["Is my data private?", "Your data stays in your account. PIPEDA-aware and WhatsApp Cloud API compliant."],
-            ].map(([q, a]) => (
-              <div key={q} className="rounded-2xl p-7 border" style={{ background: BG.card, borderColor: BG.line }}>
-                <div className="font-bold mb-2" style={{ color: BG.goldDeep }}>{q}</div>
-                <div className="text-sm" style={{ color: BG.text80 }}>{a}</div>
-              </div>
-            ))}
-          </div>
-        </div>
-      </section>
-
-      {/* FOOTER */}
-      <footer className="border-t" style={{ borderColor: BG.line, background: "#0A0B0D" }}>
-        <div className="max-w-7xl mx-auto px-6 py-10 flex flex-col md:flex-row items-center justify-between gap-6">
-          <div className="flex items-center gap-2">
-            <span className="w-3 h-3 rounded-full" style={{ background: BG.gold }} />
-            <span className="font-black text-xl" style={{ color: BG.gold }}>RetainAI</span>
-          </div>
-          <div className="flex gap-4 text-sm" style={{ color: BG.text60 }}>
-            <a href="/privacy-policy" className="hover:opacity-80">Privacy Policy</a>
-            <a href="/terms-of-service" className="hover:opacity-80">Terms of Service</a>
-            <a href="mailto:owner@retainai.ca" className="hover:opacity-80">Contact</a>
-          </div>
-        </div>
-        <div className="border-t text-center text-xs py-4" style={{ borderColor: BG.line, color: BG.text60 }}>
-          © {new Date().getFullYear()} RetainAI. All rights reserved.
-        </div>
+      <footer className="lp-footer">
+        <div className="lp-footer-brand"><img src={brandLogo} alt="" /><span><b>RetainAI</b><small>Client relationships. Done right.</small></span></div>
+        <div><a href="#product">Product</a><a href="#pricing">Pricing</a><a href="/login">Log in</a></div>
+        <div><a href="/privacy-policy">Privacy</a><a href="/terms-of-service">Terms</a><a href={`mailto:support@retainai.ca`}>Support</a></div>
+        <small>© {new Date().getFullYear()} RetainAI. All rights reserved.</small>
       </footer>
-
-      {/* STICKY MOBILE CTA */}
-      <div className="md:hidden fixed bottom-3 left-3 right-3 z-50">
-        <div className="rounded-2xl shadow-lg flex items-center justify-between px-4 py-3"
-             style={{ background: BG.card, border: `1px solid ${BG.line}` }}>
-          <span className="text-sm" style={{ color: BG.text80 }}>Start free — 14 days</span>
-          <a href="/signup" className="px-4 py-2 rounded-xl font-bold" style={{ background: BG.gold, color: "#0B0B0C" }}>
-            Start
-          </a>
-        </div>
-      </div>
     </div>
   );
 }
