@@ -3816,13 +3816,53 @@ def resolve_whatsapp_lead(wa_id: str, workspace_email: str = ""):
         return None, None, None
 
     leads_by_user = load_leads() or {}
-    for user_email, leads in leads_by_user.items():
+    workspace = _norm_email(workspace_email)
+    if workspace:
+        leads_by_user = {workspace: leads_by_user.get(workspace, [])}
+
+    candidates = []
+    for user_email, leads in (leads_by_user.items() if isinstance(leads_by_user, dict) else []):
         for lead in (leads or []):
             if lead_matches_wa(lead, wa):
                 lead_id = str(lead.get("id") or "").strip()
                 if lead_id:
-                    return str(user_email or "").strip().lower(), lead_id, lead
-    return None, None, None
+                    candidates.append((
+                        str(user_email or "").strip().lower(),
+                        lead_id,
+                        lead,
+                    ))
+
+    if not candidates:
+        return None, None, None
+    if len(candidates) == 1:
+        return candidates[0]
+
+    # A platform-default number can serve more than one workspace during
+    # migration. Route a reply to the workspace/lead that most recently sent
+    # to this exact customer number rather than choosing an arbitrary duplicate.
+    candidate_keys = {(email, lead_id) for email, lead_id, _ in candidates}
+    recent_routes = []
+    statuses = load_statuses() or {}
+    for status in (statuses.values() if isinstance(statuses, dict) else []):
+        if not isinstance(status, dict) or not _wa_numbers_equal(status.get("to") or "", wa):
+            continue
+        key = (
+            _norm_email(status.get("user_email") or ""),
+            str(status.get("lead_id") or "").strip(),
+        )
+        if key in candidate_keys:
+            recent_routes.append((
+                str(status.get("updated_at") or status.get("time") or ""),
+                key,
+            ))
+
+    if recent_routes:
+        _, selected_key = max(recent_routes, key=lambda item: item[0])
+        for candidate in candidates:
+            if (candidate[0], candidate[1]) == selected_key:
+                return candidate
+
+    return candidates[0]
 
 
 def find_user_by_whatsapp(wa_id: str) -> Optional[str]:
@@ -5529,6 +5569,16 @@ def whatsapp_webhook():
                         message_type=message.get("type"),
                         text=str(text_value or "")[:180],
                     )
+                    try:
+                        app.logger.info(
+                            "[WA WEBHOOK] matched inbound sender=%s workspace=%s lead_id=%s message_id=%s",
+                            _wa_mask_number(sender_waid),
+                            user_email,
+                            lead_id,
+                            message_id,
+                        )
+                    except Exception:
+                        pass
 
                     lead_name = lead.get("name") or lead.get("first_name") or lead.get("email") or "Lead"
                     lead_email = lead.get("email") or ""
