@@ -95,6 +95,7 @@ export default function Signup() {
 
   const [error, setError] = useState("");
   const [googleProcessing, setGoogleProcessing] = useState(false);
+  const [submitting, setSubmitting] = useState(false);
   const navigate = useNavigate();
 
   const total = SLIDES.length;
@@ -155,12 +156,14 @@ export default function Signup() {
   // submit
   async function handleSignup(e) {
     e.preventDefault();
+    if (submitting) return;
     setError("");
     if (!agree) { setError("Please agree to the Terms and Privacy Policy."); return; }
     if (!email || !password || !name || !businessName || !businessType || !location || !teamSize) {
       setError("All required fields must be filled.");
       return;
     }
+    setSubmitting(true);
     try {
       const res = await fetch(`${API_BASE}/api/auth/signup`, {
         method: "POST",
@@ -187,7 +190,11 @@ export default function Signup() {
         email, name, logo: avatar || defaultAvatar, businessName, businessType, location, teamSize, phone, website, instagram, referral,
       }));
       navigate("/app");
-    } catch { setError("Signup error."); }
+    } catch {
+      setError("Signup error.");
+    } finally {
+      setSubmitting(false);
+    }
   }
 
   return (
@@ -483,8 +490,12 @@ export default function Signup() {
 
                   <div style={{ display: "flex", gap: 10, marginTop: 6 }}>
                     <button type="button" onClick={prevStep} style={{ padding: "12px 0", flex: 1, borderRadius: 12, border: `1px solid ${BG.line}`, background: "#101216", color: "#fff" }}>Back</button>
-                    <button type="submit" style={{ padding: "12px 0", flex: 1, borderRadius: 12, border: 0, fontWeight: 800, background: BG.gold, color: "#0B0B0C" }}>
-                      Create account
+                    <button
+                      type="submit"
+                      disabled={submitting}
+                      style={{ padding: "12px 0", flex: 1, borderRadius: 12, border: 0, fontWeight: 800, background: BG.gold, color: "#0B0B0C", opacity: submitting ? 0.7 : 1 }}
+                    >
+                      {submitting ? "Opening secure checkout…" : "Create account"}
                     </button>
                   </div>
 
