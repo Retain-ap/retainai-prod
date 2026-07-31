@@ -182,7 +182,12 @@ def _parse_datetime(value):
     if not value:
         return None
     try:
-        return datetime.datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+        parsed = datetime.datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+        # Legacy accounts used UTC timestamps without an explicit offset.
+        # Normalize every value to aware UTC before trial/support calculations.
+        if parsed.tzinfo is None:
+            return parsed.replace(tzinfo=datetime.timezone.utc)
+        return parsed.astimezone(datetime.timezone.utc)
     except Exception:
         return None
 
