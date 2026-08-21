@@ -8,6 +8,7 @@ import CrmDashboard from "./components/CrmDashboard";
 import ProtectedRoute from "./components/ProtectedRoute";
 import PrivacyPolicy from "./pages/PrivacyPolicy";
 import TermsOfService from "./pages/TermsOfService";
+import RefundPolicy from "./pages/RefundPolicy";
 import AcceptInvite from "./pages/AcceptInvite"; // ← added
 import { SettingsProvider } from "./components/SettingsContext";
 import "./index.css";
@@ -45,6 +46,10 @@ const ROUTE_META = {
   "/terms-of-service": {
     title: "Terms of Service — RetainAI",
     description: "Review the terms governing use of the RetainAI customer retention CRM.",
+  },
+  "/refund-policy": {
+    title: "Refund & Cancellation Policy — RetainAI",
+    description: "Review RetainAI trial, subscription, cancellation, and refund terms.",
   },
 };
 
@@ -101,6 +106,7 @@ function App() {
           <Route path="/accept-invite" element={<AcceptInvite />} /> {/* ← added */}
           <Route path="/privacy-policy" element={<PrivacyPolicy />} />
           <Route path="/terms-of-service" element={<TermsOfService />} />
+          <Route path="/refund-policy" element={<RefundPolicy />} />
           <Route path="*" element={<Navigate to="/" replace />} />
         </Routes>
       </Router>

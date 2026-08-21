@@ -1,5 +1,5 @@
 // File: frontend/src/components/Settings.jsx
-import React, { useEffect, useMemo, useState, useCallback } from "react";
+import React, { useEffect, useMemo, useRef, useState, useCallback } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
 import GoogleCalendarEvents from "./GoogleCalendarEvents";
 import StripeConnectCard from "./StripeConnectCard";
@@ -178,11 +178,17 @@ export default function Settings({
   }));
 
   const [editMode, setEditMode] = useState(false);
+  const editModeRef = useRef(false);
+  const formDirtyRef = useRef(false);
   const [saving, setSaving] = useState(false);
   const [info, setInfo] = useState("");
   const [profileBackendOk, setProfileBackendOk] = useState(null);
   const [supportCopied, setSupportCopied] = useState(false);
   const [billingUsage, setBillingUsage] = useState(null);
+
+  useEffect(() => {
+    editModeRef.current = editMode;
+  }, [editMode]);
   const [notificationPrefs, setNotificationPrefs] = useState(() => {
     const saved = safeParse(localStorage.getItem("retainai:notification-preferences") || "");
     return {
@@ -239,14 +245,16 @@ export default function Settings({
       return changed ? next : prev;
     });
 
-    setForm({
-      name: next.name || "",
-      email: next.email || "",
-      business: next.business || next.businessName || "",
-      type: next.businessType || next.lineOfBusiness || "",
-      location: next.location || "",
-      teamSize: String(next.people ?? next.teamSize ?? ""),
-    });
+    if (!editModeRef.current && !formDirtyRef.current) {
+      setForm({
+        name: next.name || "",
+        email: next.email || "",
+        business: next.business || next.businessName || "",
+        type: next.businessType || next.lineOfBusiness || "",
+        location: next.location || "",
+        teamSize: String(next.people ?? next.teamSize ?? ""),
+      });
+    }
 
     try {
       localStorage.setItem("user", JSON.stringify(next));
@@ -286,14 +294,16 @@ export default function Settings({
       if (!fromBackend?.email) return null;
 
       setProfile(fromBackend);
-      setForm({
-        name: fromBackend.name || "",
-        email: fromBackend.email || "",
-        business: fromBackend.business || fromBackend.businessName || "",
-        type: fromBackend.businessType || fromBackend.lineOfBusiness || "",
-        location: fromBackend.location || "",
-        teamSize: String(fromBackend.people ?? fromBackend.teamSize ?? ""),
-      });
+      if (!editModeRef.current && !formDirtyRef.current) {
+        setForm({
+          name: fromBackend.name || "",
+          email: fromBackend.email || "",
+          business: fromBackend.business || fromBackend.businessName || "",
+          type: fromBackend.businessType || fromBackend.lineOfBusiness || "",
+          location: fromBackend.location || "",
+          teamSize: String(fromBackend.people ?? fromBackend.teamSize ?? ""),
+        });
+      }
 
       try {
         localStorage.setItem("user", JSON.stringify(fromBackend));
@@ -316,14 +326,16 @@ export default function Settings({
 
       if (fromBackend?.email) {
         setProfile(fromBackend);
-        setForm({
-          name: fromBackend.name || "",
-          email: fromBackend.email || "",
-          business: fromBackend.business || fromBackend.businessName || "",
-          type: fromBackend.businessType || fromBackend.lineOfBusiness || "",
-          location: fromBackend.location || "",
-          teamSize: String(fromBackend.people ?? fromBackend.teamSize ?? ""),
-        });
+        if (!editModeRef.current && !formDirtyRef.current) {
+          setForm({
+            name: fromBackend.name || "",
+            email: fromBackend.email || "",
+            business: fromBackend.business || fromBackend.businessName || "",
+            type: fromBackend.businessType || fromBackend.lineOfBusiness || "",
+            location: fromBackend.location || "",
+            teamSize: String(fromBackend.people ?? fromBackend.teamSize ?? ""),
+          });
+        }
 
         try {
           localStorage.setItem("user", JSON.stringify(fromBackend));
@@ -460,6 +472,7 @@ export default function Settings({
       await postJson("profile", payload);
       setProfileBackendOk(true);
       setInfo("Saved ✅");
+      formDirtyRef.current = false;
       setEditMode(false);
 
       if (typeof refreshUser === "function") {
@@ -473,6 +486,7 @@ export default function Settings({
       setProfileBackendOk(false);
       console.warn("Profile save failed (backend). Using localStorage only.", e);
       setInfo("Saved locally ✅ (backend profile endpoint unavailable)");
+      formDirtyRef.current = false;
       setEditMode(false);
     } finally {
       setSaving(false);
@@ -680,6 +694,7 @@ export default function Settings({
             onClick={() => {
               setTab(t.key);
               setEditMode(false);
+              formDirtyRef.current = false;
               setInfo("");
             }}
           >
@@ -739,9 +754,10 @@ export default function Settings({
                         className="field-input"
                         type="text"
                         value={form[name]}
-                        onChange={(e) =>
-                          setForm((f) => ({ ...f, [name]: e.target.value }))
-                        }
+                        onChange={(e) => {
+                          formDirtyRef.current = true;
+                          setForm((f) => ({ ...f, [name]: e.target.value }));
+                        }}
                         disabled={name === "email"}
                       />
                     ) : (
@@ -757,6 +773,7 @@ export default function Settings({
                         className="btn btn-cancel"
                         onClick={() => {
                           setEditMode(false);
+                          formDirtyRef.current = false;
                           setForm({
                             name: profile.name || "",
                             email: profile.email || "",
@@ -789,7 +806,10 @@ export default function Settings({
                   ) : (
                     <button
                       className="btn btn-edit"
-                      onClick={() => setEditMode(true)}
+                      onClick={() => {
+                        formDirtyRef.current = false;
+                        setEditMode(true);
+                      }}
                     >
                       Edit Profile
                     </button>
