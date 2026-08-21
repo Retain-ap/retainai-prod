@@ -21,6 +21,7 @@ export default function CommandPalette({ setSection, isOwner }) {
       ["overview", "Open retention briefing", "Overview"],
       ["dashboard", "Open customer contacts", "Contacts"],
       ["messages", "Open messages", "Communication"],
+      ["ai-prompts", "Open AI prompts and message studio", "Communication"],
       ["calendar", "Open calendar", "Scheduling"],
       ["automations", "Open automation playbooks", "Growth"],
       ["analytics", "Open analytics", "Insights"],
