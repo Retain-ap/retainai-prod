@@ -105,7 +105,7 @@ export default function PrivacyPolicy() {
         <h2 className="text-2xl font-bold text-yellow-300 mt-8 mb-2">12. Contact</h2>
         <p className="mb-6">
           Privacy questions, access/correction requests, or complaints may be sent to{" "}
-          <a href="mailto:support@retainai.ca" className="text-yellow-300 underline">support@retainai.ca</a>.
+          <a href="mailto:owner@retainai.ca" className="text-yellow-300 underline">owner@retainai.ca</a>.
         </p>
 
         <p className="text-xs text-gray-500">

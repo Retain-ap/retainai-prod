@@ -346,7 +346,7 @@ export default function LandingPage() {
       <footer className="lp-footer">
         <div className="lp-footer-brand"><img src={brandLogo} alt="" /><span><b>RetainAI</b><small>Client relationships. Done right.</small></span></div>
         <div><a href="#product">Product</a><a href="#pricing">Pricing</a><a href="/login">Log in</a></div>
-        <div><a href="/privacy-policy">Privacy</a><a href="/terms-of-service">Terms</a><a href="/refund-policy">Refunds &amp; cancellations</a><a href={`mailto:support@retainai.ca`}>Support</a></div>
+        <div><a href="/privacy-policy">Privacy</a><a href="/terms-of-service">Terms</a><a href="/refund-policy">Refunds &amp; cancellations</a><a href={`mailto:owner@retainai.ca`}>Support</a></div>
         <small>© {new Date().getFullYear()} RetainAI. All rights reserved.</small>
       </footer>
     </div>

@@ -72,8 +72,8 @@ export default function TermsOfService() {
 
         <div className="mt-12 text-gray-400 text-sm pb-10">
           Questions? Email{" "}
-          <a href="mailto:support@retainai.ca" className="text-yellow-300 underline">
-            support@retainai.ca
+          <a href="mailto:owner@retainai.ca" className="text-yellow-300 underline">
+            owner@retainai.ca
           </a>
         </div>
       </div>

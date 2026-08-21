@@ -29,7 +29,7 @@ export default function RefundPolicy() {
         <p className="mb-6">Submit requests within 14 days of the charge. Approval is not guaranteed and does not limit non-waivable rights under applicable law. Approved refunds return to the original payment method; processing time depends on the financial institution.</p>
 
         <h2 className="text-2xl font-bold text-yellow-300 mt-8 mb-2">5. Billing help</h2>
-        <p className="mb-6">Email <a href="mailto:support@retainai.ca" className="text-yellow-300 underline">support@retainai.ca</a> with the account email, charge date, and last four card digits. Never send a complete card number, password, or verification code.</p>
+        <p className="mb-6">Email <a href="mailto:owner@retainai.ca" className="text-yellow-300 underline">owner@retainai.ca</a> with the account email, charge date, and last four card digits. Never send a complete card number, password, or verification code.</p>
 
         <nav className="mt-12 text-sm text-gray-400 flex flex-wrap gap-4" aria-label="Legal pages">
           <a href="/privacy-policy" className="text-yellow-300 underline">Privacy Policy</a>
