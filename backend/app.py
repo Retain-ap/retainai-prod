@@ -371,7 +371,7 @@ def _password_reset_email(token: str, to_email: str) -> bool:
         return False
     reset_url = f"{FRONTEND_URL}/login?reset_token={urllib.parse.quote(token)}"
     message = Mail(
-        from_email=Email(SENDER_EMAIL, "RetainAI"),
+        from_email=platform_email_sender(),
         to_emails=to_email,
         subject="Reset your RetainAI password",
         html_content=(
@@ -461,7 +461,7 @@ def _send_verification_email(email: str) -> bool:
     token = _email_verification_token(email)
     verify_url = f"{API_PUBLIC_URL}/api/auth/email/verify?token={urllib.parse.quote(token)}"
     message = Mail(
-        from_email=Email(SENDER_EMAIL, "RetainAI"),
+        from_email=platform_email_sender(),
         to_emails=email,
         subject="Verify your RetainAI email",
         html_content=(
@@ -677,6 +677,13 @@ VAPID_PUBLIC_KEY = (os.getenv("VAPID_PUBLIC_KEY") or "").strip()
 VAPID_PRIVATE_KEY = (os.getenv("VAPID_PRIVATE_KEY") or "").strip()
 
 SENDER_EMAIL = os.getenv("SENDER_EMAIL", "noreply@retainai.ca")
+PLATFORM_EMAIL = os.getenv("PLATFORM_EMAIL", "welcome@retainai.ca")
+PLATFORM_EMAIL_NAME = os.getenv("PLATFORM_EMAIL_NAME", "RetainAI")
+
+
+def platform_email_sender():
+    """Sender identity for emails RetainAI sends to its own users."""
+    return Email(PLATFORM_EMAIL, PLATFORM_EMAIL_NAME)
 INBOUND_REPLY_DOMAIN = (os.getenv("INBOUND_REPLY_DOMAIN") or "reply.retainai.ca").strip().lower()
 STRIPE_SECRET_KEY = (os.getenv("STRIPE_SECRET_KEY") or "").strip()
 STRIPE_PRICE_ID = (os.getenv("STRIPE_PRICE_ID") or "").strip()
@@ -1719,7 +1726,7 @@ def send_warning_summary_email(user_email, warning_leads, interval):
         template_id=SG_TEMPLATE_FOLLOWUP_USER,
         dynamic_data=dynamic_data,
         subject="âš ï¸ Leads Needing Attention",
-        from_email=SENDER_EMAIL
+        from_email=platform_email_sender()
     )
 
 def send_post_appointment_update_email(user_email, user_name, lead_name, business_name, appointment_time):
@@ -1743,7 +1750,7 @@ def send_post_appointment_update_email(user_email, user_name, lead_name, busines
             "crm_link": crm_link,
         },
         subject=f"Update your notes for {lead_name or 'your lead'}",
-        from_email=SENDER_EMAIL,
+        from_email=platform_email_sender(),
     )
 
 def send_post_appointment_update_prompts():
@@ -1858,7 +1865,7 @@ def send_birthday_reminder_to_user(user_email, user_name, lead_name, business_na
         template_id=SG_TEMPLATE_BDAY_REMINDER_USER,
         dynamic_data={"user_name": user_name, "lead_name": lead_name, "business_name": business_name, "birthday": birthday},
         subject=f"Birthday Reminder: {lead_name}'s birthday is tomorrow!",
-        from_email="reminder@retainai.ca"
+        from_email=platform_email_sender()
     )
 
 def send_birthday_greetings():
@@ -1947,6 +1954,8 @@ def send_trial_ending_email(user_email, user_name, business_name, trial_end_date
         to_email=user_email,
         template_id=SG_TEMPLATE_TRIAL_ENDING,
         dynamic_data={"user_name": user_name, "business_name": business_name, "trial_end_date": trial_end_date},
+        subject="Your RetainAI trial ends soon",
+        from_email=platform_email_sender(),
     )
 
 def send_trial_ending_soon():
@@ -3484,7 +3493,7 @@ def signup():
             to_email=email,
             template_id=SG_TEMPLATE_WELCOME,
             dynamic_data={"user_name": name or "", "business_type": businessName or ""},
-            from_email="welcome@retainai.ca",
+            from_email=platform_email_sender(),
             subject="Welcome to RetainAI"
         )
     except Exception as e:

@@ -10,7 +10,7 @@ from typing import Any, Dict, Optional, Tuple
 from flask import Blueprint, request, jsonify
 from werkzeug.security import generate_password_hash
 from sendgrid import SendGridAPIClient
-from sendgrid.helpers.mail import Mail
+from sendgrid.helpers.mail import Email, Mail
 
 from storage import load_users, save_users, DATA_ROOT
 
@@ -23,7 +23,8 @@ FRONTEND_BASE = (
     or "http://localhost:3000"
 ).rstrip("/")
 SENDGRID_API_KEY = (os.getenv("SENDGRID_API_KEY") or "").strip()
-SENDER_EMAIL = (os.getenv("SENDER_EMAIL") or "noreply@retainai.ca").strip()
+PLATFORM_EMAIL = (os.getenv("PLATFORM_EMAIL") or "welcome@retainai.ca").strip()
+PLATFORM_EMAIL_NAME = (os.getenv("PLATFORM_EMAIL_NAME") or "RetainAI").strip()
 INVITE_TTL_SECONDS = 7 * 24 * 60 * 60
 VALID_ROLES = {"manager", "member"}
 EMAIL_RE = re.compile(r"^[^\s@]+@[^\s@]+\.[^\s@]+$")
@@ -210,7 +211,7 @@ def _send_invite_email(*, to_email: str, inviter_name: str, business_name: str, 
 
     try:
         message = Mail(
-            from_email=SENDER_EMAIL,
+            from_email=Email(PLATFORM_EMAIL, PLATFORM_EMAIL_NAME),
             to_emails=to_email,
             subject=subject,
             html_content=html,
