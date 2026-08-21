@@ -34,7 +34,7 @@ const SECTION_LABELS = {
   messages: "Messages",
   notifications: "Notifications",
   automations: "Automations",
-  "ai-prompts": "AI Prompts",
+  "ai-prompts": "AI Studio",
   invoices: "Invoices",
   settings: "Settings",
   owner: "Owner Console",
@@ -46,7 +46,7 @@ const SECTION_META = {
   messages: ["Conversations", "Messages", "Manage WhatsApp conversations and thoughtful AI-assisted replies."],
   notifications: ["Activity centre", "Notifications", "Review customer activity, reminders, and workflow updates."],
   "notification-send": ["Customer outreach", "Send notification", "Send a clear, targeted update to the right contacts."],
-  "ai-prompts": ["AI workspace", "AI prompts", "Create relevant outreach using customer context and your brand voice."],
+  "ai-prompts": ["Message intelligence", "AI Studio", "Create thoughtful customer outreach using relationship context and your brand voice."],
   invoices: ["Revenue", "Invoices", "Create invoices, track payment status, and follow up without losing context."],
   automations: ["Playbooks", "Automations", "Build reliable customer journeys with visible triggers and outcomes."],
 };

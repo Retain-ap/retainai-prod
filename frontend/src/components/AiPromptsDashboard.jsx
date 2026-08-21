@@ -1,258 +1,160 @@
-// src/components/AiPromptsDashboard.jsx
+import React, { useMemo, useState } from "react";
+import { FaCheck, FaCopy, FaMagic, FaPaperPlane, FaSearch, FaShieldAlt } from "react-icons/fa";
 import { apiUrl } from "../apiBase";
-import React, { useState, useMemo } from "react";
 import "./AiPrompts.css";
 
-// Prompt types
-const PROMPT_TYPES = [
-  { key: "followup", label: "Follow Up",     instruction: "Write a friendly, personalized follow-up." },
-  { key: "reengage", label: "Re-engage",     instruction: "Write a gentle, empathetic message to re-engage an inactive client." },
-  { key: "birthday", label: "Birthday",      instruction: "Write a warm, personalized birthday greeting." },
-  { key: "apology",  label: "Apology",       instruction: "Write a sincere apology for a mistake or bad experience." },
-  { key: "upsell",   label: "Upsell",        instruction: "Write a thoughtful message recommending an additional service or product." },
+const PLAYBOOKS = [
+  { key: "followup", label: "Follow-up", description: "Continue the conversation and make the next step easy.", instruction: "Write a friendly, personalized follow-up with one clear next step." },
+  { key: "reengage", label: "Re-engage", description: "Reconnect naturally with a customer who has gone quiet.", instruction: "Write a gentle, empathetic message to re-engage an inactive customer without pressure." },
+  { key: "birthday", label: "Birthday", description: "Create a warm relationship-building birthday note.", instruction: "Write a warm, personalized birthday greeting that feels genuine and not promotional." },
+  { key: "apology", label: "Service recovery", description: "Acknowledge an issue and rebuild trust professionally.", instruction: "Write a sincere apology that acknowledges the concern, takes ownership, and offers a practical next step." },
+  { key: "upsell", label: "Recommendation", description: "Recommend a relevant service based on customer context.", instruction: "Write a helpful, low-pressure recommendation for an additional service or product with a clear customer benefit." },
 ];
 
-export default function AiPromptsDashboard({
-  leads = [],
-  user = {},
-  onSendAIPromptEmail // optional override
-}) {
-  const [search, setSearch]           = useState("");
+const TONES = ["Warm", "Professional", "Friendly", "Concise"];
+const LENGTHS = ["Short", "Standard", "Detailed"];
+const SUBJECTS = {
+  followup: (name) => `A quick follow-up for ${name || "you"}`,
+  reengage: () => "We would love to see you again",
+  birthday: (name) => `Happy birthday, ${name || "from all of us"}!`,
+  apology: () => "We are sorry — and we want to make this right",
+  upsell: () => "A recommendation selected for you",
+};
+
+export default function AiPromptsDashboard({ leads = [], user = {}, onSendAIPromptEmail }) {
+  const [search, setSearch] = useState("");
   const [focusedLead, setFocusedLead] = useState(null);
-  const [responses, setResponses]     = useState({});
-  const [loading, setLoading]         = useState({});
-  const [notifStatus, setNotifStatus] = useState({});
-  const [activeTab, setActiveTab]     = useState(PROMPT_TYPES[0].key);
-  const [copied, setCopied]           = useState({});
+  const [activePlaybook, setActivePlaybook] = useState(PLAYBOOKS[0].key);
+  const [tone, setTone] = useState("Warm");
+  const [length, setLength] = useState("Standard");
+  const [context, setContext] = useState("");
+  const [draft, setDraft] = useState("");
+  const [loading, setLoading] = useState(false);
+  const [status, setStatus] = useState("");
+  const [error, setError] = useState("");
 
-  // Prefer true brand; fall back gently
-  const getBrandName = () =>
-    user.business || user.businessName || user.lineOfBusiness || "Your Business";
-  const getBusinessType = () =>
-    user.businessType || "";
-  const getUserName = () =>
-    user.name || user.email?.split("@")[0] || "Your Team";
+  const brandName = user.business || user.businessName || user.lineOfBusiness || "Your Business";
+  const businessType = user.businessType || "";
+  const userName = user.name || user.email?.split("@")[0] || "Your Team";
+  const selectedPlaybook = PLAYBOOKS.find((item) => item.key === activePlaybook) || PLAYBOOKS[0];
 
-  // filter leads
   const filteredLeads = useMemo(() => {
-    const q = search.toLowerCase();
-    return leads.filter(
-      l =>
-        (l.name  && l.name.toLowerCase().includes(q)) ||
-        (l.email && l.email.toLowerCase().includes(q)) ||
-        (l.tags || []).some(t => t.toLowerCase().includes(q))
+    const query = search.trim().toLowerCase();
+    if (!query) return leads;
+    return leads.filter((lead) =>
+      [lead.name, lead.email, lead.status, ...(lead.tags || [])]
+        .filter(Boolean)
+        .some((value) => String(value).toLowerCase().includes(query))
     );
   }, [leads, search]);
 
-  // generate AI
-  const handleGenerate = async (leadId, lead, type) => {
-    setLoading(l => ({ ...l, [leadId]: true }));
-    setResponses(r => ({ ...r, [leadId]: { ...r[leadId], [type]: "" } }));
+  const selectLead = (lead) => {
+    setFocusedLead(lead);
+    setDraft("");
+    setContext("");
+    setError("");
+    setStatus("");
+  };
 
-    const p = PROMPT_TYPES.find(pt => pt.key === type) || {};
+  const generateDraft = async () => {
+    if (!focusedLead) return;
+    setLoading(true);
+    setError("");
+    setStatus("");
     try {
-      const res = await fetch(apiUrl("generate_prompt"), {
+      const response = await fetch(apiUrl("generate_prompt"), {
         method: "POST",
         credentials: "include",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          userEmail:     user.email,            // let backend load saved brand
-          leadName:      lead.name || "",
-          businessName:  getBrandName(),        // e.g. "jaivio nails"
-          businessType:  getBusinessType(),     // e.g. "nail salon"
-          userName:      getUserName(),
-          tags:          (lead.tags || []).join(", "),
-          notes:         lead.notes || "",
-          lastContacted: lead.last_contacted,
-          status:        lead.status || "",
-          promptType:    type,
-          instruction:   p.instruction || ""
-        })
+          userEmail: user.email,
+          leadName: focusedLead.name || "",
+          businessName: brandName,
+          businessType,
+          userName,
+          tags: focusedLead.tags || [],
+          notes: focusedLead.notes || "",
+          lastContacted: focusedLead.last_contacted || "",
+          status: focusedLead.status || "",
+          promptType: activePlaybook,
+          tone,
+          length,
+          additionalContext: context,
+          instruction: selectedPlaybook.instruction,
+        }),
       });
-      const data = await res.json();
-      let out = (data.prompt || data.error || "").trim();
-      out = out.replace(/^(?=.*subject:).*$/gim, "").trim();
-      setResponses(r => ({
-        ...r,
-        [leadId]: { ...r[leadId], [type]: out }
-      }));
-    } catch {
-      setResponses(r => ({
-        ...r,
-        [leadId]: { ...r[leadId], [type]: "AI error." }
-      }));
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok || !data.prompt) throw new Error(data.error || "RetainAI could not create a draft.");
+      setDraft(String(data.prompt).replace(/^(subject:.*)$/gim, "").trim());
+      setStatus("Draft ready — review it before sending.");
+    } catch (err) {
+      setError(err.message || "RetainAI could not create a draft.");
+    } finally {
+      setLoading(false);
     }
-    setLoading(l => ({ ...l, [leadId]: false }));
   };
 
-  // send email
-  const handleSend = async (lead, message, type) => {
-    if (typeof onSendAIPromptEmail === "function") {
-      return onSendAIPromptEmail(lead, message, type);
-    }
-    setNotifStatus(s => ({ ...s, [lead.id]: "sending" }));
-    const subject = `${getUserName()} at ${getBrandName()}`;
+  const copyDraft = async () => {
+    if (!draft.trim()) return;
+    await navigator.clipboard.writeText(draft);
+    setStatus("Copied to clipboard.");
+  };
+
+  const sendDraft = async () => {
+    if (!focusedLead?.email) return setError("This customer needs an email address before you can send.");
+    if (!draft.trim()) return setError("Create or write a message before sending.");
+    setLoading(true);
+    setError("");
+    setStatus("Sending…");
     try {
-      const res = await fetch(apiUrl("send-ai-message"), {
-        method: "POST",
-        credentials: "include",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          leadEmail:    lead.email,
-          userEmail:    user.email,
-          message,
-          subject,
-          promptType:   type,
-          leadName:     lead.name || "",
-          userName:     getUserName(),
-          businessName: getBrandName(),
-        })
-      });
-      setNotifStatus(s => ({
-        ...s,
-        [lead.id]: res.ok ? "success" : "error"
-      }));
-    } catch {
-      setNotifStatus(s => ({ ...s, [lead.id]: "error" }));
+      const subject = (SUBJECTS[activePlaybook] || SUBJECTS.followup)(focusedLead.name);
+      if (typeof onSendAIPromptEmail === "function") {
+        await onSendAIPromptEmail(focusedLead, draft.trim(), subject, activePlaybook);
+      } else {
+        const response = await fetch(apiUrl("send-ai-message"), {
+          method: "POST",
+          credentials: "include",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ leadEmail: focusedLead.email, leadName: focusedLead.name || "", userEmail: user.email, userName, businessName: brandName, message: draft.trim(), promptType: activePlaybook, subject }),
+        });
+        const data = await response.json().catch(() => ({}));
+        if (!response.ok) throw new Error(data.error || "Message could not be sent.");
+      }
+      setStatus("Message sent successfully.");
+    } catch (err) {
+      setError(err.message || "Message could not be sent.");
+    } finally {
+      setLoading(false);
     }
-    setTimeout(() => {
-      setNotifStatus(s => ({ ...s, [lead.id]: undefined }));
-    }, 2500);
   };
 
-  // copy
-  const handleCopy = (leadId, tab) => {
-    const text = responses[leadId]?.[tab];
-    if (!text) return;
-    navigator.clipboard.writeText(text);
-    setCopied(c => ({ ...c, [`${leadId}-${tab}`]: true }));
-    setTimeout(() => {
-      setCopied(c => ({ ...c, [`${leadId}-${tab}`]: false }));
-    }, 1200);
-  };
-
-  // render
   return (
     <div className="ai-root">
-      {!focusedLead ? (
-        <>
-          <div className="ai-header">
-            <h2>Customer prompt workspace</h2>
-            <input
-              className="ai-search"
-              placeholder="Search leads by name, email, or tag…"
-              value={search}
-              onChange={e => setSearch(e.target.value)}
-            />
-          </div>
-          <div className="ai-grid">
-            {filteredLeads.length === 0 ? (
-              <div className="ai-grid-empty">
-                No leads found. Try another search.
-              </div>
-            ) : filteredLeads.map(lead => (
-              <div
-                key={lead.id}
-                className="ai-card"
-                onClick={() => setFocusedLead(lead)}
-              >
-                <div className="lead-name">{lead.name || "(No Name)"}</div>
-                <div className="lead-email">{lead.email}</div>
-                <div className="lead-status">
-                  Status: <span>{lead.status || "—"}</span>
-                </div>
-                <div className="lead-tags">
-                  Tags:{" "}
-                  {lead.tags?.length
-                    ? lead.tags.map(t => <span key={t} className="tag">{t}</span>)
-                    : "—"}
-                </div>
-                <div className="lead-notes">
-                  Notes: {lead.notes || "—"}
-                </div>
-              </div>
+      <section className="ai-hero">
+        <div><div className="ai-eyebrow"><FaMagic /> RETAINAI MESSAGE STUDIO</div><h2>Turn customer context into thoughtful outreach.</h2><p>Create on-brand messages faster while keeping every send reviewed and under your control.</p></div>
+        <div className="ai-trust"><FaShieldAlt /><span><strong>Human-approved</strong>AI never sends until you choose to.</span></div>
+      </section>
+      <div className="ai-workspace">
+        <aside className="ai-contacts-panel">
+          <div className="ai-panel-heading"><div><span>1</span><strong>Choose a customer</strong></div><small>{filteredLeads.length} available</small></div>
+          <label className="ai-search"><FaSearch /><input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search customers…" /></label>
+          <div className="ai-contact-list">
+            {filteredLeads.length === 0 ? <div className="ai-empty">No matching customers.</div> : filteredLeads.map((lead) => (
+              <button key={lead.id || lead.email} type="button" className={`ai-contact${focusedLead === lead ? " active" : ""}`} onClick={() => selectLead(lead)}><span className="ai-avatar">{(lead.name || lead.email || "C").charAt(0).toUpperCase()}</span><span><strong>{lead.name || "Unnamed customer"}</strong><small>{lead.email || "No email address"}</small></span>{focusedLead === lead && <FaCheck />}</button>
             ))}
           </div>
-        </>
-      ) : (
-        <div className="ai-detail-container">
-          <button className="ai-back" onClick={() => setFocusedLead(null)}>
-            ← Back to all leads
-          </button>
-          <div className="ai-detail-card">
-            <div className="ai-detail-title">{focusedLead.name}</div>
-            <div className="ai-detail-subtitle">{focusedLead.email}</div>
-            <div className="ai-detail-status">
-              Status: <span>{focusedLead.status || "—"}</span>
-            </div>
-            <div className="ai-detail-tags">
-              Tags:{" "}
-              {focusedLead.tags?.length
-                ? focusedLead.tags.map(t => <span key={t} className="tag">{t}</span>)
-                : "—"}
-            </div>
-            <div className="ai-detail-notes">
-              Notes: {focusedLead.notes || "—"}
-            </div>
-
-            <div className="ai-tabs">
-              {PROMPT_TYPES.map(pt => (
-                <button
-                  key={pt.key}
-                  className={`ai-tab${activeTab === pt.key ? " active" : ""}`}
-                  onClick={() => setActiveTab(pt.key)}
-                >
-                  {pt.label}
-                </button>
-              ))}
-            </div>
-
-            <button
-              className="ai-generate"
-              onClick={() => handleGenerate(focusedLead.id, focusedLead, activeTab)}
-              disabled={loading[focusedLead.id]}
-            >
-              {loading[focusedLead.id]
-                ? "Generating..."
-                : `Generate ${PROMPT_TYPES.find(pt => pt.key === activeTab)?.label} AI`}
-            </button>
-
-            {responses[focusedLead.id]?.[activeTab] && (
-              <div className="ai-response">
-                <strong>AI Suggestion:</strong>
-                <p className="ai-response-text">
-                  {responses[focusedLead.id][activeTab]}
-                </p>
-                <button
-                  className="ai-response-copy"
-                  onClick={() => handleCopy(focusedLead.id, activeTab)}
-                >
-                  {copied[`${focusedLead.id}-${activeTab}`] ? "Copied!" : "Copy"}
-                </button>
-                <button
-                  className="ai-response-send"
-                  onClick={() =>
-                    handleSend(
-                      focusedLead,
-                      responses[focusedLead.id][activeTab],
-                      activeTab
-                    )
-                  }
-                  disabled={loading[focusedLead.id]}
-                >
-                  {notifStatus[focusedLead.id] === "sending"
-                    ? "Sending..."
-                    : notifStatus[focusedLead.id] === "success"
-                      ? "Sent!"
-                      : notifStatus[focusedLead.id] === "error"
-                        ? "Error"
-                        : "Send Notification"}
-                </button>
-              </div>
-            )}
-          </div>
-        </div>
-      )}
+        </aside>
+        <main className="ai-compose-panel">
+          {!focusedLead ? <div className="ai-welcome"><FaMagic /><h3>Choose a customer to begin</h3><p>RetainAI will use their saved notes, tags, and relationship context to prepare a personalized draft.</p></div> : (
+            <>
+              <div className="ai-selected-customer"><span className="ai-avatar">{(focusedLead.name || "C").charAt(0).toUpperCase()}</span><div><small>Writing for</small><strong>{focusedLead.name || "Unnamed customer"}</strong><span>{focusedLead.email || "No email address"}</span></div></div>
+              <div className="ai-step"><div className="ai-step-title"><span>2</span><div><strong>Select a playbook</strong><small>Start with a proven relationship moment.</small></div></div><div className="ai-playbooks">{PLAYBOOKS.map((playbook) => <button key={playbook.key} type="button" className={activePlaybook === playbook.key ? "active" : ""} onClick={() => setActivePlaybook(playbook.key)}><strong>{playbook.label}</strong><small>{playbook.description}</small></button>)}</div></div>
+              <div className="ai-step"><div className="ai-step-title"><span>3</span><div><strong>Shape the message</strong><small>Control the voice and give AI the missing context.</small></div></div><div className="ai-control-grid"><label>Tone<select value={tone} onChange={(event) => setTone(event.target.value)}>{TONES.map((item) => <option key={item}>{item}</option>)}</select></label><label>Length<select value={length} onChange={(event) => setLength(event.target.value)}>{LENGTHS.map((item) => <option key={item}>{item}</option>)}</select></label></div><label className="ai-context">Extra context <span>optional</span><textarea value={context} onChange={(event) => setContext(event.target.value)} placeholder="Example: They loved the last service and asked about booking again next month." maxLength={800} /><small>{context.length}/800</small></label><button type="button" className="ai-generate" onClick={generateDraft} disabled={loading}><FaMagic /> {loading ? "Creating your draft…" : draft ? "Generate another version" : "Create message"}</button></div>
+              <div className="ai-step ai-draft-step"><div className="ai-step-title"><span>4</span><div><strong>Review and send</strong><small>Edit anything you like. You remain in control.</small></div></div><textarea className="ai-draft" value={draft} onChange={(event) => setDraft(event.target.value)} placeholder="Your generated message will appear here. You can also write your own." />{error && <div className="ai-feedback error">{error}</div>}{status && !error && <div className="ai-feedback success">{status}</div>}<div className="ai-actions"><button type="button" className="ai-secondary" onClick={copyDraft} disabled={!draft.trim()}><FaCopy /> Copy</button><button type="button" className="ai-send" onClick={sendDraft} disabled={loading || !draft.trim()}><FaPaperPlane /> Send email</button></div><p className="ai-compliance"><FaShieldAlt /> Confirm the message is accurate and appropriate before sending. Avoid sensitive personal or medical details.</p></div>
+            </>
+          )}
+        </main>
+      </div>
     </div>
   );
 }

@@ -277,6 +277,13 @@ export default function Sidebar({
         </button>
         <button
           type="button"
+          className={section === "ai-prompts" ? "active" : ""}
+          onClick={() => goTo("ai-prompts")}
+        >
+          <FaRobot /> {!collapsed && "AI Studio"}
+        </button>
+        <button
+          type="button"
           className={section === "notifications" ? "active" : ""}
           onClick={() => goTo("notifications")}
         >

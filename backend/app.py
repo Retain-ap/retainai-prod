@@ -1748,6 +1748,7 @@ def send_post_appointment_update_email(user_email, user_name, lead_name, busines
             "business_name": business_name or "your business",
             "appointment_time": display_time,
             "crm_link": crm_link,
+            "current_year": datetime.datetime.now().year,
         },
         subject=f"Update your notes for {lead_name or 'your lead'}",
         from_email=platform_email_sender(),
@@ -1859,11 +1860,24 @@ def send_birthday_email(lead_email, lead_name, business_name):
         dynamic_data={"lead_name": lead_name, "business_name": business_name},
     )
 
-def send_birthday_reminder_to_user(user_email, user_name, lead_name, business_name, birthday):
+def send_birthday_reminder_to_user(user_email, user_name, lead_name, business_name, birthday, lead=None):
+    lead = lead or {}
     send_email_with_template(
         to_email=user_email,
         template_id=SG_TEMPLATE_BDAY_REMINDER_USER,
-        dynamic_data={"user_name": user_name, "lead_name": lead_name, "business_name": business_name, "birthday": birthday},
+        dynamic_data={
+            "user_name": user_name,
+            "lead_name": lead_name,
+            "business_name": business_name,
+            "birthday": birthday,
+            "birthday_timing": "tomorrow",
+            "days_until": 1,
+            "lead_email": lead.get("email") or "Not provided",
+            "notes": lead.get("notes") or "No notes recorded yet",
+            "last_contacted": lead.get("last_contacted") or "No recent contact recorded",
+            "crm_link": f"{FRONTEND_URL}/app?section=contacts",
+            "current_year": datetime.datetime.now().year,
+        },
         subject=f"Birthday Reminder: {lead_name}'s birthday is tomorrow!",
         from_email=platform_email_sender()
     )
@@ -1892,7 +1906,8 @@ def send_birthday_greetings():
                         user_name=user_name,
                         lead_name=lead.get("name", ""),
                         business_name=business,
-                        birthday=bday
+                        birthday=bday,
+                        lead=lead,
                     )
                     log_notification(user_email, f"Reminder: {lead.get('name','')}'s birthday is tomorrow!", "Birthday reminder sent", lead.get("email"))
 
@@ -6467,6 +6482,9 @@ def generate_prompt():
     prompt_type = str(data.get("promptType") or "").strip()
     instruction = str(data.get("instruction") or "").strip()
     user_name = str(data.get("userName") or "").strip()
+    tone = str(data.get("tone") or "warm").strip()[:40]
+    length = str(data.get("length") or "standard").strip()[:40]
+    additional_context = str(data.get("additionalContext") or "").strip()[:800]
 
     tags_val = data.get("tags") or lead.get("tags") or []
     if isinstance(tags_val, list):
@@ -6489,9 +6507,15 @@ def generate_prompt():
         f"Tags: {tags or '-'}\n"
         f"Notes: {notes or '-'}\n"
         f"Prompt Type: {prompt_type or '-'}\n"
+        f"Tone: {tone}\n"
+        f"Length: {length}\n"
         f"Instruction: {instruction or '-'}\n"
+        f"Additional context from the user: {additional_context or '-'}\n"
         f"Most recent inbound: \"{last_message or '-'}\"\n"
-        "No sign-offs; one concise, helpful message."
+        "Never invent facts, dates, prices, promises, or customer preferences. "
+        "Do not mention sensitive personal, medical, financial, or protected information. "
+        "Use the provided context naturally, avoid manipulative urgency, and include no sign-off. "
+        "Output one polished message body only."
     )
 
     try:
