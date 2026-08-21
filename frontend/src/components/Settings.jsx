@@ -5,6 +5,7 @@ import GoogleCalendarEvents from "./GoogleCalendarEvents";
 import StripeConnectCard from "./StripeConnectCard";
 import WhatsAppHealthCard from "./WhatsAppHealthCard";
 import TwoFactorSettings from "./TwoFactorSettings";
+import ImportContacts from "./ImportContacts";
 import {
   FaUser,
   FaPlug,
@@ -26,6 +27,7 @@ import {
   FaShieldAlt,
   FaArrowRight,
   FaExternalLinkAlt,
+  FaFileImport,
 } from "react-icons/fa";
 import { SiInstagram } from "react-icons/si";
 import "./settings.css";
@@ -48,6 +50,7 @@ const TABS = [
   { key: "profile", label: "Profile", icon: <FaUser /> },
   { key: "team", label: "Team", icon: <FaUsers /> },
   { key: "integrations", label: "Integrations", icon: <FaPlug /> },
+  { key: "imports", label: "Import Contacts", icon: <FaFileImport /> },
   { key: "billing", label: "Billing", icon: <FaCreditCard /> },
   { key: "notifications", label: "Notifications", icon: <FaEnvelope /> },
   { key: "security", label: "Security", icon: <FaShieldAlt /> },
@@ -933,6 +936,8 @@ export default function Settings({
             </div>
           </div>
         )}
+
+        {tab === "imports" && <ImportContacts user={user} focusGoogle />}
 
         {tab === "billing" && (
           <div className="integrations-page" style={{ maxWidth: MAX_W, margin: "0 auto" }}>

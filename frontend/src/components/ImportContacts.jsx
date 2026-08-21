@@ -20,10 +20,11 @@ async function request(path, options = {}, userEmail = "") {
   return data;
 }
 
-export default function ImportContacts({ user }) {
+export default function ImportContacts({ user, focusGoogle = false }) {
   const userEmail = useMemo(() => String(user?.org_id || user?.email || "").toLowerCase(), [user]);
   const inputRef = useRef(null);
   const popupRef = useRef(null);
+  const googleCardRef = useRef(null);
   const [file, setFile] = useState(null);
   const [dragging, setDragging] = useState(false);
   const [preview, setPreview] = useState(null);
@@ -48,6 +49,15 @@ export default function ImportContacts({ user }) {
   }, [userEmail]);
 
   useEffect(() => { refresh(); }, [refresh]);
+
+  useEffect(() => {
+    if (!focusGoogle) return;
+    const timer = window.setTimeout(() => {
+      googleCardRef.current?.scrollIntoView({ behavior: "smooth", block: "center" });
+      googleCardRef.current?.focus({ preventScroll: true });
+    }, 100);
+    return () => window.clearTimeout(timer);
+  }, [focusGoogle]);
 
   async function createPreview(selected = file) {
     if (!selected) return;
@@ -109,7 +119,11 @@ export default function ImportContacts({ user }) {
           </button>
           <input ref={inputRef} hidden type="file" accept=".csv,text/csv" onChange={(event) => createPreview(event.target.files?.[0])} />
         </section>
-        <section className="product-card">
+        <section
+          ref={googleCardRef}
+          className={`product-card ${focusGoogle ? "google-import-focus" : ""}`}
+          tabIndex="-1"
+        >
           <div className="product-card-header"><div><h2>Google Contacts</h2><p className="product-card-copy">Securely import from your connected Google account.</p></div><FaGoogle /></div>
           <div className="integration-summary"><span className={`status-pill ${google?.google_connected ? "active" : "pending_payment"}`}>{google?.google_connected ? "Connected" : "Not connected"}</span><strong>{google?.leads_count || 0} contacts in RetainAI</strong></div>
           <button className="product-button primary" onClick={google?.google_connected ? importGoogle : connectGoogle} disabled={Boolean(busy)}>{busy === "google" ? "Importing…" : google?.google_connected ? "Import latest contacts" : "Connect Google"}</button>

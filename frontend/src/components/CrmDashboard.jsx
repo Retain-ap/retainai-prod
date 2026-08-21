@@ -699,7 +699,8 @@ function CrmDashboard({ authenticatedUser }) {
   const openImports = useCallback(() => {
     setSettingsTab("imports");
     setSection("settings");
-  }, []);
+    navigate("/app/import?source=google");
+  }, [navigate]);
 
   // Fetch Google events
   const getGoogleEvents = useCallback(async () => {
