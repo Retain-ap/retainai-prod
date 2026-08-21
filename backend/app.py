@@ -1613,23 +1613,37 @@ def send_email_with_template(to_email, template_id, dynamic_data, subject=None, 
 # ----------------------------
 # ICS helpers
 # ----------------------------
+def _ics_escape(value):
+    """Escape user-controlled text before placing it in an RFC 5545 field."""
+    return (
+        str(value or "")
+        .replace("\\", "\\\\")
+        .replace("\r", "")
+        .replace("\n", "\\n")
+        .replace(";", "\\;")
+        .replace(",", "\\,")
+    )
+
+
 def create_ics_file(appt):
-    uid = appt.get("id")
     dt_start = datetime.datetime.strptime(appt["appointment_time"], "%Y-%m-%dT%H:%M:%S")
     dt_end = dt_start + datetime.timedelta(minutes=int(appt.get("duration", 30)))
-    summary = f"Appointment with {appt['user_name']} at {appt['business_name']}"
-    description = f"Appointment at {appt['appointment_location']} with {appt['user_name']}"
+    dt_stamp = datetime.datetime.utcnow().strftime("%Y%m%dT%H%M%SZ")
+    safe_uid = _ics_escape(appt.get("id"))
+    summary = _ics_escape(f"Appointment with {appt.get('user_name', '')} at {appt.get('business_name', '')}")
+    description = _ics_escape(f"Appointment at {appt.get('appointment_location', '')} with {appt.get('user_name', '')}")
+    location = _ics_escape(appt.get("appointment_location", ""))
     ics_content = f"""BEGIN:VCALENDAR
 VERSION:2.0
 PRODID:-//RetainAI//EN
 BEGIN:VEVENT
-UID:{uid}
-DTSTAMP:{dt_start.strftime("%Y%m%dT%H%M%SZ")}
-DTSTART:{dt_start.strftime("%Y%m%dT%H%M%SZ")}
-DTEND:{dt_end.strftime("%Y%m%dT%H%M%SZ")}
+UID:{safe_uid}
+DTSTAMP:{dt_stamp}
+DTSTART:{dt_start.strftime("%Y%m%dT%H%M%S")}
+DTEND:{dt_end.strftime("%Y%m%dT%H%M%S")}
 SUMMARY:{summary}
 DESCRIPTION:{description}
-LOCATION:{appt['appointment_location']}
+LOCATION:{location}
 END:VEVENT
 END:VCALENDAR
 """
@@ -1645,18 +1659,20 @@ def serve_ics(filename):
 def make_google_calendar_link(appt):
     dt_start = datetime.datetime.strptime(appt["appointment_time"], "%Y-%m-%dT%H:%M:%S")
     dt_end = dt_start + datetime.timedelta(minutes=int(appt.get("duration", 30)))
-    start_str = dt_start.strftime("%Y%m%dT%H%M%SZ")
-    end_str = dt_end.strftime("%Y%m%dT%H%M%SZ")
-    title = f"Appointment with {appt['user_name']} at {appt['business_name']}"
-    location = (appt["appointment_location"] or "").replace(" ", "+")
-    details = f"Appointment with {appt['user_name']} at {appt['business_name']}."
-    return (
-        "https://calendar.google.com/calendar/render?action=TEMPLATE"
-        f"&text={title.replace(' ','+')}"
-        f"&dates={start_str}/{end_str}"
-        f"&details={details.replace(' ','+')}"
-        f"&location={location}"
-    )
+    # Appointment input is business-local time. Keep the calendar event
+    # floating instead of incorrectly labeling it as UTC and shifting it.
+    start_str = dt_start.strftime("%Y%m%dT%H%M%S")
+    end_str = dt_end.strftime("%Y%m%dT%H%M%S")
+    title = f"Appointment with {appt.get('user_name', '')} at {appt.get('business_name', '')}"
+    details = f"Appointment with {appt.get('user_name', '')} at {appt.get('business_name', '')}."
+    query = urllib.parse.urlencode({
+        "action": "TEMPLATE",
+        "text": title,
+        "dates": f"{start_str}/{end_str}",
+        "details": details,
+        "location": appt.get("appointment_location") or "",
+    })
+    return f"https://calendar.google.com/calendar/render?{query}"
 
 
 # ----------------------------
@@ -1702,13 +1718,18 @@ def send_warning_summary_email(user_email, warning_leads, interval):
 
     lead_list_html = "<ul style='padding-left:24px;margin:0;'>"
     for lead in warning_leads:
+        safe_name = html.escape(str(lead.get("name") or "-"))
+        safe_email = html.escape(str(lead.get("email") or "-"))
+        safe_last_contacted = html.escape(str(format_date(lead.get("last_contacted") or lead.get("createdAt") or "-")))
+        safe_days = html.escape(str(lead.get("days_since_contact") or "?"))
+        safe_notes = html.escape(str(lead.get("notes") or "No notes recorded"))
         lead_list_html += (
-            f"<li style='margin-bottom:16px;color:#FFD700;'>"
-            f"<span style='font-weight:700;font-size:1.1em;'>{lead.get('name','-')}</span><br>"
-            f"<span style='color:#fff;'>Email:</span> <span style='color:#FFD700;'>{lead.get('email','-')}</span><br>"
-            f"<span style='color:#fff;'>Last Contacted:</span> <span style='color:#FFD700;'>{format_date(lead.get('last_contacted') or lead.get('createdAt','-'))}</span> "
-            f"<span style='color:#b6b6b6;'>&nbsp;({lead.get('days_since_contact', '?')} days ago)</span><br>"
-            f"<span style='color:#fff;'>Notes:</span> <span style='color:#FFD700;font-style:italic;'>{lead.get('notes','-')}</span>"
+            f"<li style='margin:0 0 16px;color:#f7cb53;'>"
+            f"<span style='font-weight:800;font-size:16px;'>{safe_name}</span><br>"
+            f"<span style='color:#aeb3bd;'>Email:</span> <span style='color:#ffffff;'>{safe_email}</span><br>"
+            f"<span style='color:#aeb3bd;'>Last contacted:</span> <span style='color:#ffffff;'>{safe_last_contacted}</span> "
+            f"<span style='color:#8d949f;'>&nbsp;({safe_days} days ago)</span><br>"
+            f"<span style='color:#aeb3bd;'>Notes:</span> <span style='color:#d7dae0;'>{safe_notes}</span>"
             "</li>"
         )
     lead_list_html += "</ul>"
@@ -1716,7 +1737,7 @@ def send_warning_summary_email(user_email, warning_leads, interval):
     dynamic_data = {
         "user_name": user_name,
         "lead_list": lead_list_html,
-        "crm_link": f"{FRONTEND_URL}/app/dashboard",
+        "crm_link": f"{FRONTEND_URL}/app?section=dashboard",
         "year": datetime.datetime.now().year,
         "interval": interval,
         "count": len(warning_leads)
@@ -1725,7 +1746,7 @@ def send_warning_summary_email(user_email, warning_leads, interval):
         to_email=user_email,
         template_id=SG_TEMPLATE_FOLLOWUP_USER,
         dynamic_data=dynamic_data,
-        subject="âš ï¸ Leads Needing Attention",
+        subject="Leads need your attention",
         from_email=platform_email_sender()
     )
 
@@ -2434,7 +2455,7 @@ def send_appointment_confirmation_email(appt):
         ics_file_url = f"{request.host_url.rstrip('/')}/ics/{appt['id']}.ics"
         google_calendar_link = make_google_calendar_link(appt)
 
-        send_email_with_template(
+        sent = send_email_with_template(
             to_email=appt["lead_email"],
             template_id=SG_TEMPLATE_APPT_CONFIRM,
             dynamic_data={
@@ -2447,18 +2468,25 @@ def send_appointment_confirmation_email(appt):
                 "ics_file_url": ics_file_url,
                 "user_email": appt.get("user_email", ""),
             },
+            subject=f"Your appointment with {appt.get('business_name') or 'us'} is confirmed",
+            from_email=Email(SENDER_EMAIL, appt.get("business_name") or "Your Business"),
+            reply_to_email=(
+                make_inbound_reply_address(appt.get("user_email", ""), appt.get("lead_email", ""))
+                if appt.get("user_email") and appt.get("lead_email") else None
+            ),
         )
 
-        add_notification(
-            appt.get("user_email", ""),
-            "Appointment confirmation sent",
-            f"Confirmation email sent to {appt.get('lead_first_name','Client')} for {display_time}.",
-            channel="appointment",
-            lead_email=appt.get("lead_email", ""),
-            extra={"appointment_id": appt.get("id")}
-        )
+        if sent:
+            add_notification(
+                appt.get("user_email", ""),
+                "Appointment confirmation sent",
+                f"Confirmation email sent to {appt.get('lead_first_name','Client')} for {display_time}.",
+                channel="appointment",
+                lead_email=appt.get("lead_email", ""),
+                extra={"appointment_id": appt.get("id")}
+            )
 
-        return True
+        return bool(sent)
     except Exception as e:
         try:
             app.logger.warning("[APPOINTMENT CONFIRM EMAIL ERROR] %s", e)
@@ -2475,6 +2503,24 @@ def create_appointment(user_email):
     lead_first_name = (data.get("lead_first_name") or "").strip()
     lead_last_name = (data.get("lead_last_name") or "").strip()
     lead_full_name = (data.get("lead_full_name") or "").strip()
+
+    if not re.match(r"^[^\s@]+@[^\s@]+\.[^\s@]+$", lead_email):
+        return jsonify({"error": "A valid lead_email is required"}), 400
+
+    raw_appointment_time = str(data.get("appointment_time") or "").strip()
+    try:
+        parsed_appointment_time = datetime.datetime.strptime(
+            raw_appointment_time, "%Y-%m-%dT%H:%M:%S"
+        )
+    except (TypeError, ValueError):
+        return jsonify({"error": "appointment_time must use YYYY-MM-DDTHH:MM:SS"}), 400
+
+    try:
+        duration = int(data.get("duration", 30))
+    except (TypeError, ValueError):
+        return jsonify({"error": "duration must be a number of minutes"}), 400
+    if duration < 5 or duration > 1440:
+        return jsonify({"error": "duration must be between 5 and 1440 minutes"}), 400
 
     # Fallback parsing if only full name was sent
     if not lead_first_name and lead_full_name:
@@ -2493,11 +2539,11 @@ def create_appointment(user_email):
             [p for p in [lead_first_name, lead_last_name] if p]
         ).strip(),
         "user_name": data.get("user_name", ""),
-        "user_email": data.get("user_email", ""),
+        "user_email": user_email,
         "business_name": data.get("business_name", ""),
-        "appointment_time": data.get("appointment_time", ""),
+        "appointment_time": raw_appointment_time,
         "appointment_location": data.get("appointment_location", ""),
-        "duration": data.get("duration", 30),
+        "duration": duration,
         "notes": data.get("notes", ""),
         "status": data.get("status", "scheduled"),
         "lead_id": data.get("lead_id", ""),
@@ -2505,25 +2551,18 @@ def create_appointment(user_email):
         "updated_at": datetime.datetime.utcnow().isoformat() + "Z",
     }
 
-    if not appt["lead_email"]:
-        return jsonify({"error": "Missing lead_email"}), 400
-    if not appt["appointment_time"]:
-        return jsonify({"error": "Missing appointment_time"}), 400
-
     appointments = load_appointments() or {}
     appointments.setdefault(user_email, []).append(appt)
     save_appointments(appointments)
 
     create_ics_file(appt)
 
-    display_time = datetime.datetime.strptime(
-        appt["appointment_time"], "%Y-%m-%dT%H:%M:%S"
-    ).strftime("%B %d, %Y, %I:%M %p")
+    display_time = parsed_appointment_time.strftime("%B %d, %Y, %I:%M %p")
 
     ics_file_url = f"{request.host_url.rstrip('/')}/ics/{appt['id']}.ics"
     google_calendar_link = make_google_calendar_link(appt)
 
-    send_email_with_template(
+    confirmation_sent = send_email_with_template(
         to_email=appt["lead_email"],
         template_id=SG_TEMPLATE_APPT_CONFIRM,
         dynamic_data={
@@ -2537,13 +2576,22 @@ def create_appointment(user_email):
             "google_calendar_link": google_calendar_link,
             "ics_file_url": ics_file_url,
             "user_email": appt["user_email"],
-        }
+        },
+        subject=f"Your appointment with {appt.get('business_name') or 'us'} is confirmed",
+        from_email=Email(SENDER_EMAIL, appt.get("business_name") or "Your Business"),
+        reply_to_email=(
+            make_inbound_reply_address(appt.get("user_email", ""), appt.get("lead_email", ""))
+            if appt.get("user_email") and appt.get("lead_email") else None
+        ),
     )
 
     add_notification(
         user_email=user_email,
-        subject="Appointment created",
-        message=f"Appointment booked with {appt.get('lead_full_name') or appt.get('lead_email') or 'lead'} for {display_time}.",
+        subject=("Appointment created" if confirmation_sent else "Appointment created - email needs attention"),
+        message=(
+            f"Appointment booked with {appt.get('lead_full_name') or appt.get('lead_email') or 'lead'} for {display_time}."
+            + ("" if confirmation_sent else " The confirmation email could not be sent.")
+        ),
         channel="appointment",
         lead_email=appt.get("lead_email") or "",
         extra={
@@ -2553,8 +2601,13 @@ def create_appointment(user_email):
     )
 
     return jsonify({
-        "message": "Appointment created and confirmation sent!",
-        "appointment": appt
+        "message": (
+            "Appointment created and confirmation sent."
+            if confirmation_sent else
+            "Appointment created, but the confirmation email could not be sent."
+        ),
+        "appointment": appt,
+        "confirmation_sent": bool(confirmation_sent),
     }), 201
 
 
