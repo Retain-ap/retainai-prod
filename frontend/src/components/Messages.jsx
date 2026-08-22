@@ -1082,8 +1082,21 @@ export default function Messages({ user, leads = [], defaultTemplate = "", langu
             setParamKinds(inferred);
             setParamValues(
               buildSmartAutofillValues(count, inferred, {
-                user,
-                lead,
+                user: {
+                  name: user?.name,
+                  business: user?.business,
+                  businessType: user?.businessType,
+                  location: user?.location,
+                  email: user?.email,
+                },
+                lead: {
+                  name: lead?.name,
+                  email: lead?.email,
+                  location: lead?.location,
+                  tags: lead?.tags,
+                  whatsapp: lead?.whatsapp,
+                  phone: lead?.phone,
+                },
                 input: "",
                 suggestion: null,
               })
@@ -1118,9 +1131,15 @@ export default function Messages({ user, leads = [], defaultTemplate = "", langu
     lead?.id,
     lead?.name,
     lead?.email,
+    lead?.location,
+    lead?.tags,
+    lead?.whatsapp,
+    lead?.phone,
     user?.name,
     user?.business,
     user?.businessType,
+    user?.location,
+    user?.email,
   ]);
 
   /** --- composer --- */
