@@ -2,16 +2,16 @@
 from flask import Blueprint, request, jsonify
 import os, re, json, uuid, datetime
 from typing import Any, Dict, List, Optional
+from storage import DATA_ROOT
 
 # =========================================================
 # Blueprint
 # =========================================================
 WA_AUTO_BP = Blueprint("wa_auto_bp", __name__)
 
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-FILE_APPTS   = os.path.join(BASE_DIR, "appointments.json")          # { "appointments": { "<user_email>": [ ... ] } }
-FILE_PENDING = os.path.join(BASE_DIR, "appointments_pending.json")  # { "pending":      { "<user_email>": [ ... ] } }
-FILE_NOTIFS  = os.path.join(BASE_DIR, "notifications.json")         # { "notifications":{ "<user_email>": [ ... ] } }
+FILE_APPTS   = os.path.join(DATA_ROOT, "appointments.json")          # { "appointments": { "<user_email>": [ ... ] } }
+FILE_PENDING = os.path.join(DATA_ROOT, "appointments_pending.json")  # { "pending":      { "<user_email>": [ ... ] } }
+FILE_NOTIFS  = os.path.join(DATA_ROOT, "notifications.json")         # { "notifications":{ "<user_email>": [ ... ] } }
 
 WHATSAPP_TOKEN       = os.getenv("WHATSAPP_TOKEN", "")
 WHATSAPP_PHONE_ID    = os.getenv("WHATSAPP_PHONE_ID", "")
