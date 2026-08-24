@@ -20,7 +20,7 @@ import {
   FaSearch,
 } from "react-icons/fa";
 import defaultAvatar from "../assets/default-avatar.png";
-import { promptInstall, canPromptInstall } from "../index"; // <- use helpers
+import { promptInstall, canPromptInstall } from "../pwaInstall";
 
 export default function Sidebar({
   logo,

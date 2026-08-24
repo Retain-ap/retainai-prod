@@ -180,11 +180,10 @@ const api = {
   },
 
   async runLiveTest(userEmail, flowOrId, lead) {
-    const data = await request("test", {
+    const data = await request("test-live", {
       method: "POST",
       userEmail,
       body: {
-        mode: "execute",
         confirm_live: true,
         ignore_waits: true,
         ignore_quiet_hours: true,

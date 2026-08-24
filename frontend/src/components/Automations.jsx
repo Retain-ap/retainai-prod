@@ -1,6 +1,7 @@
 // src/components/Automations.jsx
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import api from "./AutomationsService";
+import "./Automations.css";
 
 /* -------------------- THEME -------------------- */
 const C = {
@@ -300,16 +301,17 @@ function TokenRow({ onInsert }) {
 
 /* -------------------- HELPERS -------------------- */
 const PRETTY_TRIGGER = {
-  no_reply: (t) => `When a lead hasn't replied for ${t.days || 3} day${Number(t.days || 3) === 1 ? "" : "s"}`,
-  new_lead: (t) => `When a new lead comes in (within ${t.within_hours || 24} hours)`,
-  appointment_no_show: () => "When a lead misses an appointment",
+  no_reply: (t) => `When a customer has not replied for ${t.days || 3} day${Number(t.days || 3) === 1 ? "" : "s"}`,
+  new_lead: (t) => `When a new customer is added (within ${t.within_hours || 24} hours)`,
+  appointment_no_show: () => "When a customer misses an appointment",
+  appointment_completed: (t) => `After a completed appointment (within ${t.within_days || 2} days)`,
 };
 
 function normalizeFlow(flow, userEmail) {
   return {
     id: flow?.id,
     owner: (flow?.owner || userEmail || "").toLowerCase(),
-    name: flow?.name || "Untitled Flow",
+    name: flow?.name || "Untitled Automation",
     enabled: !!flow?.enabled,
     trigger: flow?.trigger || { type: "" },
     steps: Array.isArray(flow?.steps) ? flow.steps : [],
@@ -326,7 +328,7 @@ function buildEmptyFlow(userEmail) {
     {
       id: undefined,
       owner: userEmail,
-      name: "Untitled Flow",
+      name: "Untitled Automation",
       enabled: false,
       trigger: { type: "" },
       steps: [],
@@ -523,7 +525,7 @@ function flowSummary(flow) {
   const trig = flow?.trigger || {};
   const triggerText = trig.type ? PRETTY_TRIGGER[trig.type]?.(trig) || trig.type : "Choose a trigger";
   const stepCount = Array.isArray(flow?.steps) ? flow.steps.length : 0;
-  return `${triggerText}. ${stepCount} step${stepCount === 1 ? "" : "s"} in this flow.`;
+  return `${triggerText}. ${stepCount} step${stepCount === 1 ? "" : "s"} in this automation.`;
 }
 
 function buildDefaultStep(type) {
@@ -546,13 +548,24 @@ function buildDefaultStep(type) {
     case "if_no_booking":
       return { type: "if_no_booking", within_days: 2, then: [] };
     case "push_owner":
-      return { type: "push_owner", title: "Give them a quick call", message: "Lead may need a call" };
+      return { type: "push_owner", title: "Customer follow-up", message: "This customer may benefit from a personal call." };
     case "add_tag":
       return { type: "add_tag", tag: "Needs Attention" };
     default:
       return { type };
   }
 }
+
+const STEP_ACTION_LABELS = {
+  wait: "Wait",
+  ai_draft: "Draft with AI",
+  send_email: "Send email",
+  send_whatsapp: "Send WhatsApp",
+  if_no_reply: "Check for no reply",
+  if_no_booking: "Check for no booking",
+  push_owner: "Notify owner",
+  add_tag: "Add tag",
+};
 
 function cloneTemplateToFlow(template, userEmail) {
   const f = JSON.parse(JSON.stringify(template || {}));
@@ -607,9 +620,11 @@ function FlowDiagram({ flow }) {
     trig.type === "no_reply"
       ? `No reply (${trig.days || 3}d)`
       : trig.type === "new_lead"
-      ? `New lead (≤ ${trig.within_hours || 24}h)`
+      ? `New customer (≤ ${trig.within_hours || 24}h)`
       : trig.type === "appointment_no_show"
       ? "Appointment no-show"
+      : trig.type === "appointment_completed"
+      ? `Appointment completed (≤ ${trig.within_days || 2}d)`
       : "Trigger";
 
   const steps = flow?.steps || [];
@@ -800,7 +815,7 @@ function StepCard({ step, onChange, onRemove, waTemplates }) {
             <div>
               <div style={{ color: C.text, fontWeight: 900 }}>Message inside the 24-hour window</div>
               <div style={{ color: C.muted, fontSize: 12, marginTop: 4, lineHeight: 1.5 }}>
-                RetainAI sends this regular message when the lead has contacted you within the last 24 hours.
+                RetainAI sends this regular message when the customer has contacted you within the last 24 hours.
               </div>
             </div>
 
@@ -1139,7 +1154,7 @@ function StepCard({ step, onChange, onRemove, waTemplates }) {
                     >
                       {templateReady
                         ? `Ready: RetainAI will send exactly ${paramCount} parameter${paramCount === 1 ? "" : "s"}.`
-                        : "Complete the template setup before activating this flow."}
+                        : "Complete the template setup before activating this automation."}
                     </div>
                   </>
                 ) : null}
@@ -1193,7 +1208,7 @@ function StepCard({ step, onChange, onRemove, waTemplates }) {
                   kind="ghost"
                   onClick={() => set({ then: [...(step.then || []), buildDefaultStep(t)] })}
                 >
-                  + {t.replaceAll("_", " ")}
+                  + {STEP_ACTION_LABELS[t] || t.replaceAll("_", " ")}
                 </Btn>
               ))}
             </div>
@@ -1207,7 +1222,7 @@ function StepCard({ step, onChange, onRemove, waTemplates }) {
             <Input value={step.title || "Give them a quick call"} onChange={(e) => set({ title: e.target.value })} />
           </Field>
           <Field label="Notification message">
-            <Input value={step.message || "Lead may need a call"} onChange={(e) => set({ message: e.target.value })} />
+            <Input value={step.message || "This customer may benefit from a personal call."} onChange={(e) => set({ message: e.target.value })} />
           </Field>
         </div>
       )}
@@ -1317,6 +1332,8 @@ function TriggerChooser({ editing, setEditing }) {
           ? { type, days: trig.days || 3 }
           : type === "new_lead"
           ? { type, within_hours: trig.within_hours || 24 }
+          : type === "appointment_completed"
+          ? { type, within_days: trig.within_days || 2 }
           : { type },
     });
   };
@@ -1333,10 +1350,13 @@ function TriggerChooser({ editing, setEditing }) {
           No reply
         </Chip>
         <Chip active={trig.type === "new_lead"} onClick={() => setTriggerType("new_lead")}>
-          New lead
+          New customer
         </Chip>
         <Chip active={trig.type === "appointment_no_show"} onClick={() => setTriggerType("appointment_no_show")}>
           Appointment no-show
+        </Chip>
+        <Chip active={trig.type === "appointment_completed"} onClick={() => setTriggerType("appointment_completed")}>
+          Appointment completed
         </Chip>
       </div>
 
@@ -1357,7 +1377,7 @@ function TriggerChooser({ editing, setEditing }) {
       )}
 
       {trig.type === "new_lead" && (
-        <Field label="Treat as new lead for how many hours?">
+        <Field label="Treat as a new customer for how many hours?">
           <Input
             type="number"
             value={trig.within_hours || 24}
@@ -1365,6 +1385,24 @@ function TriggerChooser({ editing, setEditing }) {
               setEditing({
                 ...editing,
                 trigger: { ...trig, within_hours: +e.target.value },
+              })
+            }
+            style={{ maxWidth: 180 }}
+          />
+        </Field>
+      )}
+
+      {trig.type === "appointment_completed" && (
+        <Field label="Run for appointments completed within how many days?">
+          <Input
+            type="number"
+            min="1"
+            max="90"
+            value={trig.within_days || 2}
+            onChange={(e) =>
+              setEditing({
+                ...editing,
+                trigger: { ...trig, within_days: +e.target.value },
               })
             }
             style={{ maxWidth: 180 }}
@@ -1386,7 +1424,7 @@ function GuardrailsCard({ editing, setEditing }) {
       <div style={{ display: "grid", gap: 14 }}>
         <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 16, flexWrap: "wrap" }}>
           <div>
-            <div style={{ color: C.text, fontWeight: 800 }}>Stop if the lead replies</div>
+            <div style={{ color: C.text, fontWeight: 800 }}>Stop if the customer replies</div>
             <div style={{ color: C.muted, fontSize: 12, marginTop: 4 }}>
               Prevents follow-ups after the conversation becomes active again.
             </div>
@@ -1415,7 +1453,7 @@ function GuardrailsCard({ editing, setEditing }) {
           />
         </div>
 
-        <Field label="Max sends per lead per day">
+        <Field label="Maximum sends per customer each day">
           <Input
             type="number"
             value={editing.caps?.per_lead_per_day ?? 1}
@@ -1448,7 +1486,7 @@ function StepsBuilder({ editing, setEditing, waTemplates }) {
           <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
             {["wait", "ai_draft", "send_email", "send_whatsapp", "if_no_reply", "if_no_booking", "push_owner", "add_tag"].map((k) => (
               <Btn key={k} kind="ghost" onClick={() => addStep(k)} style={{ padding: "8px 10px", fontSize: 12 }}>
-                + {k.replaceAll("_", " ")}
+                + {STEP_ACTION_LABELS[k] || k.replaceAll("_", " ")}
               </Btn>
             ))}
           </div>
@@ -1488,8 +1526,8 @@ function BuilderSummary({ editing }) {
   return (
     <div style={{ ...shellCard, padding: 18 }}>
       <SectionTitle
-        title="Flow Summary"
-        subtitle="This is how the automation will feel to the user."
+        title="Automation Summary"
+        subtitle="Review the trigger and actions before saving."
       />
 
       <div style={{ color: C.text, fontSize: 15, lineHeight: 1.6 }}>
@@ -1526,6 +1564,9 @@ function Preview({ userEmail, flow }) {
   };
 
   const runNow = async () => {
+    if (!window.confirm(
+      `Send this test to ${leadEmail}? Wait steps and quiet-hour limits are bypassed for this one test.`
+    )) return;
     setLoading(true);
     setErr("");
     setDid(null);
@@ -1557,13 +1598,13 @@ function Preview({ userEmail, flow }) {
   return (
     <div style={{ ...softCard, padding: 16 }}>
       <SectionTitle
-        title="Test this flow"
-        subtitle="Preview first, or run it live to actually send emails, WhatsApp, tags, and owner actions."
+        title="Test this automation"
+        subtitle="Preview safely first. A live test performs the actions immediately and may contact the selected customer."
       />
 
       <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
         <Input
-          placeholder="lead@example.com"
+          placeholder="customer@example.com"
           value={leadEmail}
           onChange={(e) => setLeadEmail(e.target.value)}
           style={{ flex: 1, minWidth: 240 }}
@@ -1572,7 +1613,7 @@ function Preview({ userEmail, flow }) {
           {loading ? "Running..." : "Preview"}
         </Btn>
         <Btn onClick={runNow} disabled={!leadEmail || loading}>
-          {loading ? "Executing..." : "Run Live"}
+          {loading ? "Sending..." : "Send Live Test"}
         </Btn>
       </div>
 
@@ -1603,7 +1644,7 @@ function Preview({ userEmail, flow }) {
             <ul style={{ margin: 0, paddingLeft: 18 }}>
               {list.map((a, i) => (
                 <li key={i} style={{ marginBottom: 6 }}>
-                  {a.type}
+                  {STEP_ACTION_LABELS[a.type] || String(a.type || "Action").replaceAll("_", " ")}
                   {renderInfoBits(a)}
                 </li>
               ))}
@@ -1615,7 +1656,7 @@ function Preview({ userEmail, flow }) {
           <div style={{ color: C.text, fontWeight: 900, marginBottom: 8 }}>Executed actions</div>
           {!Array.isArray(did) ? (
             <div style={{ color: C.muted, fontSize: 13 }}>
-              Nothing executed yet. Use <b>Run Live</b> to actually send the email / WhatsApp and perform the flow.
+              No live test has run. Use <b>Send Live Test</b> only when you are ready to perform these actions.
             </div>
           ) : !did.length ? (
             <div style={{ color: C.muted, fontSize: 13 }}>Nothing executed.</div>
@@ -1623,7 +1664,7 @@ function Preview({ userEmail, flow }) {
             <ul style={{ margin: 0, paddingLeft: 18 }}>
               {did.map((a, i) => (
                 <li key={i} style={{ marginBottom: 6 }}>
-                  {a.type} — {a.status}
+                  {STEP_ACTION_LABELS[a.type] || String(a.type || "Action").replaceAll("_", " ")} — {String(a.status || "unknown").replaceAll("_", " ")}
                   {renderInfoBits(a)}
                 </li>
               ))}
@@ -1656,7 +1697,7 @@ function RunHistory({ userEmail }) {
     <SectionTitle title="Run history" subtitle="See exactly what ran, what is waiting, and what needs attention." right={<Btn kind="ghost" onClick={load}>Refresh</Btn>} />
     {historyError && <div style={{ ...softCard, padding: 14, color: C.redTxt }}>{historyError}</div>}
     <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(140px,1fr))", gap: 12 }}>
-      <StatCard label="Leads entered" value={summary.leads_entered || 0} /><StatCard label="Running" value={summary.running || 0} accent /><StatCard label="Completed" value={summary.completed || 0} /><StatCard label="Failed" value={summary.failed || 0} /><StatCard label="Messages" value={summary.messages_sent || 0} /><StatCard label="Replies" value={summary.replies || 0} />
+      <StatCard label="Customers entered" value={summary.leads_entered || 0} /><StatCard label="Running" value={summary.running || 0} accent /><StatCard label="Completed" value={summary.completed || 0} /><StatCard label="Failed" value={summary.failed || 0} /><StatCard label="Messages sent" value={summary.messages_sent || 0} /><StatCard label="Replies" value={summary.replies || 0} />
     </div>
     <div style={{ ...shellCard, overflow: "hidden" }}>
       {history.map((row) => <div key={row.id} style={{ padding: 16, borderBottom: `1px solid ${C.border}`, display: "grid", gap: 10 }}>
@@ -1665,7 +1706,7 @@ function RunHistory({ userEmail }) {
         {row.status === "failed" && <div><Btn kind="outline" disabled={busy === row.id} onClick={() => retry(row)}>{busy === row.id ? "Queueing…" : "Retry run"}</Btn></div>}
         {selected?.id === row.id && <div style={{ ...softCard, padding: 14 }}>{(row.events || []).length ? row.events.map((event, index) => <div key={`${event.at}-${index}`} style={{ display: "grid", gridTemplateColumns: "150px 1fr", gap: 12, padding: "8px 0", borderBottom: `1px solid ${C.border}` }}><small style={{ color: C.muted }}>{event.at ? new Date(event.at).toLocaleString() : ""}</small><span>{event.label || event.type}</span></div>) : <span style={{ color: C.muted }}>No recorded events yet.</span>}</div>}
       </div>)}
-      {!history.length && <div style={{ padding: 24, color: C.muted }}>No runs yet. Activate a flow or test it with one contact.</div>}
+      {!history.length && <div style={{ padding: 24, color: C.muted }}>No runs yet. Activate an automation or preview it with one customer.</div>}
     </div>
   </div>;
 }
@@ -1687,8 +1728,11 @@ export default function Automations({ user }) {
     booking_link: "",
     quiet_hours_start: "",
     quiet_hours_end: "",
+    timezone: "America/Toronto",
   });
   const [savingProfile, setSavingProfile] = useState(false);
+  const [profileSaved, setProfileSaved] = useState(false);
+  const [health, setHealth] = useState(null);
   const [waTemplates, setWATemplates] = useState([]);
 
   async function refreshFlows() {
@@ -1705,10 +1749,11 @@ export default function Automations({ user }) {
         setLoading(true);
         setError("");
 
-        const [t, p, wa] = await Promise.all([
+        const [t, p, wa, automationHealth] = await Promise.all([
           api.getTemplates(),
           api.getProfile(userEmail),
           api.getWATemplates(userEmail).catch(() => ({ templates: [] })),
+          api.getHealth(userEmail).catch(() => ({ ok: false, status: "unavailable" })),
         ]);
 
         if (!mounted) return;
@@ -1720,7 +1765,9 @@ export default function Automations({ user }) {
           booking_link: p?.profile?.booking_link || "",
           quiet_hours_start: p?.profile?.quiet_hours_start ?? "",
           quiet_hours_end: p?.profile?.quiet_hours_end ?? "",
+          timezone: p?.profile?.timezone || "America/Toronto",
         });
+        setHealth(automationHealth);
 
         const waItems = wa?.templates || [];
         setWATemplates(Array.isArray(waItems) ? waItems : []);
@@ -1780,7 +1827,7 @@ export default function Automations({ user }) {
       if (payload.enabled) {
         const issues = collectWhatsAppTemplateIssues(payload, waTemplates);
         if (issues.length) {
-          throw new Error(`This active flow needs attention: ${issues.join(" ")}`);
+          throw new Error(`This active automation needs attention: ${issues.join(" ")}`);
         }
       }
       const isUpdate = !!payload.id && flows.some((x) => x.id === payload.id);
@@ -1807,8 +1854,12 @@ export default function Automations({ user }) {
 
   const saveProf = async () => {
     setSavingProfile(true);
+    setProfileSaved(false);
+    setError("");
     try {
-      await api.saveProfile(userEmail, profile);
+      const result = await api.saveProfile(userEmail, profile);
+      setProfile({ ...profile, ...(result?.profile || {}) });
+      setProfileSaved(true);
     } catch (e) {
       setError(String(e.message || e));
     } finally {
@@ -1825,6 +1876,7 @@ export default function Automations({ user }) {
 
   return (
     <div
+      className="automation-page"
       style={{
         width: "100%",
         minHeight: "100vh",
@@ -1833,6 +1885,7 @@ export default function Automations({ user }) {
       }}
     >
       <div
+        className="automation-header"
         style={{
           padding: "22px 22px 16px 22px",
           borderBottom: `1px solid ${C.border}`,
@@ -1851,16 +1904,16 @@ export default function Automations({ user }) {
           <div>
             <div style={{ fontSize: 24, fontWeight: 900, letterSpacing: -0.5 }}>Automation workspace</div>
             <div style={{ color: C.muted, marginTop: 6, fontSize: 14 }}>
-              Build simple follow-up flows that are easy to launch, easy to understand, and easy to manage.
+      Build reliable customer follow-ups, review every action, and monitor what actually ran.
             </div>
           </div>
 
-          <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+          <div className="automation-tabs" style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
             <Chip active={tab === "templates"} onClick={() => setTab("templates")}>
               Templates
             </Chip>
             <Chip active={tab === "flows"} onClick={() => setTab("flows")}>
-              My Flows
+              My Automations
             </Chip>
             <Chip active={tab === "history"} onClick={() => setTab("history")}>
               Run History
@@ -1878,7 +1931,7 @@ export default function Automations({ user }) {
         </div>
       </div>
 
-      <div style={{ padding: 22 }}>
+      <div className="automation-content" style={{ padding: 22 }}>
         {error ? (
           <div
             style={{
@@ -1895,7 +1948,18 @@ export default function Automations({ user }) {
           </div>
         ) : null}
 
+        {health && !health.ok ? (
+          <div className="automation-health automation-health--warning">
+            <strong>Automatic sending is paused.</strong> Active automations will not run until the service is enabled. Contact owner@retainai.ca for help.
+          </div>
+        ) : health?.ok ? (
+          <div className="automation-health automation-health--ok">
+            <strong>Automation engine online.</strong> Active automations are checked every {health.evaluation_interval_minutes || 10} minutes.
+          </div>
+        ) : null}
+
         <div
+          className="automation-summary-grid"
           style={{
             display: "grid",
             gridTemplateColumns: "minmax(0,1.3fr) minmax(340px,1fr)",
@@ -1904,9 +1968,9 @@ export default function Automations({ user }) {
             alignItems: "stretch",
           }}
         >
-          <div style={{ display: "grid", gridTemplateColumns: "repeat(4, minmax(0,1fr))", gap: 12 }}>
+          <div className="automation-stats-grid" style={{ display: "grid", gridTemplateColumns: "repeat(4, minmax(0,1fr))", gap: 12 }}>
             <StatCard label="Templates" value={stats.totalTemplates} />
-            <StatCard label="Flows" value={stats.totalFlows} />
+            <StatCard label="Automations" value={stats.totalFlows} />
             <StatCard label="Active" value={stats.activeFlows} accent />
             <StatCard label="Drafts" value={stats.draftFlows} />
           </div>
@@ -1914,7 +1978,7 @@ export default function Automations({ user }) {
           <div style={{ ...shellCard, padding: 16 }}>
             <SectionTitle
               title="Automation Settings"
-              subtitle="These values can be reused across flows."
+              subtitle="Shared defaults used by your automations. Quiet hours use the selected time zone."
               right={
                 <Btn onClick={saveProf} disabled={savingProfile}>
                   {savingProfile ? "Saving..." : "Save"}
@@ -1923,6 +1987,7 @@ export default function Automations({ user }) {
             />
 
             <div
+              className="automation-settings-grid"
               style={{
                 display: "grid",
                 gridTemplateColumns: "repeat(4, minmax(0,1fr))",
@@ -1947,6 +2012,7 @@ export default function Automations({ user }) {
 
               <Field label="Quiet hours start">
                 <Input
+                  type="time"
                   value={profile.quiet_hours_start}
                   onChange={(e) => setProfile({ ...profile, quiet_hours_start: e.target.value })}
                   placeholder="21:00"
@@ -1955,12 +2021,27 @@ export default function Automations({ user }) {
 
               <Field label="Quiet hours end">
                 <Input
+                  type="time"
                   value={profile.quiet_hours_end}
                   onChange={(e) => setProfile({ ...profile, quiet_hours_end: e.target.value })}
                   placeholder="08:00"
                 />
               </Field>
+
+              <Field label="Time zone">
+                <Select
+                  value={profile.timezone || "America/Toronto"}
+                  onChange={(e) => setProfile({ ...profile, timezone: e.target.value })}
+                >
+                  <option value="America/Toronto">Eastern (Toronto)</option>
+                  <option value="America/Winnipeg">Central (Winnipeg)</option>
+                  <option value="America/Edmonton">Mountain (Edmonton)</option>
+                  <option value="America/Vancouver">Pacific (Vancouver)</option>
+                  <option value="UTC">UTC</option>
+                </Select>
+              </Field>
             </div>
+            {profileSaved ? <div className="automation-save-success">Settings saved.</div> : null}
           </div>
         </div>
 
@@ -1976,7 +2057,7 @@ export default function Automations({ user }) {
             />
 
             {templates.length ? (
-              <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(320px, 1fr))", gap: 16 }}>
+              <div className="automation-template-grid" style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(320px, 1fr))", gap: 16 }}>
                 {templates.map((t, i) => (
                   <TemplateCard key={t.id || i} template={t} onUse={() => applyTemplate(t)} />
                 ))}
@@ -1992,8 +2073,8 @@ export default function Automations({ user }) {
         {!loading && tab === "flows" && (
           <div style={{ display: "grid", gap: 18 }}>
             <SectionTitle
-              title="My Flows"
-              subtitle="Your live and draft automations in one place."
+              title="My Automations"
+              subtitle="Manage active and draft automations in one place."
               right={
                 <Btn
                   onClick={() => {
@@ -2001,7 +2082,7 @@ export default function Automations({ user }) {
                     setTab("builder");
                   }}
                 >
-                  New Flow
+                  New Automation
                 </Btn>
               }
             />
@@ -2017,7 +2098,7 @@ export default function Automations({ user }) {
                       setTab("builder");
                     }}
                     onDelete={async () => {
-                      if (!window.confirm("Delete this flow?")) return;
+                      if (!window.confirm("Delete this automation and its run history?")) return;
                       const prev = [...flows];
                       setFlows((curr) => curr.filter((x) => x.id !== f.id));
                       try {
@@ -2033,7 +2114,7 @@ export default function Automations({ user }) {
                       if (enabled) {
                         const issues = collectWhatsAppTemplateIssues(f, waTemplates);
                         if (issues.length) {
-                          setError(`Flow cannot be activated yet: ${issues.join(" ")}`);
+                          setError(`Automation cannot be activated yet: ${issues.join(" ")}`);
                           return;
                         }
                       }
@@ -2054,7 +2135,7 @@ export default function Automations({ user }) {
               </div>
             ) : (
               <div style={{ ...shellCard, padding: 18, color: C.muted }}>
-                No flows yet — start from a template or create a new one.
+                No automations yet. Start from a template or create a new one.
               </div>
             )}
           </div>
@@ -2064,6 +2145,7 @@ export default function Automations({ user }) {
 
         {!loading && tab === "builder" && (
           <div
+            className="automation-builder-grid"
             style={{
               display: "grid",
               gridTemplateColumns: "minmax(420px, 560px) minmax(0, 1fr)",
@@ -2074,7 +2156,7 @@ export default function Automations({ user }) {
             <div style={{ display: "grid", gap: 16, alignSelf: "start" }}>
               <div style={{ ...shellCard, padding: 18 }}>
                 <SectionTitle
-                  title="Flow Setup"
+                  title="Automation Setup"
                   subtitle="Name your automation and turn it into something your team can understand at a glance."
                   right={
                     <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
@@ -2091,7 +2173,7 @@ export default function Automations({ user }) {
                         Cancel
                       </Btn>
                       <Btn onClick={saveFlow} disabled={!editing || savingFlow}>
-                        {savingFlow ? "Saving..." : "Save Flow"}
+                        {savingFlow ? "Saving..." : "Save Automation"}
                       </Btn>
                     </div>
                   }
@@ -2099,15 +2181,15 @@ export default function Automations({ user }) {
 
                 {!editing ? (
                   <div style={{ color: C.muted, fontSize: 14 }}>
-                    Open a flow or create a new one to begin.
+                    Open an automation or create a new one to begin.
                   </div>
                 ) : (
                   <div style={{ display: "grid", gap: 14 }}>
-                    <Field label="Flow name">
+                    <Field label="Automation name">
                       <Input
                         value={editing.name || ""}
                         onChange={(e) => setEditing({ ...editing, name: e.target.value })}
-                        placeholder="Re-engage cold leads"
+                        placeholder="Reconnect with inactive customers"
                       />
                     </Field>
 
