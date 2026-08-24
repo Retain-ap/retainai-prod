@@ -1,8 +1,11 @@
-import { render, screen } from '@testing-library/react';
-import App from './App';
+import { render, screen } from "@testing-library/react";
+import App from "./App";
 
-test('renders learn react link', () => {
+test("renders the RetainAI landing experience", () => {
+  window.history.pushState({}, "", "/");
   render(<App />);
-  const linkElement = screen.getByText(/learn react/i);
-  expect(linkElement).toBeInTheDocument();
+  expect(
+    screen.getByRole("heading", { name: /keep more customers.*miss fewer moments/i })
+  ).toBeInTheDocument();
+  expect(screen.getAllByText(/start.*14-day trial/i).length).toBeGreaterThan(0);
 });

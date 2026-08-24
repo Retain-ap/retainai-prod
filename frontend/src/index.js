@@ -6,6 +6,7 @@ import "./index.css";
 import "./retainai-ui.css";
 import GoogleAuthWrapper from "./components/GoogleAuthProvider";
 import { apiUrl } from "./apiBase";
+import "./pwaInstall";
 
 // All backend calls use the signed, HttpOnly session cookie. Keeping this in
 // one place also covers older components that did not set credentials.
@@ -18,32 +19,6 @@ window.fetch = (input, init = {}) => {
   }
   return nativeFetch(input, init);
 };
-
-// ---------------- PWA install prompt plumbing ----------------
-let _deferredInstallPrompt = null;
-
-export function canPromptInstall() {
-  return !!_deferredInstallPrompt;
-}
-
-export async function promptInstall() {
-  if (!_deferredInstallPrompt) throw new Error("Install prompt not ready");
-  _deferredInstallPrompt.prompt();
-  const choice = await _deferredInstallPrompt.userChoice; // { outcome: "accepted"|"dismissed" }
-  _deferredInstallPrompt = null;
-  return choice;
-}
-
-window.addEventListener("beforeinstallprompt", (e) => {
-  e.preventDefault(); // don't show the mini-infobar; we'll trigger it manually
-  _deferredInstallPrompt = e;
-  window.dispatchEvent(new Event("pwa-install-available"));
-});
-
-window.addEventListener("appinstalled", () => {
-  _deferredInstallPrompt = null;
-});
-// --------------------------------------------------------------
 
 // helper to convert VAPID key
 function urlBase64ToUint8Array(base64String) {
