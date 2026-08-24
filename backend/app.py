@@ -8,6 +8,7 @@ import base64
 import hmac
 import hashlib
 import datetime
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 import secrets
 import struct
 import urllib.parse
@@ -7123,7 +7124,13 @@ def user_from_request() -> str:
 
 def dt_parse(s: Optional[str]) -> Optional[datetime.datetime]:
     try:
-        return datetime.datetime.fromisoformat(s) if s else None
+        if not s:
+            return None
+        value = str(s).strip().replace("Z", "+00:00")
+        parsed = datetime.datetime.fromisoformat(value)
+        if parsed.tzinfo is None:
+            parsed = parsed.replace(tzinfo=datetime.timezone.utc)
+        return parsed.astimezone(datetime.timezone.utc)
     except Exception:
         return None
 
@@ -7134,15 +7141,57 @@ def is_valid_url(u: str) -> bool:
     except Exception:
         return False
 
+def _parse_quiet_time(value: Any) -> Optional[int]:
+    """Return minutes after midnight, accepting legacy integer hours."""
+    if value is None or value == "":
+        return None
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        hour = int(value)
+        if 0 <= hour <= 23:
+            return hour * 60
+        raise ValueError("quiet hours must be between 00:00 and 23:59")
+    text = str(value).strip()
+    match = re.fullmatch(r"(\d{1,2})(?::(\d{2}))?", text)
+    if not match:
+        raise ValueError("quiet hours must use HH:MM")
+    hour = int(match.group(1))
+    minute = int(match.group(2) or 0)
+    if not 0 <= hour <= 23 or not 0 <= minute <= 59:
+        raise ValueError("quiet hours must be between 00:00 and 23:59")
+    return hour * 60 + minute
+
+
+def _normalize_quiet_time(value: Any) -> Optional[str]:
+    minutes = _parse_quiet_time(value)
+    if minutes is None:
+        return None
+    return f"{minutes // 60:02d}:{minutes % 60:02d}"
+
+
+def _automation_timezone(profile: Dict[str, Any]) -> ZoneInfo:
+    name = str(
+        profile.get("timezone")
+        or os.getenv("AUTOMATION_TIMEZONE")
+        or "America/Toronto"
+    ).strip()
+    try:
+        return ZoneInfo(name)
+    except (ZoneInfoNotFoundError, ValueError):
+        return ZoneInfo("UTC")
+
+
 def in_quiet_hours(now: datetime.datetime, profile: Dict[str, Any]) -> bool:
-    qs = profile.get("quiet_hours_start")
-    qe = profile.get("quiet_hours_end")
-    if qs is None or qe is None:
+    start = _parse_quiet_time(profile.get("quiet_hours_start"))
+    end = _parse_quiet_time(profile.get("quiet_hours_end"))
+    if start is None or end is None or start == end:
         return False
-    hour = now.hour
-    if qs > qe:
-        return hour >= qs or hour < qe
-    return qs <= hour < qe
+    if now.tzinfo is None:
+        now = now.replace(tzinfo=datetime.timezone.utc)
+    local_now = now.astimezone(_automation_timezone(profile))
+    current = local_now.hour * 60 + local_now.minute
+    if start > end:
+        return current >= start or current < end
+    return start <= current < end
 
 _td = datetime.timedelta
 
@@ -7163,7 +7212,29 @@ def trig_new_lead(lead: Dict[str, Any], within_hours: int = 24) -> bool:
 
 def trig_no_show(lead: Dict[str, Any]) -> bool:
     for appt in (lead.get("appointments") or []):
-        if str(appt.get("status") or "").lower().replace("_", "-") == "no-show" and not appt.get("automation_seen_no_show"):
+        if str(appt.get("status") or "").lower().replace("_", "-") != "no-show":
+            continue
+        changed_at = dt_parse(appt.get("updated_at")) or dt_parse(appt.get("appointment_time"))
+        if changed_at and now_utc() - changed_at <= _td(days=7):
+            return True
+    return False
+
+
+def trig_completed_appointment(lead: Dict[str, Any], within_days: int = 2) -> bool:
+    """Match a genuinely completed, recent appointment for this customer."""
+    window = _td(days=max(1, min(int(within_days or 2), 90)))
+    current = now_utc()
+    for appt in (lead.get("appointments") or []):
+        if not isinstance(appt, dict):
+            continue
+        status = str(appt.get("status") or "").strip().lower().replace("_", "-")
+        completed = status in ("completed", "complete", "done") or bool(
+            appt.get("done") or appt.get("completed") or appt.get("is_done")
+        )
+        if not completed:
+            continue
+        appointment_at = dt_parse(appt.get("appointment_time"))
+        if appointment_at and _td(0) <= current - appointment_at <= window:
             return True
     return False
 
@@ -7180,6 +7251,9 @@ def cond_no_booking_since(lead: Dict[str, Any], days: int = 2) -> bool:
     return True
 
 MISSING = "â›”"
+
+# Override the legacy mojibake sentinel before any customer-facing rendering.
+MISSING = "[missing]"
 
 def render_text(tmpl: str, lead: Dict[str, Any], run: Dict[str, Any], profile: Dict[str, Any]) -> str:
     if not isinstance(tmpl, str):
@@ -7300,12 +7374,14 @@ def send_whatsapp_with_window(flow, step, lead, run, caps, profile) -> bool:
     user_email = (lead.get("owner") or flow.get("owner") or "").lower()
     lead_id = str(lead.get("id") or "")
     if not user_email or not lead_id:
-        return True
+        raise RuntimeError("WhatsApp automation is missing its workspace or customer ID.")
 
     to = lead.get("phone") or lead.get("whatsapp")
     if not to:
+        _record_automation_action(run, "send_whatsapp", "skipped", {"reason": "Customer has no WhatsApp number."})
         return True
     if bool(lead.get("wa_opt_out")):
+        _record_automation_action(run, "send_whatsapp", "skipped", {"reason": "Customer opted out of WhatsApp messages."})
         return True
 
     raw = step.get("text") or run.get("memo", {}).get("last_ai_text") or ""
@@ -7313,6 +7389,7 @@ def send_whatsapp_with_window(flow, step, lead, run, caps, profile) -> bool:
     if contains_blockers(body):
         create_notification(user_email, "Setup needed",
                             "WhatsApp message blocked: missing profile values (booking link / business name).")
+        _record_automation_action(run, "send_whatsapp", "blocked", {"reason": "Complete the automation profile settings."})
         return True
 
     inside24 = False
@@ -7342,7 +7419,9 @@ def send_whatsapp_with_window(flow, step, lead, run, caps, profile) -> bool:
                     "type": "automation",
                 },
             )
-        return True
+            _record_automation_action(run, "send_whatsapp", "sent", {"to": to, "text": body, "mode": "free_text"})
+            return True
+        raise RuntimeError("WhatsApp rejected the automation message.")
 
     template_cfg = step.get("template") or {}
     preferred_name = template_cfg.get("name") or step.get("template_name")
@@ -7351,7 +7430,7 @@ def send_whatsapp_with_window(flow, step, lead, run, caps, profile) -> bool:
     if not tpl_name or not used_lang:
         create_notification(user_email, "WhatsApp template unavailable",
                             "No approved template/locale available to send outside the 24h window.")
-        return True
+        raise RuntimeError("No approved WhatsApp template is available outside the 24-hour window.")
 
     if not template_meta.get("supported_by_automations", True):
         reason = template_meta.get("unsupported_reason") or "unsupported dynamic header or button parameters"
@@ -7360,7 +7439,7 @@ def send_whatsapp_with_window(flow, step, lead, run, caps, profile) -> bool:
             "WhatsApp template needs attention",
             f"Template '{tpl_name}' cannot run in Automations yet: {reason}.",
         )
-        return True
+        raise RuntimeError(f"WhatsApp template '{tpl_name}' is not supported by Automations.")
 
     explicit_params: List[str] = []
     raw_params = template_cfg.get("params")
@@ -7380,7 +7459,7 @@ def send_whatsapp_with_window(flow, step, lead, run, caps, profile) -> bool:
             "WhatsApp template parameter mismatch",
             f"Template '{tpl_name}' expects {pcount} body parameter(s), but the flow provides {len(params)}.",
         )
-        return True
+        raise RuntimeError(f"WhatsApp template '{tpl_name}' has the wrong number of parameters.")
 
     if any((not str(value).strip()) or contains_blockers(str(value)) for value in params):
         create_notification(
@@ -7388,7 +7467,7 @@ def send_whatsapp_with_window(flow, step, lead, run, caps, profile) -> bool:
             "WhatsApp template setup needed",
             f"Template '{tpl_name}' has an empty or unresolved required parameter. Open the flow and complete every parameter mapping.",
         )
-        return True
+        raise RuntimeError(f"WhatsApp template '{tpl_name}' has an unresolved parameter.")
 
     shown = f"[template:{tpl_name}/{used_lang}] {body}"
     try:
@@ -7426,7 +7505,19 @@ def send_whatsapp_with_window(flow, step, lead, run, caps, profile) -> bool:
                 "used_language": used_lang,
             },
         )
-    return True
+        _record_automation_action(
+            run,
+            "send_whatsapp",
+            "sent",
+            {
+                "to": to,
+                "text": body,
+                "mode": "approved_template",
+                "template": {"name": tpl_name, "language": used_lang},
+            },
+        )
+        return True
+    raise RuntimeError("WhatsApp rejected the approved template message.")
 
 def get_run(state: Dict[str, Any], flow_id: str, lead_key: str) -> Dict[str, Any]:
     return state.setdefault(flow_id, {}).setdefault(lead_key, {
@@ -7457,6 +7548,8 @@ def trigger_met(trigger: Dict[str, Any], lead: Dict[str, Any]) -> bool:
         return trig_new_lead(lead, int(trigger.get("within_hours", 24)))
     if t == "appointment_no_show":
         return trig_no_show(lead)
+    if t == "appointment_completed":
+        return trig_completed_appointment(lead, int(trigger.get("within_days", 2)))
     return False
 
 def should_auto_stop(flow: Dict[str, Any], lead: Dict[str, Any], run: Dict[str, Any]) -> bool:
@@ -7474,8 +7567,7 @@ def send_email_sendgrid_auto(
     owner_email: str = "",
 ) -> bool:
     if not globals().get("SENDGRID_API_KEY"):
-        print("[Automations] SENDGRID_API_KEY missing; skipping email send (simulated).")
-        return True
+        raise RuntimeError("Email automation is unavailable because SendGrid is not configured.")
     try:
         sg = SendGridAPIClient(globals()["SENDGRID_API_KEY"])
         msg = Mail(
@@ -7495,7 +7587,7 @@ def send_email_sendgrid_auto(
         print("[Automations] SendGrid error:", e)
         return False
 
-def ai_draft_message(context: Dict[str, Any]) -> str:
+def _legacy_ai_draft_message(context: Dict[str, Any]) -> str:
     business_name = context.get("business_name") or f"{MISSING} add your business name in Automations > Settings"
     booking = context.get("booking_link") or f"{MISSING} add your booking link in Automations > Settings"
     lead_name = (context.get("lead", {}).get("first_name") or context.get("lead", {}).get("name") or "there")
@@ -7529,6 +7621,60 @@ def ai_draft_message(context: Dict[str, Any]) -> str:
         print("[Automations] AI draft error:", e)
         return f"Quick check-in â€” want to grab a spot with {business_name}? {booking}"
 
+def ai_draft_message(context: Dict[str, Any]) -> str:
+    """Create a restrained follow-up using only facts present in the customer record."""
+    business_name = context.get("business_name") or f"{MISSING} add your business name in Automations settings"
+    booking = context.get("booking_link") or f"{MISSING} add your booking link in Automations settings"
+    customer = context.get("lead") if isinstance(context.get("lead"), dict) else {}
+    customer_name = customer.get("first_name") or customer.get("name") or "there"
+    fallback = f"Hi {customer_name}, just checking in. Would you like to book with {business_name}? {booking}"
+    if not os.getenv("OPENROUTER_API_KEY"):
+        return fallback
+    supported_context = {
+        key: customer.get(key)
+        for key in ("name", "first_name", "status", "tags", "notes", "last_activity_at")
+        if customer.get(key) not in (None, "", [])
+    }
+    try:
+        prompt = (
+            "Write one short customer follow-up of at most 45 words. "
+            "Use only the facts supplied below. Never invent a birthday, visit, purchase, appointment, "
+            "discount, preference, or recent event. Do not claim something happened recently unless an exact "
+            "date in the supplied context supports it. Use a warm, professional tone with no emoji.\n"
+            f"Business: {business_name}\nBooking link: {booking}\n"
+            f"Customer context: {json.dumps(supported_context, ensure_ascii=False)}"
+        )
+        response = pyrequests.post(
+            "https://openrouter.ai/api/v1/chat/completions",
+            headers={"Authorization": f"Bearer {os.getenv('OPENROUTER_API_KEY')}", "Content-Type": "application/json"},
+            json={
+                "model": "openrouter/auto",
+                "messages": [
+                    {"role": "system", "content": "You write accurate CRM messages and never infer unsupported personal events."},
+                    {"role": "user", "content": prompt},
+                ],
+                "temperature": 0.25,
+            },
+            timeout=25,
+        )
+        response.raise_for_status()
+        text = (response.json().get("choices", [{}])[0].get("message", {}).get("content") or "").strip()
+        return text or fallback
+    except Exception as exc:
+        app.logger.warning("[Automations] AI draft failed: %s", exc)
+        return fallback
+
+
+def _record_automation_action(
+    run: Dict[str, Any], action_type: str, status: str, info: Optional[Dict[str, Any]] = None
+):
+    run.setdefault("_action_log", []).append({
+        "type": action_type,
+        "status": status,
+        "info": info or {},
+    })
+
+
 def execute_step(flow: Dict[str, Any], step: Dict[str, Any], lead: Dict[str, Any], run: Dict[str, Any],
                  caps: Dict[str, Any], profile: Dict[str, Any]) -> bool:
     kind = step.get("type")
@@ -7560,6 +7706,7 @@ def execute_step(flow: Dict[str, Any], step: Dict[str, Any], lead: Dict[str, Any
             "booking_link": profile.get("booking_link"),
         })
         run.setdefault("memo", {})["last_ai_text"] = text
+        _record_automation_action(run, "ai_draft", "completed", {"text": text})
         return True
 
     if kind == "send_whatsapp":
@@ -7573,6 +7720,7 @@ def execute_step(flow: Dict[str, Any], step: Dict[str, Any], lead: Dict[str, Any
             return False
         email = lead.get("email")
         if not email:
+            _record_automation_action(run, "send_email", "skipped", {"reason": "Customer has no email address."})
             return True
 
         subject = render_text(step.get("subject") or "Quick check-in", lead, run, profile)
@@ -7584,6 +7732,7 @@ def execute_step(flow: Dict[str, Any], step: Dict[str, Any], lead: Dict[str, Any
         if contains_blockers(subject) or contains_blockers(html):
             create_notification(lead.get("owner") or flow.get("owner") or "", "Setup needed",
                                 "Email blocked: missing profile values (booking link / business name).")
+            _record_automation_action(run, "send_email", "blocked", {"reason": "Complete the automation profile settings."})
             return True
 
         ok = send_email_sendgrid_auto(
@@ -7606,12 +7755,27 @@ def execute_step(flow: Dict[str, Any], step: Dict[str, Any], lead: Dict[str, Any
                     "type": "automation",
                 },
             )
-        return True
+            _record_automation_action(
+                run,
+                "send_email",
+                "sent",
+                {"to": email, "subject": subject, "html": html},
+            )
+            return True
+        raise RuntimeError("SendGrid rejected the automation email.")
 
     if kind == "push_owner":
         owner = lead.get("owner") or flow.get("owner") or ""
         if owner:
             create_notification(owner, step.get("title") or "Lead to call", step.get("message") or str(lead.get("email")))
+            _record_automation_action(
+                run,
+                "push_owner",
+                "completed",
+                {"title": step.get("title") or "Customer follow-up", "message": step.get("message") or ""},
+            )
+        else:
+            _record_automation_action(run, "push_owner", "skipped", {"reason": "Workspace owner is missing."})
         return True
 
     if kind == "add_tag":
@@ -7629,6 +7793,9 @@ def execute_step(flow: Dict[str, Any], step: Dict[str, Any], lead: Dict[str, Any
                         arr[i] = lead
                         break
                 save_user_leads(owner, arr)
+            _record_automation_action(run, "add_tag", "completed", {"tag": tag})
+        else:
+            _record_automation_action(run, "add_tag", "skipped", {"reason": "No tag was selected."})
         return True
 
     return True
@@ -7639,6 +7806,7 @@ def engine_tick():
         flows_db = read_json(FILE_AUTOMATIONS, {"users": {}}) or {"users": {}}
         state = load_state() or {}
         leads_by_user = load_leads() or {}
+        appointments_by_user = load_appointments() or {}
 
         if not isinstance(flows_db, dict):
             flows_db = {"users": {}}
@@ -7651,6 +7819,7 @@ def engine_tick():
             try:
                 profile = load_user_profile(user)
                 user_leads = leads_by_user.get(user, []) or []
+                user_appointments = appointments_by_user.get(user, []) or []
 
                 if not isinstance(user_leads, list):
                     user_leads = []
@@ -7680,6 +7849,26 @@ def engine_tick():
                             try:
                                 if not isinstance(lead, dict):
                                     continue
+
+                                # Calendar appointments are stored separately from contacts.
+                                # Attach the matching records so appointment-based triggers and
+                                # booking conditions evaluate real production data.
+                                source_lead = lead
+                                lead = dict(source_lead)
+                                lead_id_value = str(lead.get("id") or "")
+                                lead_email_value = str(lead.get("email") or "").strip().lower()
+                                lead["appointments"] = [
+                                    appointment
+                                    for appointment in user_appointments
+                                    if isinstance(appointment, dict)
+                                    and (
+                                        (lead_id_value and str(appointment.get("lead_id") or "") == lead_id_value)
+                                        or (
+                                            lead_email_value
+                                            and str(appointment.get("lead_email") or "").strip().lower() == lead_email_value
+                                        )
+                                    )
+                                ]
 
                                 owner = (lead.get("owner") or user or "").lower()
                                 if owner != user:
@@ -7714,9 +7903,27 @@ def engine_tick():
                                     continue
 
                                 step = steps[step_index]
+                                run["_action_log"] = []
                                 progressed = execute_step(flow, step, lead, run, caps, profile)
                                 if progressed:
-                                    automation_event(run, "step", f"{str(step.get('type') or 'step').replace('_', ' ').title()} completed", step_index=step_index)
+                                    actions = run.pop("_action_log", [])
+                                    if actions:
+                                        for action in actions:
+                                            action_type = str(action.get("type") or "step").replace("_", " ").title()
+                                            status = str(action.get("status") or "completed")
+                                            reason = str((action.get("info") or {}).get("reason") or "")
+                                            label = f"{action_type} {status}"
+                                            if reason:
+                                                label = f"{label}: {reason}"
+                                            automation_event(
+                                                run,
+                                                status,
+                                                label,
+                                                step_index=step_index,
+                                                info=action.get("info") or {},
+                                            )
+                                    else:
+                                        automation_event(run, "step", f"{str(step.get('type') or 'step').replace('_', ' ').title()} completed", step_index=step_index)
                                     advance(run)
 
                             except Exception as e:
@@ -7876,22 +8083,16 @@ def validate_flow_whatsapp_templates(flow: Dict[str, Any]) -> List[str]:
         else:
             supplied = []
 
-        if supplied and len(supplied) != expected:
+        if len(supplied) != expected:
             errors.append(
                 f"{label}: template '{name}' expects {expected} body parameter(s), "
                 f"but the flow contains {len(supplied)}."
             )
             continue
 
-        if supplied and any(not value for value in supplied):
+        if any(not value for value in supplied):
             errors.append(f"{label}: complete every parameter mapping for template '{name}'.")
             continue
-
-        if not supplied and expected > 4:
-            errors.append(
-                f"{label}: template '{name}' expects {expected} parameters. "
-                "Map them explicitly before activation."
-            )
 
     return errors
 
@@ -7903,7 +8104,24 @@ def _bf_ensure_files():
 
 @automations_bp.route("/health", methods=["GET"])
 def automations_health():
-    return jsonify({"ok": True, "message": "automations alive"})
+    current_scheduler = globals().get("scheduler")
+    enabled = bool(globals().get("SCHEDULER_ENABLED", False))
+    running = bool(current_scheduler and getattr(current_scheduler, "running", False))
+    next_run = None
+    if running:
+        try:
+            job = current_scheduler.get_job("automations_tick")
+            next_run = job.next_run_time.isoformat() if job and job.next_run_time else None
+        except Exception:
+            next_run = None
+    return jsonify({
+        "ok": enabled and running,
+        "status": "operational" if enabled and running else "scheduler_offline",
+        "scheduler_enabled": enabled,
+        "scheduler_running": running,
+        "evaluation_interval_minutes": 10,
+        "next_evaluation": next_run,
+    })
 
 def _automation_history_for_user(user: str):
     flows = load_user_flows(user)
@@ -7945,7 +8163,7 @@ def automation_dashboard():
             "leads_entered": len(history), "completed": len([row for row in history if row["status"] == "completed"]),
             "running": len([row for row in history if row["status"] == "running"]), "failed": len([row for row in history if row["status"] == "failed"]),
             "messages_sent": sum(row["messages_sent"] for row in history), "replies": sum(row["replies_received"] for row in history),
-            "next_evaluation": (now_utc() + _td(minutes=15)).isoformat(),
+            "next_evaluation": (now_utc() + _td(minutes=10)).isoformat(),
         }
     })
 
@@ -7985,8 +8203,9 @@ def get_user_profile_route():
         "profile": {
             "business_name": prof.get("business_name", ""),
             "booking_link": prof.get("booking_link", ""),
-            "quiet_hours_start": prof.get("quiet_hours_start"),
-            "quiet_hours_end": prof.get("quiet_hours_end"),
+            "quiet_hours_start": _normalize_quiet_time(prof.get("quiet_hours_start")),
+            "quiet_hours_end": _normalize_quiet_time(prof.get("quiet_hours_end")),
+            "timezone": prof.get("timezone") or os.getenv("AUTOMATION_TIMEZONE") or "America/Toronto",
         }
     })
 
@@ -8013,11 +8232,28 @@ def automations_test_live():
         if not user_email:
             return jsonify({"ok": False, "error": "missing_user_email"}), 400
 
+        if data.get("confirm_live") is not True:
+            return jsonify({"ok": False, "error": "live_confirmation_required"}), 400
+
         if not lead_email:
             return jsonify({"ok": False, "error": "missing_lead_email"}), 400
 
+        if not flow and data.get("flow_id"):
+            flow = next(
+                (item for item in load_user_flows(user_email) if str(item.get("id")) == str(data.get("flow_id"))),
+                None,
+            )
         if not isinstance(flow, dict) or not flow:
             return jsonify({"ok": False, "error": "missing_flow"}), 400
+        flow = _normalize_flow_for_user(flow, user_email)
+
+        validation_errors = validate_flow_whatsapp_templates(flow)
+        if validation_errors:
+            return jsonify({
+                "ok": False,
+                "error": "Live test blocked until the WhatsApp template setup is valid.",
+                "validation_errors": validation_errors,
+            }), 422
 
         all_leads = load_leads() or {}
         user_leads = all_leads.get(user_email, []) or []
@@ -8063,7 +8299,7 @@ def automations_test_live():
                 })
                 continue
 
-            # direct live execution through your existing step executor
+            run["_action_log"] = []
             progressed = execute_step(
                 flow=flow,
                 step=step,
@@ -8077,15 +8313,15 @@ def automations_test_live():
                 profile=profile,
             )
 
-            event = None
-            if isinstance(run.get("events"), list) and run["events"]:
-                event = run["events"][-1]
-
-            did.append({
-                "type": step_type,
-                "status": "ok" if progressed else "no_action",
-                "info": event or {},
-            })
+            actions = run.pop("_action_log", [])
+            if actions:
+                did.extend(actions)
+            else:
+                did.append({
+                    "type": step_type,
+                    "status": "completed" if progressed else "waiting",
+                    "info": {},
+                })
 
             if progressed:
                 advance(run)
@@ -8095,7 +8331,7 @@ def automations_test_live():
             "mode": "execute",
             "lead_email": lead_email,
             "did": did,
-            "run": run,
+            "run": {key: value for key, value in run.items() if not str(key).startswith("_")},
         }), 200
 
     except Exception as e:
@@ -8104,16 +8340,15 @@ def automations_test_live():
             "error": str(e)[:500],
         }), 500
         
-def _vp_int(v, name):
-    if v is None or v == "":
-        return None
+def _vp_timezone(value):
+    if value is None or value == "":
+        return os.getenv("AUTOMATION_TIMEZONE") or "America/Toronto"
+    name = str(value).strip()
     try:
-        iv = int(v)
-        if 0 <= iv <= 23:
-            return iv
-    except Exception:
-        pass
-    raise ValueError(f"{name} must be an integer 0-23")
+        ZoneInfo(name)
+    except (ZoneInfoNotFoundError, ValueError):
+        raise ValueError("timezone must be a valid IANA name, such as America/Toronto")
+    return name
 
 def _vp_url(u):
     if u is None or u == "":
@@ -8134,9 +8369,11 @@ def set_user_profile_route():
         if "booking_link" in body:
             prof["booking_link"] = _vp_url(body.get("booking_link"))
         if "quiet_hours_start" in body:
-            prof["quiet_hours_start"] = _vp_int(body.get("quiet_hours_start"), "quiet_hours_start")
+            prof["quiet_hours_start"] = _normalize_quiet_time(body.get("quiet_hours_start"))
         if "quiet_hours_end" in body:
-            prof["quiet_hours_end"] = _vp_int(body.get("quiet_hours_end"), "quiet_hours_end")
+            prof["quiet_hours_end"] = _normalize_quiet_time(body.get("quiet_hours_end"))
+        if "timezone" in body:
+            prof["timezone"] = _vp_timezone(body.get("timezone"))
     except ValueError as e:
         return jsonify({"ok": False, "error": str(e)}), 400
 
@@ -8195,21 +8432,61 @@ def builtin_templates() -> List[Dict[str, Any]]:
             "auto_stop_on_reply": True
         }
     ]
+    # Keep built-in copy professional, accurate, and encoding-safe.
+    templates[0].update({
+        "name": "Customer Re-engagement (7-day)",
+        "steps": [
+            {"type": "ai_draft"},
+            {"type": "send_whatsapp", "text": "{{last_ai_text}}"},
+            {"type": "wait", "days": 2},
+            {"type": "if_no_reply", "within_days": 2, "then": [{
+                "type": "send_email",
+                "subject": "Would you like to reconnect?",
+                "html": "<p>Just checking in. If you would like to book with {{business_name}}, <a href='{{booking_link}}'>choose a time here</a>.</p>",
+            }]},
+        ],
+    })
+    templates[1].update({
+        "name": "No-show Follow-up",
+        "steps": [
+            {"type": "send_whatsapp", "text": "Sorry we missed you. If you would like to reschedule, choose a new time here: {{booking_link}}"},
+            {"type": "wait", "hours": 48},
+            {"type": "if_no_booking", "within_days": 2, "then": [
+                {"type": "send_email", "subject": "Would you like to reschedule?", "html": "<p>If you would like a new appointment time, <a href='{{booking_link}}'>reschedule here</a>.</p>"},
+                {"type": "add_tag", "tag": "Needs Attention"},
+            ]},
+        ],
+    })
+    templates[2].update({
+        "name": "New Customer Welcome (3-touch)",
+        "steps": [
+            {"type": "send_whatsapp", "text": "Welcome to {{business_name}}. Would you like help choosing an appointment time? {{booking_link}}"},
+            {"type": "wait", "hours": 24},
+            {"type": "if_no_reply", "within_days": 2, "then": [{
+                "type": "send_email",
+                "subject": "Welcome to {{business_name}}",
+                "html": "<p>Thank you for getting in touch. When you are ready, <a href='{{booking_link}}'>choose an appointment time here</a>.</p>",
+            }]},
+            {"type": "wait", "hours": 48},
+            {"type": "push_owner", "title": "Customer follow-up", "message": "This new customer may benefit from a personal call."},
+        ],
+    })
+
     industry_templates = [
-        ("salon-rebook", "Salon · Rebook after service", "no_reply", "Ready for your next appointment? Book with {{business_name}} here: {{booking_link}}"),
-        ("salon-review", "Salon · Review request", "no_reply", "Thanks for visiting {{business_name}}. We would love to hear how your appointment went."),
-        ("salon-lapsed", "Salon · Lapsed client recovery", "no_reply", "We miss seeing you at {{business_name}}. Choose a time that works for you: {{booking_link}}"),
-        ("home-quote", "Home services · Quote follow-up", "no_reply", "Just checking whether you had any questions about your quote from {{business_name}}."),
-        ("home-missed-call", "Home services · Missed-call follow-up", "new_lead", "Sorry we missed your call. How can {{business_name}} help today?"),
-        ("home-review", "Home services · Job-completion review", "no_reply", "Thanks for choosing {{business_name}}. How did everything go?"),
-        ("coaching-discovery", "Coaching · Discovery-call follow-up", "new_lead", "Thanks for connecting with {{business_name}}. Your next step is here: {{booking_link}}"),
-        ("coaching-renewal", "Coaching · Package renewal", "no_reply", "Ready to continue your progress with {{business_name}}? Book your next session: {{booking_link}}"),
-        ("coaching-checkin", "Coaching · Client check-in", "no_reply", "A quick check-in from {{business_name}}: how are things going this week?"),
+        ("salon-rebook", "Salon · Rebook after service", {"type": "appointment_completed", "within_days": 14}, "Thank you for visiting {{business_name}}. If you would like to plan your next appointment, choose a time here: {{booking_link}}"),
+        ("salon-review", "Salon · Post-appointment review", {"type": "appointment_completed", "within_days": 2}, "Thank you for visiting {{business_name}}. We would love to hear how your appointment went."),
+        ("salon-lapsed", "Salon · Reconnect after 60 days", {"type": "no_reply", "days": 60}, "We would love to welcome you back to {{business_name}}. Choose a time that works for you: {{booking_link}}"),
+        ("home-quote", "Home services · Quote check-in", {"type": "no_reply", "days": 3}, "Just checking whether you had any questions for {{business_name}}. Reply here and we will be happy to help."),
+        ("home-new-inquiry", "Home services · New inquiry follow-up", {"type": "new_lead", "within_hours": 24}, "Thank you for contacting {{business_name}}. How can we help today?"),
+        ("home-review", "Home services · Post-visit review", {"type": "appointment_completed", "within_days": 2}, "Thank you for choosing {{business_name}}. How did everything go?"),
+        ("coaching-session", "Coaching · Post-session follow-up", {"type": "appointment_completed", "within_days": 2}, "Thank you for your session with {{business_name}}. When you are ready, your next step is here: {{booking_link}}"),
+        ("coaching-reconnect", "Coaching · Reconnect after 30 days", {"type": "no_reply", "days": 30}, "Ready to continue your progress with {{business_name}}? Book your next session here: {{booking_link}}"),
+        ("coaching-checkin", "Coaching · Client check-in", {"type": "no_reply", "days": 14}, "A quick check-in from {{business_name}}: how are things going?"),
     ]
-    for template_id, name, trigger_type, message in industry_templates:
+    for template_id, name, trigger, message in industry_templates:
         templates.append({
             "id": template_id, "name": name, "enabled": False,
-            "trigger": {"type": trigger_type, **({"within_hours": 24} if trigger_type == "new_lead" else {"days": 7})},
+            "trigger": trigger,
             "steps": [{"type": "send_whatsapp", "text": message}, {"type": "wait", "days": 2}, {"type": "push_owner", "title": "Follow up personally", "message": "This customer may benefit from a personal check-in."}],
             "caps": {"per_lead_per_day": 1, "respect_quiet_hours": True}, "auto_stop_on_reply": True,
         })
