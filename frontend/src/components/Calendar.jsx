@@ -11,6 +11,16 @@ import {
   FaEdit,
   FaTrash,
 } from "react-icons/fa";
+import { getWorkspaceEmail } from "../workspaceIdentity";
+import {
+  appointmentDateTimeParts,
+  dateKeyFromParts,
+  formatTimeKey,
+  localDateKey,
+  parseAppointmentDateTime,
+  timeKeyFromParts,
+} from "./appointmentDateTime";
+import "./Calendar.css";
 
 /* ===== THEME ===== */
 const BG = "#181a1b";
@@ -31,22 +41,12 @@ const API_BASE =
   window.location.origin.replace(/\/$/, "");
 
 /* ===== HELPERS ===== */
-function pad2(n) {
-  return String(n).padStart(2, "0");
-}
-
 function normEmail(v) {
   return String(v || "").trim().toLowerCase();
 }
 
 function safeDate(v) {
-  if (!v) return null;
-  try {
-    const d = new Date(v);
-    return Number.isNaN(d.getTime()) ? null : d;
-  } catch {
-    return null;
-  }
+  return parseAppointmentDateTime(v);
 }
 
 function startOfMonth(d) {
@@ -68,7 +68,7 @@ function sameDay(a, b) {
 }
 
 function dateKey(d) {
-  return `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}`;
+  return localDateKey(d);
 }
 
 function monthTitle(d) {
@@ -103,9 +103,11 @@ function saveJSON(key, value) {
 }
 
 /* ===== NORMALIZERS ===== */
-function normalizeBackendAppointment(raw) {
+function normalizeBackendAppointment(raw, fallbackTimezone = "") {
   const dt = safeDate(raw?.appointment_time);
-  if (!dt) return null;
+  const timeZone = raw?.timezone || fallbackTimezone;
+  const parts = appointmentDateTimeParts(raw?.appointment_time, timeZone);
+  if (!dt || !parts) return null;
 
   return {
     kind: "appointment",
@@ -123,13 +125,18 @@ function normalizeBackendAppointment(raw) {
       raw?.lead_email ||
       "",
     leadEmail: raw?.lead_email || "",
+    leadId: raw?.lead_id || "",
     note: raw?.notes || "",
     dateObj: dt,
+    dayKey: dateKeyFromParts(parts),
+    timeKey: timeKeyFromParts(parts),
+    timeZone,
+    allDay: false,
     done: !!(raw?.done ?? raw?.completed ?? raw?.is_done),
   };
 }
 
-function normalizeLocalAppointments(leads = []) {
+function normalizeLocalAppointments(leads = [], fallbackTimezone = "") {
   const out = [];
 
   (leads || []).forEach((lead) => {
@@ -144,8 +151,13 @@ function normalizeLocalAppointments(leads = []) {
         title: appt.title || "Appointment",
         leadName: getLeadName(lead),
         leadEmail: lead?.email || "",
+        leadId: lead?.id || "",
         note: appt?.notes || "",
         dateObj: dt,
+        dayKey: appt.date,
+        timeKey: appt.time || "00:00",
+        timeZone: fallbackTimezone,
+        allDay: !appt.time,
         done: !!appt?.done,
       });
     });
@@ -154,14 +166,16 @@ function normalizeLocalAppointments(leads = []) {
   return out;
 }
 
-function normalizeGoogleEvents(events = []) {
+function normalizeGoogleEvents(events = [], fallbackTimezone = "") {
   return (events || [])
     .map((evt, idx) => {
       const start =
         evt?.start?.dateTime ||
         (evt?.start?.date ? `${evt.start.date}T00:00:00` : null);
       const dt = safeDate(start);
-      if (!dt) return null;
+      const timeZone = evt?.start?.timeZone || evt?.timeZone || fallbackTimezone;
+      const parts = appointmentDateTimeParts(start, timeZone);
+      if (!dt || !parts) return null;
 
       return {
         kind: "google",
@@ -172,6 +186,10 @@ function normalizeGoogleEvents(events = []) {
         leadEmail: "",
         note: evt?.location || evt?.description || "",
         dateObj: dt,
+        dayKey: dateKeyFromParts(parts),
+        timeKey: timeKeyFromParts(parts),
+        timeZone,
+        allDay: !!evt?.start?.date && !evt?.start?.dateTime,
         done: false,
       };
     })
@@ -204,6 +222,10 @@ function normalizeBirthdays(leads = [], monthDate) {
       leadEmail: lead?.email || "",
       note: "",
       dateObj: dt,
+      dayKey: dateKey(dt),
+      timeKey: "",
+      timeZone: "",
+      allDay: true,
       done: false,
     });
   });
@@ -215,9 +237,17 @@ function mergeAndSortItems(items = []) {
   return [...items].sort((a, b) => a.dateObj.getTime() - b.dateObj.getTime());
 }
 
+function appointmentSignature(item) {
+  return [
+    String(item?.leadId || item?.leadEmail || "").trim().toLowerCase(),
+    `${item?.dayKey || ""}T${item?.timeKey || "00:00"}`,
+    String(item?.title || "Appointment").trim().toLowerCase(),
+  ].join("|");
+}
+
 function itemTimeLabel(item) {
-  if (item.kind === "birthday") return "All day";
-  return item.dateObj.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+  if (item.allDay || item.kind === "birthday") return "All day";
+  return formatTimeKey(item.timeKey) || "Time unavailable";
 }
 
 function itemMeta(item) {
@@ -263,12 +293,17 @@ export default function Calendar({
   });
 
   const [backendAppointments, setBackendAppointments] = useState([]);
+  const [backendAppointmentsWorkspace, setBackendAppointmentsWorkspace] = useState("");
+  const [workspaceTimezone, setWorkspaceTimezone] = useState("");
+  const [backendAppointmentsError, setBackendAppointmentsError] = useState("");
+  const [loadingBackendAppointments, setLoadingBackendAppointments] = useState(false);
+  const [appointmentsReloadToken, setAppointmentsReloadToken] = useState(0);
   const [notesMap, setNotesMap] = useState({});
   const [noteModalOpen, setNoteModalOpen] = useState(false);
   const [noteText, setNoteText] = useState("");
   const [editingNoteId, setEditingNoteId] = useState(null);
 
-  const userEmail = user?.org_id || user?.email || "";
+  const userEmail = getWorkspaceEmail(user);
 
   useEffect(() => {
     setNotesMap(loadJSON(noteStorageKey(userEmail), {}));
@@ -279,54 +314,97 @@ export default function Calendar({
   }, [notesMap, userEmail]);
 
   useEffect(() => {
+    setBackendAppointmentsWorkspace("");
+    setWorkspaceTimezone("");
+    setBackendAppointmentsError("");
+  }, [userEmail]);
+
+  useEffect(() => {
     let cancelled = false;
+    let requestId = 0;
 
     async function loadBackendAppointments() {
-      if (!user?.email) {
-        if (!cancelled) setBackendAppointments([]);
+      const currentRequest = ++requestId;
+      if (!userEmail) {
+        if (!cancelled) {
+          setBackendAppointments([]);
+          setBackendAppointmentsWorkspace("");
+          setBackendAppointmentsError("");
+          setLoadingBackendAppointments(false);
+        }
         return;
       }
 
+      setLoadingBackendAppointments(true);
       try {
-        const res = await fetch(`${API_BASE}/api/appointments/${encodeURIComponent(user.email)}`, {
+        const res = await fetch(`${API_BASE}/api/appointments/${encodeURIComponent(userEmail)}`, {
           credentials: "include",
           headers: { Accept: "application/json" },
         });
         const data = await res.json().catch(() => ({}));
-        if (!cancelled) {
-          setBackendAppointments(Array.isArray(data?.appointments) ? data.appointments : []);
+        if (!res.ok) {
+          throw new Error(data?.error || `Appointments request failed (${res.status})`);
         }
-      } catch {
-        if (!cancelled) setBackendAppointments([]);
+        if (!Array.isArray(data?.appointments)) {
+          throw new Error("Appointments response was incomplete");
+        }
+        if (!cancelled && currentRequest === requestId) {
+          setBackendAppointments(data.appointments);
+          setBackendAppointmentsWorkspace(userEmail);
+          setWorkspaceTimezone(data?.timezone || "");
+          setBackendAppointmentsError("");
+        }
+      } catch (error) {
+        if (!cancelled && currentRequest === requestId) {
+          setBackendAppointmentsError(error?.message || "Appointments could not be loaded");
+        }
+      } finally {
+        if (!cancelled && currentRequest === requestId) {
+          setLoadingBackendAppointments(false);
+        }
       }
     }
 
     loadBackendAppointments();
 
     const refresh = () => loadBackendAppointments();
+    const refreshWhenVisible = () => {
+      if (document.visibilityState === "visible") loadBackendAppointments();
+    };
     window.addEventListener("appointments:changed", refresh);
-    document.addEventListener("visibilitychange", refresh);
+    document.addEventListener("visibilitychange", refreshWhenVisible);
 
     return () => {
       cancelled = true;
       window.removeEventListener("appointments:changed", refresh);
-      document.removeEventListener("visibilitychange", refresh);
+      document.removeEventListener("visibilitychange", refreshWhenVisible);
     };
-  }, [user?.email]);
+  }, [appointmentsReloadToken, userEmail]);
+
+  const visibleBackendAppointments = useMemo(
+    () => (backendAppointmentsWorkspace === userEmail ? backendAppointments : []),
+    [backendAppointments, backendAppointmentsWorkspace, userEmail]
+  );
 
   const normalizedBackendAppointments = useMemo(
-    () => (backendAppointments || []).map((raw) => normalizeBackendAppointment(raw)).filter(Boolean),
-    [backendAppointments]
+    () => (visibleBackendAppointments || [])
+      .map((raw) => normalizeBackendAppointment(raw, workspaceTimezone))
+      .filter(Boolean),
+    [visibleBackendAppointments, workspaceTimezone]
   );
 
-  const normalizedLocalAppointments = useMemo(
-    () => normalizeLocalAppointments(leads),
-    [leads]
-  );
+  const normalizedLocalAppointments = useMemo(() => {
+    const backendSignatures = new Set(
+      normalizedBackendAppointments.map(appointmentSignature)
+    );
+    return normalizeLocalAppointments(leads, workspaceTimezone).filter(
+      (appointment) => !backendSignatures.has(appointmentSignature(appointment))
+    );
+  }, [leads, normalizedBackendAppointments, workspaceTimezone]);
 
   const normalizedGoogleEvents = useMemo(
-    () => normalizeGoogleEvents(googleEvents),
-    [googleEvents]
+    () => normalizeGoogleEvents(googleEvents, workspaceTimezone),
+    [googleEvents, workspaceTimezone]
   );
 
   const normalizedBirthdays = useMemo(
@@ -336,6 +414,16 @@ export default function Calendar({
 
   const selectedDay =
     selectedDate && safeDate(selectedDate) ? safeDate(selectedDate) : null;
+
+  useEffect(() => {
+    if (!selectedDay) return;
+    if (
+      selectedDay.getFullYear() !== monthDate.getFullYear() ||
+      selectedDay.getMonth() !== monthDate.getMonth()
+    ) {
+      setMonthDate(startOfMonth(selectedDay));
+    }
+  }, [selectedDay, monthDate]);
 
 
 
@@ -353,14 +441,19 @@ export default function Calendar({
       leadEmail: n.leadEmail || "",
       note: n.text || "",
       dateObj: safeDate(n.createdAt) || selectedDay,
+      dayKey: key,
+      timeKey: n.createdAt
+        ? timeKeyFromParts(appointmentDateTimeParts(n.createdAt, ""))
+        : "",
+      allDay: false,
       done: false,
     }));
 
     return mergeAndSortItems([
-      ...normalizedBackendAppointments.filter((a) => sameDay(a.dateObj, selectedDay)),
-      ...normalizedLocalAppointments.filter((a) => sameDay(a.dateObj, selectedDay)),
-      ...normalizedGoogleEvents.filter((a) => sameDay(a.dateObj, selectedDay)),
-      ...normalizedBirthdays.filter((a) => sameDay(a.dateObj, selectedDay)),
+      ...normalizedBackendAppointments.filter((a) => a.dayKey === key),
+      ...normalizedLocalAppointments.filter((a) => a.dayKey === key),
+      ...normalizedGoogleEvents.filter((a) => a.dayKey === key),
+      ...normalizedBirthdays.filter((a) => a.dayKey === key),
       ...notes,
     ]);
   }, [
@@ -395,22 +488,20 @@ export default function Calendar({
   const countsByDate = useMemo(() => {
     const map = {};
 
-    const add = (d, type) => {
-      const key = dateKey(d);
+    const add = (key, type) => {
+      if (!key) return;
       if (!map[key]) map[key] = { appointment: 0, google: 0, birthday: 0, note: 0 };
       map[key][type] = (map[key][type] || 0) + 1;
     };
 
-    normalizedBackendAppointments.forEach((a) => add(a.dateObj, "appointment"));
-    normalizedLocalAppointments.forEach((a) => add(a.dateObj, "appointment"));
-    normalizedGoogleEvents.forEach((a) => add(a.dateObj, "google"));
-    normalizedBirthdays.forEach((a) => add(a.dateObj, "birthday"));
+    normalizedBackendAppointments.forEach((a) => add(a.dayKey, "appointment"));
+    normalizedLocalAppointments.forEach((a) => add(a.dayKey, "appointment"));
+    normalizedGoogleEvents.forEach((a) => add(a.dayKey, "google"));
+    normalizedBirthdays.forEach((a) => add(a.dayKey, "birthday"));
 
     Object.entries(notesMap || {}).forEach(([key, notes]) => {
-      const d = safeDate(`${key}T12:00:00`);
-      if (!d) return;
       if (!Array.isArray(notes)) return;
-      notes.forEach(() => add(d, "note"));
+      notes.forEach(() => add(key, "note"));
     });
 
     return map;
@@ -471,20 +562,19 @@ export default function Calendar({
   }
 
   const currentMonthStats = useMemo(() => {
-    const inMonth = (d) =>
-      d.getFullYear() === monthDate.getFullYear() &&
-      d.getMonth() === monthDate.getMonth();
+    const prefix = `${monthDate.getFullYear()}-${String(monthDate.getMonth() + 1).padStart(2, "0")}-`;
+    const inMonth = (item) => String(item?.dayKey || "").startsWith(prefix);
 
     return {
-      backendAppointments: normalizedBackendAppointments.filter((a) => inMonth(a.dateObj)).length,
-      googleEvents: normalizedGoogleEvents.filter((a) => inMonth(a.dateObj)).length,
-      birthdays: normalizedBirthdays.filter((a) => inMonth(a.dateObj)).length,
+      backendAppointments: normalizedBackendAppointments.filter(inMonth).length,
+      googleEvents: normalizedGoogleEvents.filter(inMonth).length,
+      birthdays: normalizedBirthdays.filter(inMonth).length,
     };
   }, [monthDate, normalizedBackendAppointments, normalizedGoogleEvents, normalizedBirthdays]);
 
   return (
-    <div style={{ padding: 28, background: BG, minHeight: "100vh", boxSizing: "border-box" }}>
-      <div style={{ display: "grid", gridTemplateColumns: "1fr 1.35fr", gap: 18 }}>
+    <div className="calendar-page" style={{ padding: 28, background: BG, minHeight: "100vh", boxSizing: "border-box" }}>
+      <div className="calendar-layout" style={{ display: "grid", gridTemplateColumns: "1fr 1.35fr", gap: 18 }}>
         {/* LEFT */}
         <div
           style={{
@@ -502,19 +592,63 @@ export default function Calendar({
             </div>
           </div>
 
+          {backendAppointmentsError && (
+            <div
+              role="alert"
+              style={{
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "space-between",
+                gap: 12,
+                padding: "10px 12px",
+                border: "1px solid rgba(230,101,101,.55)",
+                borderRadius: 10,
+                background: "rgba(230,101,101,.08)",
+                color: "#ff9b9b",
+                fontSize: 12,
+                lineHeight: 1.4,
+              }}
+            >
+              <span>Appointments could not be loaded. Existing calendar notes and Google events are still shown.</span>
+              <button
+                type="button"
+                onClick={() => setAppointmentsReloadToken((token) => token + 1)}
+                disabled={loadingBackendAppointments}
+                style={{
+                  flex: "0 0 auto",
+                  border: "1px solid currentColor",
+                  borderRadius: 8,
+                  padding: "6px 9px",
+                  background: "transparent",
+                  color: "inherit",
+                  font: "inherit",
+                  fontWeight: 900,
+                  cursor: loadingBackendAppointments ? "wait" : "pointer",
+                }}
+              >
+                {loadingBackendAppointments ? "Retrying…" : "Retry"}
+              </button>
+            </div>
+          )}
+
           <div
+            className="calendar-stats"
             style={{
               display: "grid",
               gridTemplateColumns: "repeat(3, 1fr)",
               gap: 10,
             }}
           >
-            <MiniStat label="Backend appointments" value={currentMonthStats.backendAppointments} />
+            <MiniStat
+              label="Backend appointments"
+              value={backendAppointmentsError ? "—" : currentMonthStats.backendAppointments}
+            />
             <MiniStat label="Google events" value={currentMonthStats.googleEvents} />
             <MiniStat label="Birthdays" value={currentMonthStats.birthdays} />
           </div>
 
           <div
+            className="calendar-month-grid"
             style={{
               display: "grid",
               gridTemplateColumns: "40px 1fr 40px",
@@ -543,6 +677,7 @@ export default function Calendar({
           </div>
 
           <div
+            className="calendar-days-grid"
             style={{
               display: "grid",
               gridTemplateColumns: "repeat(7, 1fr)",
@@ -580,6 +715,8 @@ export default function Calendar({
 
               return (
                 <button
+                  type="button"
+                  aria-label={`Select ${day.toLocaleDateString()}${counts.appointment ? `, ${counts.appointment} appointments` : ""}`}
                   key={key}
                   onClick={() => setSelectedDate && setSelectedDate(day)}
                   onDoubleClick={() => onDayClick && onDayClick(day)}
@@ -635,9 +772,14 @@ export default function Calendar({
               <LegendPill color={CAKE} label="Birthday" />
             </div>
 
-            <div style={{ color: SUBTEXT, fontSize: 12, fontWeight: 700 }}>
-              Double-click a day to quick add
-            </div>
+            <button
+              type="button"
+              onClick={() => selectedDay && onDayClick && onDayClick(selectedDay)}
+              disabled={!selectedDay}
+              className="calendar-quick-add"
+            >
+              <FaPlus /> Add appointment
+            </button>
           </div>
         </div>
 
@@ -925,6 +1067,7 @@ function TimelineCard({ item, onEditNote, onDeleteNote }) {
 
   return (
     <div
+      className="calendar-timeline-card"
       style={{
         background: "#17191b",
         border: `1px solid ${BORDER}`,

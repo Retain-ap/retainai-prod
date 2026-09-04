@@ -1,7 +1,17 @@
 // src/components/Messages.jsx
-import React, { useEffect, useMemo, useRef, useState } from "react";
+import React, { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { SiWhatsapp } from "react-icons/si";
 import { API_BASE } from "../config";
+import { getWorkspaceEmail } from "../workspaceIdentity";
+import {
+  addDaysToDateKey,
+  buildAppointmentTimestamp,
+  dayKeyNow,
+  formatDateKey,
+  formatTimeKey,
+  getBrowserTimeZone,
+  timeKeyNow,
+} from "./appointmentDateTime";
 import "./Messages.css";
 
 /** ===== THEME ===== */
@@ -124,28 +134,20 @@ const ping = (name) => window.dispatchEvent(new Event(name));
 function pad2(n) {
   return String(n).padStart(2, "0");
 }
-function nextDow(from, targetDow, allowToday = false) {
-  const d = new Date(from.getFullYear(), from.getMonth(), from.getDate());
-  const curr = d.getDay();
-  let delta = (targetDow - curr + 7) % 7;
+function dayOfWeek(dateKey) {
+  const match = String(dateKey || "").match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (!match) return null;
+  return new Date(Date.UTC(Number(match[1]), Number(match[2]) - 1, Number(match[3]))).getUTCDay();
+}
+function nextDowDateKey(fromDateKey, targetDow, allowToday = false) {
+  const currentDow = dayOfWeek(fromDateKey);
+  if (currentDow == null) return "";
+  let delta = (targetDow - currentDow + 7) % 7;
   if (delta === 0 && !allowToday) delta = 7;
-  d.setDate(d.getDate() + delta);
-  return d;
-}
-function thisOrNextDow(from, targetDow) {
-  const d = new Date(from.getFullYear(), from.getMonth(), from.getDate());
-  const curr = d.getDay();
-  let delta = targetDow - curr;
-  if (delta < 0) delta += 7;
-  if (delta === 0) return d;
-  d.setDate(d.getDate() + delta);
-  return d;
-}
-function toISODate(d) {
-  return `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}`;
+  return addDaysToDateKey(fromDateKey, delta);
 }
 
-function parseApptFromText(text) {
+function parseApptFromText(text, timeZone = getBrowserTimeZone()) {
   if (!text) return null;
   const t = String(text).toLowerCase();
 
@@ -184,27 +186,27 @@ function parseApptFromText(text) {
     saturday: 6,
   };
 
-  let targetDate = null;
+  let targetDate = "";
   const now = new Date();
+  const today = dayKeyNow(timeZone, now);
+  const currentTime = timeKeyNow(timeZone, now);
 
   if (/\btoday\b/.test(t)) {
-    targetDate = new Date(now);
+    targetDate = today;
   } else if (/\btomorrow\b/.test(t)) {
-    targetDate = new Date(now);
-    targetDate.setDate(targetDate.getDate() + 1);
+    targetDate = addDaysToDateKey(today, 1);
   } else {
     const dowMatch = t.match(/\b(monday|tuesday|wednesday|thursday|friday|saturday|sunday)\b/i);
     if (dowMatch) {
       const dow = dows[dowMatch[1].toLowerCase()];
+      const suggestedTime = `${pad2(hours ?? 0)}:${pad2(minutes)}`;
+      const canUseToday = suggestedTime > currentTime;
       if (/\bthis\s+(monday|tuesday|wednesday|thursday|friday|saturday|sunday)\b/i.test(t)) {
-        const d = thisOrNextDow(now, dow);
-        targetDate = d < now ? nextDow(now, dow) : d;
+        targetDate = nextDowDateKey(today, dow, canUseToday);
       } else if (/\bnext\s+(monday|tuesday|wednesday|thursday|friday|saturday|sunday)\b/i.test(t)) {
-        targetDate = nextDow(now, dow, false);
+        targetDate = nextDowDateKey(today, dow, false);
       } else {
-        const allowToday =
-          hours != null ? hours > now.getHours() || (hours === now.getHours() && minutes > now.getMinutes()) : false;
-        targetDate = nextDow(now, dow, allowToday);
+        targetDate = nextDowDateKey(today, dow, canUseToday);
       }
     }
   }
@@ -212,7 +214,7 @@ function parseApptFromText(text) {
   if (!targetDate || hours == null) return null;
 
   return {
-    date: toISODate(targetDate),
+    date: targetDate,
     time: `${pad2(hours)}:${pad2(minutes)}`,
   };
 }
@@ -746,6 +748,33 @@ export default function Messages({ user, leads = [], defaultTemplate = "", langu
     if (fromEnv) return fromEnv.replace(/\/$/, "");
     return API_BASE;
   })();
+  const workspaceEmail = getWorkspaceEmail(user);
+  const fallbackAppointmentTimezone = user?.timezone || getBrowserTimeZone();
+  const [appointmentTimezone, setAppointmentTimezone] = useState(fallbackAppointmentTimezone);
+
+  useEffect(() => {
+    let cancelled = false;
+    setAppointmentTimezone(fallbackAppointmentTimezone);
+    if (!API || !workspaceEmail) return undefined;
+
+    fetch(`${API}/api/appointments/${encodeURIComponent(workspaceEmail)}`, {
+      credentials: "include",
+      cache: "no-store",
+      headers: { Accept: "application/json" },
+    })
+      .then(async (response) => {
+        const payload = await response.json().catch(() => ({}));
+        if (!response.ok) throw new Error(payload?.error || "Appointment timezone unavailable");
+        if (!cancelled && payload?.timezone) setAppointmentTimezone(payload.timezone);
+      })
+      .catch(() => {
+        // The explicit browser/profile timezone remains a safe creation fallback.
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [API, fallbackAppointmentTimezone, workspaceEmail]);
 
   /** --- selection & list filter --- */
   const [q, setQ] = useState("");
@@ -789,6 +818,9 @@ export default function Messages({ user, leads = [], defaultTemplate = "", langu
   const [threadSync, setThreadSync] = useState({ ok: true, lastAt: null, error: "" });
   const chatRef = useRef(null);
   const pollTimer = useRef(null);
+  const activeThreadKey = `${workspaceEmail}|${String(lead?.id || "")}`;
+  const activeThreadKeyRef = useRef(activeThreadKey);
+  activeThreadKeyRef.current = activeThreadKey;
 
   const [autoLog, setAutoLog] = useState([]);
   const [showAutoLog, setShowAutoLog] = useState(false);
@@ -803,23 +835,23 @@ export default function Messages({ user, leads = [], defaultTemplate = "", langu
     setSuggestion(null);
     setThreadSync({ ok: true, lastAt: null, error: "" });
 
-    if (user?.email && lead?.id) {
-      const key = AUTO_LOG_KEY(user.email, lead.id);
+    if (workspaceEmail && lead?.id) {
+      const key = AUTO_LOG_KEY(workspaceEmail, lead.id);
       setAutoLog(loadJSON(key, []));
     } else {
       setAutoLog([]);
     }
     setShowAutoLog(false);
-  }, [activeLeadId, user?.email, lead?.id]);
+  }, [activeLeadId, workspaceEmail, lead?.id]);
 
   useEffect(() => {
-    if (!API || !user?.email || !lead?.id) return;
+    if (!API || !workspaceEmail || !lead?.id) return;
     let stop = false;
 
     const tick = async () => {
       try {
         const r = await fetch(
-          `${API}/api/whatsapp/messages?user_email=${encodeURIComponent(user.email)}&lead_id=${encodeURIComponent(
+          `${API}/api/whatsapp/messages?user_email=${encodeURIComponent(workspaceEmail)}&lead_id=${encodeURIComponent(
             lead.id
           )}&_=${Date.now()}`,
           {
@@ -827,14 +859,14 @@ export default function Messages({ user, leads = [], defaultTemplate = "", langu
             cache: "no-store",
             headers: {
               Accept: "application/json",
-              "X-User-Email": String(user.email || "").toLowerCase(),
+              "X-User-Email": workspaceEmail,
             },
           }
         );
         const j = await r.json();
         if (!r.ok) throw new Error(j?.error || `Message sync failed (${r.status})`);
 
-        const normalized = normalizeThreadMessages(j?.messages, user.email, lead.id);
+        const normalized = normalizeThreadMessages(j?.messages, workspaceEmail, lead.id);
         if (!stop) {
           setThread(Array.isArray(normalized) ? normalized : []);
           setThreadSync({ ok: true, lastAt: j?.server_time || new Date().toISOString(), error: "" });
@@ -860,10 +892,10 @@ export default function Messages({ user, leads = [], defaultTemplate = "", langu
       stop = true;
       if (pollTimer.current) clearTimeout(pollTimer.current);
     };
-  }, [API, user?.email, lead?.id]);
+  }, [API, workspaceEmail, lead?.id]);
 
   useEffect(() => {
-    if (!API || !user?.email) return;
+    if (!API || !workspaceEmail) return;
     let stop = false;
     const loadSummaries = async () => {
       try {
@@ -888,7 +920,7 @@ export default function Messages({ user, leads = [], defaultTemplate = "", langu
       stop = true;
       clearInterval(timer);
     };
-  }, [API, user?.email]);
+  }, [API, workspaceEmail]);
 
   useEffect(() => {
     chatRef.current?.scrollTo({ top: 1e9, behavior: "smooth" });
@@ -903,6 +935,16 @@ export default function Messages({ user, leads = [], defaultTemplate = "", langu
     templateStatus: "UNKNOWN",
   });
 
+  useLayoutEffect(() => {
+    setGate({
+      inside24h: false,
+      canFreeText: false,
+      canTemplate: false,
+      templateApproved: false,
+      templateStatus: "UNKNOWN",
+    });
+  }, [activeThreadKey]);
+
   const [templates, setTemplates] = useState([]);
   const [templatesLoading, setTemplatesLoading] = useState(false);
   const [templatesError, setTemplatesError] = useState("");
@@ -911,7 +953,8 @@ export default function Messages({ user, leads = [], defaultTemplate = "", langu
 
   const [health, setHealth] = useState(null);
   useEffect(() => {
-    if (!API) return;
+    setHealth(null);
+    if (!API || !workspaceEmail) return;
     let stop = false;
     const loadHealth = async () => {
       try {
@@ -921,6 +964,7 @@ export default function Messages({ user, leads = [], defaultTemplate = "", langu
           headers: { Accept: "application/json" },
         });
         const j = await r.json();
+        if (!r.ok) throw new Error(j?.error || `WhatsApp health check failed (${r.status})`);
         if (!stop) setHealth(j);
       } catch {}
     };
@@ -930,10 +974,12 @@ export default function Messages({ user, leads = [], defaultTemplate = "", langu
       stop = true;
       clearInterval(timer);
     };
-  }, [API]);
+  }, [API, workspaceEmail]);
 
   useEffect(() => {
-    if (!API) return;
+    let stop = false;
+    setTemplates([]);
+    if (!API || !workspaceEmail) return undefined;
     (async () => {
       setTemplatesLoading(true);
       setTemplatesError("");
@@ -944,6 +990,7 @@ export default function Messages({ user, leads = [], defaultTemplate = "", langu
           headers: { Accept: "application/json" },
         });
         const j = await r.json();
+        if (!r.ok) throw new Error(j?.error || `Template request failed (${r.status})`);
 
         const rows =
           Array.isArray(j?.data?.data) ? j.data.data :
@@ -953,24 +1000,29 @@ export default function Messages({ user, leads = [], defaultTemplate = "", langu
 
         const cleaned = rows.filter((t) => String(t?.name || "").toLowerCase() !== "hello_world");
 
-        setTemplates(
-          cleaned.map((t) => ({
-            name: t.name,
-            languageUI: toUiLang(t.normalized_language || t.language),
-            status: String(t.status || "").toUpperCase(),
-          }))
-        );
+        if (!stop) {
+          setTemplates(
+            cleaned.map((t) => ({
+              name: t.name,
+              languageUI: toUiLang(t.normalized_language || t.language),
+              status: String(t.status || "").toUpperCase(),
+            }))
+          );
+        }
 
-        if (!cleaned.length) {
+        if (!stop && !cleaned.length) {
           setTemplatesError("No WhatsApp templates were found for this account.");
         }
       } catch {
-        setTemplatesError("Could not load WhatsApp templates.");
+        if (!stop) setTemplatesError("Could not load WhatsApp templates.");
       } finally {
-        setTemplatesLoading(false);
+        if (!stop) setTemplatesLoading(false);
       }
     })();
-  }, [API]);
+    return () => {
+      stop = true;
+    };
+  }, [API, workspaceEmail]);
 
   useEffect(() => {
     if (!templates.length) return;
@@ -994,12 +1046,13 @@ export default function Messages({ user, leads = [], defaultTemplate = "", langu
   }, [templates, health, defaultTemplate, language, templateName, templateLangUI]);
 
   const refreshWindow = async (force = false) => {
-    if (!API || !user?.email || !lead?.id) return;
+    if (!API || !workspaceEmail || !lead?.id) return;
+    const requestThreadKey = activeThreadKey;
     const langApi = normApi(toApiLang(templateLangUI));
     const tpl = (templateName || "").trim();
     try {
       const url = `${API}/api/whatsapp/window-state?user_email=${encodeURIComponent(
-        user.email
+        workspaceEmail
       )}&lead_id=${encodeURIComponent(lead.id)}&template_name=${encodeURIComponent(tpl)}&language_code=${encodeURIComponent(
         langApi
       )}${force ? "&force=1" : ""}`;
@@ -1008,10 +1061,12 @@ export default function Messages({ user, leads = [], defaultTemplate = "", langu
         cache: "no-store",
         headers: {
           Accept: "application/json",
-          "X-User-Email": String(user.email || "").toLowerCase(),
+          "X-User-Email": workspaceEmail,
         },
       });
       const d = await r.json();
+      if (!r.ok) throw new Error(d?.error || `Messaging window check failed (${r.status})`);
+      if (activeThreadKeyRef.current !== requestThreadKey) return;
       setGate({
         inside24h: !!d.inside24h,
         canFreeText: !!d.canFreeText,
@@ -1024,7 +1079,7 @@ export default function Messages({ user, leads = [], defaultTemplate = "", langu
 
   useEffect(() => {
     refreshWindow(false);
-  }, [API, user?.email, lead?.id, templateName, templateLangUI]); // eslint-disable-line
+  }, [API, workspaceEmail, lead?.id, templateName, templateLangUI]); // eslint-disable-line
 
   useEffect(() => {
     refreshWindow(true);
@@ -1041,6 +1096,7 @@ export default function Messages({ user, leads = [], defaultTemplate = "", langu
 
   useEffect(() => {
     if (!API) return;
+    let stop = false;
     const name = (templateName || "").trim();
     const languageCode = normApi(toApiLang(templateLangUI));
 
@@ -1063,6 +1119,8 @@ export default function Messages({ user, leads = [], defaultTemplate = "", langu
           { credentials: "include", cache: "no-store", headers: { Accept: "application/json" } }
         );
         const j = await r.json();
+        if (!r.ok) throw new Error(j?.error || `Template details request failed (${r.status})`);
+        if (stop) return;
         const t = (j.templates || [])[0];
 
         if (t) {
@@ -1087,7 +1145,7 @@ export default function Messages({ user, leads = [], defaultTemplate = "", langu
                   business: user?.business,
                   businessType: user?.businessType,
                   location: user?.location,
-                  email: user?.email,
+                  email: workspaceEmail,
                 },
                 lead: {
                   name: lead?.name,
@@ -1114,6 +1172,7 @@ export default function Messages({ user, leads = [], defaultTemplate = "", langu
           setTemplateInfoError("Could not read this template’s placeholders.");
         }
       } catch {
+        if (stop) return;
         setExpectedParams(null);
         setTemplateBodyText("");
         setTemplateExample(null);
@@ -1121,9 +1180,12 @@ export default function Messages({ user, leads = [], defaultTemplate = "", langu
         setParamValues([]);
         setTemplateInfoError("Could not load this template’s details.");
       } finally {
-        setTemplateInfoLoading(false);
+        if (!stop) setTemplateInfoLoading(false);
       }
     })();
+    return () => {
+      stop = true;
+    };
   }, [
     API,
     templateName,
@@ -1139,7 +1201,7 @@ export default function Messages({ user, leads = [], defaultTemplate = "", langu
     user?.business,
     user?.businessType,
     user?.location,
-    user?.email,
+    workspaceEmail,
   ]);
 
   /** --- composer --- */
@@ -1166,7 +1228,7 @@ export default function Messages({ user, leads = [], defaultTemplate = "", langu
 
   const conversationHistory = useMemo(() => buildConversationHistory(thread, 8), [thread]);
 
-  const canSendBase = Boolean(API && user?.email && lead?.id && toE164);
+  const canSendBase = Boolean(API && workspaceEmail && lead?.id && toE164);
 
   const reconcileReplies = async () => {
     if (!API || !lead?.id || reconciling) return;
@@ -1197,15 +1259,16 @@ export default function Messages({ user, leads = [], defaultTemplate = "", langu
 
   /** ---- appointment suggestion state (+ persistence) ---- */
   const [suggestion, setSuggestion] = useState(null);
+  const [suggestionSaving, setSuggestionSaving] = useState(false);
   const [consumedMap, setConsumedMap] = useState({});
 
   useEffect(() => {
-    setConsumedMap(loadJSON(SUG_KEYS(user?.email).consumed, {}));
-  }, [user?.email]);
+    setConsumedMap(loadJSON(SUG_KEYS(workspaceEmail).consumed, {}));
+  }, [workspaceEmail]);
 
   useEffect(() => {
-    const s = parseApptFromText(lastInbound);
-    if (!s || !user?.email || !lead?.id) {
+    const s = parseApptFromText(lastInbound, appointmentTimezone);
+    if (!s || !workspaceEmail || !lead?.id) {
       setSuggestion(null);
       return;
     }
@@ -1215,10 +1278,10 @@ export default function Messages({ user, leads = [], defaultTemplate = "", langu
       return;
     }
     setSuggestion({ ...s });
-  }, [lastInbound, user?.email, lead?.id, consumedMap]);
+  }, [appointmentTimezone, lastInbound, workspaceEmail, lead?.id, consumedMap]);
 
   useEffect(() => {
-    if (!API || !user?.email || !lead?.id) return;
+    if (!API || !workspaceEmail || !lead?.id) return;
     if (!leadSignal) return;
 
     const t = setTimeout(() => {
@@ -1227,7 +1290,7 @@ export default function Messages({ user, leads = [], defaultTemplate = "", langu
 
     return () => clearTimeout(t);
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [leadSignal, API, user?.email, lead?.id, templateName, templateLangUI]);
+  }, [leadSignal, API, workspaceEmail, lead?.id, templateName, templateLangUI]);
 
   useEffect(() => {
     if (!gate.inside24h) return;
@@ -1238,8 +1301,8 @@ export default function Messages({ user, leads = [], defaultTemplate = "", langu
   }, [gate.inside24h, expectedParams]);
 
   const markConsumed = (sug) => {
-    if (!sug || !user?.email || !lead?.id) return;
-    const key = SUG_KEYS(user?.email).consumed;
+    if (!sug || !workspaceEmail || !lead?.id) return;
+    const key = SUG_KEYS(workspaceEmail).consumed;
     const sig = sigForSuggestion(lead.id, sug);
     const next = { ...consumedMap, [sig]: true };
     setConsumedMap(next);
@@ -1258,46 +1321,66 @@ export default function Messages({ user, leads = [], defaultTemplate = "", langu
   };
 
   const onConfirmSuggestion = async () => {
-    if (!suggestion || !user?.email || !lead?.id) return;
+    if (!suggestion || !workspaceEmail || !lead?.id || suggestionSaving) return;
+    const appointmentThreadKey = activeThreadKey;
+    const suggestionSnapshot = { ...suggestion };
+    setSuggestionSaving(true);
     try {
-      const appointment_time = `${suggestion.date}T${suggestion.time}:00`;
+      const appointment_time = buildAppointmentTimestamp(
+        suggestionSnapshot.date,
+        suggestionSnapshot.time
+      );
+      if (!appointment_time) throw new Error("The suggested appointment date or time is invalid.");
 
       const payload = {
         lead_email: lead?.email || "",
         lead_first_name: FIRSTNAME(lead?.name || "") || "Client",
         user_name: user?.name || "",
-        user_email: user?.email,
+        user_email: workspaceEmail,
         business_name: user?.business || user?.businessType || "",
         appointment_time,
+        timezone: appointmentTimezone,
         appointment_location: lead?.location || user?.location || "TBD",
         duration: 30,
         notes: "Auto-created from WhatsApp confirmation",
         lead_id: String(lead?.id || ""),
-        status: "booked",
+        status: "scheduled",
       };
 
-      const res = await fetch(`${API}/api/appointments/${encodeURIComponent(user.email)}`, {
+      const res = await fetch(`${API}/api/appointments/${encodeURIComponent(workspaceEmail)}`, {
         method: "POST",
         credentials: "include",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(payload),
       });
 
-      const j = await res.json();
+      const j = await res.json().catch(() => ({}));
       if (!res.ok) {
-        setBanner(j?.error || `Failed to add appointment (${res.status})`);
+        if (activeThreadKeyRef.current === appointmentThreadKey) {
+          setBanner(j?.error || `Failed to add appointment (${res.status})`);
+        }
         return;
       }
 
-      setBanner(`Appointment added for ${suggestion.date} at ${suggestion.time}.`);
-      markConsumed(suggestion);
+      if (activeThreadKeyRef.current !== appointmentThreadKey) {
+        const consumedKey = SUG_KEYS(workspaceEmail).consumed;
+        const existing = loadJSON(consumedKey, {});
+        saveJSON(consumedKey, {
+          ...existing,
+          [sigForSuggestion(lead.id, suggestionSnapshot)]: true,
+        });
+        ping("appointments:changed");
+        return;
+      }
+      setBanner(`Appointment added for ${suggestionSnapshot.date} at ${suggestionSnapshot.time}.`);
+      markConsumed(suggestionSnapshot);
       setSuggestion(null);
       ping("appointments:changed");
 
       setTimeout(async () => {
         try {
           const r = await fetch(
-            `${API}/api/whatsapp/messages?user_email=${encodeURIComponent(user.email)}&lead_id=${encodeURIComponent(
+            `${API}/api/whatsapp/messages?user_email=${encodeURIComponent(workspaceEmail)}&lead_id=${encodeURIComponent(
               lead.id
             )}&_=${Date.now()}`,
             {
@@ -1305,30 +1388,38 @@ export default function Messages({ user, leads = [], defaultTemplate = "", langu
               cache: "no-store",
               headers: {
                 Accept: "application/json",
-                "X-User-Email": String(user.email || "").toLowerCase(),
+                "X-User-Email": workspaceEmail,
               },
             }
           );
           const jj = await r.json();
-          const normalized = normalizeThreadMessages(jj?.messages, user.email, lead.id);
+          if (!r.ok || activeThreadKeyRef.current !== appointmentThreadKey) return;
+          const normalized = normalizeThreadMessages(jj?.messages, workspaceEmail, lead.id);
           setThread(Array.isArray(normalized) ? normalized : []);
         } catch {}
       }, 250);
     } catch (e) {
-      setBanner(e.message || "Failed to add appointment.");
+      if (activeThreadKeyRef.current === appointmentThreadKey) {
+        setBanner(e.message || "Failed to add appointment.");
+      }
+    } finally {
+      setSuggestionSaving(false);
     }
   };
 
   const onSend = async () => {
     if (!canSendBase || loading) return;
+    const sendThreadKey = activeThreadKey;
+    const isStillActiveThread = () => activeThreadKeyRef.current === sendThreadKey;
     const text = input.trim();
+    let successfulTemplateRender = null;
     setLoading(true);
     setBanner(null);
 
     try {
       const payload = {
         to: toE164,
-        user_email: user.email,
+        user_email: workspaceEmail,
         lead_id: lead.id,
       };
 
@@ -1379,10 +1470,11 @@ export default function Messages({ user, leads = [], defaultTemplate = "", langu
 
         const rendered = renderTemplatePreview(templateBodyText, paramValues).trim();
         if (rendered) {
-          pushTemplateRenderCache(user.email, lead.id, rendered, {
+          successfulTemplateRender = {
+            rendered,
             template_name: templateName,
             language_code: normApi(toApiLang(templateLangUI)),
-          });
+          };
 
           setThread((prev) => [
             ...prev,
@@ -1406,11 +1498,26 @@ export default function Messages({ user, leads = [], defaultTemplate = "", langu
       const data = await res.json();
 
       if (!res.ok || !data.ok) {
-        setBanner(data?.error || `Send failed (${res.status})`);
-        setThread((prev) => prev.filter((m) => !m?._optimistic));
+        if (isStillActiveThread()) {
+          setBanner(data?.error || `Send failed (${res.status})`);
+          setThread((prev) => prev.filter((m) => !m?._optimistic));
+        }
         return;
       }
 
+      if (successfulTemplateRender) {
+        pushTemplateRenderCache(
+          workspaceEmail,
+          lead.id,
+          successfulTemplateRender.rendered,
+          {
+            template_name: successfulTemplateRender.template_name,
+            language_code: successfulTemplateRender.language_code,
+          }
+        );
+      }
+
+      if (!isStillActiveThread()) return;
       setBanner(data.mode === "template" ? "Template sent successfully." : null);
       localStorage.setItem("retainai:onboarding-test-message", "1");
       setInput("");
@@ -1422,7 +1529,7 @@ export default function Messages({ user, leads = [], defaultTemplate = "", langu
       setTimeout(async () => {
         try {
           const r = await fetch(
-            `${API}/api/whatsapp/messages?user_email=${encodeURIComponent(user.email)}&lead_id=${encodeURIComponent(
+            `${API}/api/whatsapp/messages?user_email=${encodeURIComponent(workspaceEmail)}&lead_id=${encodeURIComponent(
               lead.id
             )}&_=${Date.now()}`,
             {
@@ -1430,18 +1537,23 @@ export default function Messages({ user, leads = [], defaultTemplate = "", langu
               cache: "no-store",
               headers: {
                 Accept: "application/json",
-                "X-User-Email": String(user.email || "").toLowerCase(),
+                "X-User-Email": workspaceEmail,
               },
             }
           );
           const j = await r.json();
-          const normalized = normalizeThreadMessages(j?.messages, user.email, lead.id);
-          setThread(Array.isArray(normalized) ? normalized : []);
+          if (!r.ok) return;
+          const normalized = normalizeThreadMessages(j?.messages, workspaceEmail, lead.id);
+          if (isStillActiveThread()) {
+            setThread(Array.isArray(normalized) ? normalized : []);
+          }
         } catch {}
       }, 250);
     } catch (e) {
-      setBanner(e.message || "Send failed.");
-      setThread((prev) => prev.filter((m) => !m?._optimistic));
+      if (isStillActiveThread()) {
+        setBanner(e.message || "Send failed.");
+        setThread((prev) => prev.filter((m) => !m?._optimistic));
+      }
     } finally {
       setLoading(false);
     }
@@ -1495,7 +1607,7 @@ export default function Messages({ user, leads = [], defaultTemplate = "", langu
   useEffect(() => {
     const handler = (e) => {
       const items = (e?.detail?.items || []).filter(Boolean);
-      if (!items.length || !lead || !user?.email) return;
+      if (!items.length || !lead || !workspaceEmail) return;
 
       const leadEmail = String(lead.email || "").toLowerCase();
       const leadPhone = digits(lead.whatsapp || lead.phone);
@@ -1518,7 +1630,7 @@ export default function Messages({ user, leads = [], defaultTemplate = "", langu
 
       setThread((prev) => [...prev, ...bubbles]);
 
-      const key = AUTO_LOG_KEY(user.email, lead.id);
+      const key = AUTO_LOG_KEY(workspaceEmail, lead.id);
       setAutoLog((prev) => {
         const next = [...prev, ...matched];
         try {
@@ -1530,7 +1642,7 @@ export default function Messages({ user, leads = [], defaultTemplate = "", langu
 
     window.addEventListener("app:message-sent", handler);
     return () => window.removeEventListener("app:message-sent", handler);
-  }, [lead, user?.email]);
+  }, [lead, workspaceEmail]);
 
   /** --- UI when no leads --- */
   if (!Array.isArray(leads) || !leads.length) {
@@ -2124,20 +2236,24 @@ export default function Messages({ user, leads = [], defaultTemplate = "", langu
             >
               <span style={{ color: C.accent, fontWeight: 900 }}>Suggested appointment</span>
               <span style={{ color: C.text, fontWeight: 800 }}>
-                {new Date(`${suggestion.date}T${suggestion.time}:00`).toLocaleString([], {
+                {formatDateKey(suggestion.date, {
                   weekday: "short",
                   month: "short",
                   day: "numeric",
-                  hour: "2-digit",
-                  minute: "2-digit",
-                })}
+                })}{" "}
+                at {formatTimeKey(suggestion.time)}
               </span>
               <div style={{ marginLeft: "auto", display: "flex", gap: 8 }}>
-                <button style={btn("primary")} onClick={onConfirmSuggestion}>
-                  Add to Calendar
+                <button
+                  style={{ ...btn("primary"), opacity: suggestionSaving ? 0.65 : 1 }}
+                  onClick={onConfirmSuggestion}
+                  disabled={suggestionSaving}
+                >
+                  {suggestionSaving ? "Adding…" : "Add to Calendar"}
                 </button>
                 <button
                   style={btn("ghost")}
+                  disabled={suggestionSaving}
                   onClick={() => {
                     markConsumed(suggestion);
                     setSuggestion(null);

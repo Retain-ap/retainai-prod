@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from "react";
+import React, { useCallback, useEffect, useState } from "react";
 import { apiUrl } from "../apiBase";
 
 export default function TeamSettings({ user }) {
@@ -6,15 +6,16 @@ export default function TeamSettings({ user }) {
   const [email, setEmail] = useState("");
   const [role, setRole] = useState("member");
   const [inviteLink, setInviteLink] = useState(null);
-  async function loadMembers() {
+  const loadMembers = useCallback(async () => {
     const res = await fetch(apiUrl("team/members"), {
       credentials: "include",
       headers: { "X-User-Email": user?.email || "" },
     });
+    if (!res.ok) throw new Error("Could not load team members.");
     const data = await res.json();
     setMembers(data.members || []);
-  }
-  useEffect(() => { loadMembers(); }, []);
+  }, [user?.email]);
+  useEffect(() => { loadMembers().catch(() => setMembers([])); }, [loadMembers]);
 
   async function invite() {
     const res = await fetch(apiUrl("team/invite"), {

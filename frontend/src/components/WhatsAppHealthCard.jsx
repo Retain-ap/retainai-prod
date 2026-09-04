@@ -109,7 +109,12 @@ export default function WhatsAppHealthCard({ user }) {
   }, [refresh]);
 
   const connected = useMemo(
-    () => Boolean(health?.has_token && health?.has_phone_id && health?.has_waba_id),
+    () => Boolean(
+      health?.has_token &&
+      health?.has_phone_id &&
+      health?.has_waba_id &&
+      health?.graph_ok === true
+    ),
     [health]
   );
 
@@ -118,7 +123,7 @@ export default function WhatsAppHealthCard({ user }) {
     inbound?.last_matched_inbound_at || health?.last_matched_inbound_at
   );
   const unmatchedCount = Number(inbound?.unmatched_count ?? health?.unmatched_inbound_count ?? 0);
-  const ready = connected && webhookSeen && unmatchedCount === 0;
+  const ready = connected && approvedTemplates > 0 && webhookSeen && unmatchedCount === 0;
 
   const saveConnection = async (event) => {
     event.preventDefault();
@@ -193,6 +198,9 @@ export default function WhatsAppHealthCard({ user }) {
           <div className={health?.has_waba_id ? "ready" : "missing"}>
             <span /> Business account ID
           </div>
+          <div className={health?.graph_ok === true ? "ready" : "missing"}>
+            <span /> Meta API credentials validated
+          </div>
           <div className={approvedTemplates > 0 ? "ready" : "missing"}><span /> Approved template detected ({approvedTemplates})</div>
           <div className={webhookSeen ? "ready" : "missing"}>
             <span /> Webhook receiving events
@@ -227,6 +235,12 @@ export default function WhatsAppHealthCard({ user }) {
         {unmatchedCount > 0 ? (
           <div className="account-inline-message error">
             {unmatchedCount} inbound repl{unmatchedCount === 1 ? "y was" : "ies were"} received but could not be matched to a lead. Make sure the lead phone number includes the correct country code.
+          </div>
+        ) : null}
+
+        {health && health.graph_ok !== true && health.graph_error && !loading ? (
+          <div className="account-inline-message error">
+            Meta could not validate this connection: {health.graph_error}
           </div>
         ) : null}
 

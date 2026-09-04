@@ -12,6 +12,20 @@ import {
   FaClock,
 } from "react-icons/fa";
 import { API_BASE } from "../apiBase";
+import { getWorkspaceEmail } from "../workspaceIdentity";
+import {
+  addDaysToDateKey,
+  appointmentDateTimeParts,
+  buildAppointmentTimestamp,
+  calendarDayDistance,
+  compareAppointmentToNow,
+  dateKeyFromParts,
+  dayKeyNow,
+  formatDateKey,
+  getBrowserTimeZone,
+  parseAppointmentDateTime,
+  timeKeyFromParts,
+} from "./appointmentDateTime";
 import "./Appointments.css";
 
 /* === THEME === */
@@ -32,30 +46,8 @@ const BACKEND_APPT_COUNTS_KEY = (email) =>
   `retainai_backend_appt_counts_${String(email || "").trim().toLowerCase() || "anon"}`;
 
 /* ===== Helpers ===== */
-const pad2 = (n) => String(n).padStart(2, "0");
-
-function startOfDay(d) {
-  const x = new Date(d);
-  x.setHours(0, 0, 0, 0);
-  return x;
-}
-
-function isSameDay(a, b) {
-  return (
-    a.getFullYear() === b.getFullYear() &&
-    a.getMonth() === b.getMonth() &&
-    a.getDate() === b.getDate()
-  );
-}
-
 function parseDateSafe(v) {
-  if (!v) return null;
-  try {
-    const d = new Date(v);
-    return Number.isNaN(d.getTime()) ? null : d;
-  } catch {
-    return null;
-  }
+  return parseAppointmentDateTime(v);
 }
 
 function normText(v) {
@@ -177,17 +169,24 @@ function assignStableRIDs(rows, slotMap) {
   return { rows: copy, nextSlots };
 }
 
-function normalizeBackend(raw) {
+function normalizeBackend(raw, fallbackTimezone = "") {
   const dt = parseDateSafe(raw?.appointment_time);
-  if (!dt) return null;
+  const timeZone = raw?.timezone || fallbackTimezone;
+  const parts = appointmentDateTimeParts(raw?.appointment_time, timeZone);
+  if (!dt || !parts) return null;
+  const status = normText(raw?.status).replace(/-/g, "_");
 
   return {
     _backend: raw,
     _rid: getRID(raw),
     title: raw.title || raw.lead_first_name || raw.business_name || "Appointment",
-    date: `${dt.getFullYear()}-${pad2(dt.getMonth() + 1)}-${pad2(dt.getDate())}`,
-    time: `${pad2(dt.getHours())}:${pad2(dt.getMinutes())}`,
-    done: !!(raw.done ?? raw.completed ?? raw.is_done),
+    date: dateKeyFromParts(parts),
+    time: timeKeyFromParts(parts),
+    timeZone,
+    sortKey: dt.getTime(),
+    status,
+    cancelled: status === "cancelled" || status === "canceled",
+    done: !!(raw.done ?? raw.completed ?? raw.is_done) || status === "completed",
     notes: raw.notes || "",
     lead: {
       id: raw.lead_id || "",
@@ -202,34 +201,61 @@ function normalizeBackend(raw) {
   };
 }
 
-function getAppointments(leads = [], backendRows = []) {
+function getAppointments(leads = [], backendRows = [], fallbackTimezone = "") {
   const list = [];
   const now = new Date();
 
+  const normalizedSignature = (appointment) =>
+    [
+      safe(appointment?.lead?.id || appointment?.lead?.email || appointment?.lead_id || appointment?.lead_email)
+        .trim()
+        .toLowerCase(),
+      `${safe(appointment?.date)}T${safe(appointment?.time || "00:00")}`.slice(0, 16),
+      safe(appointment?.title || "Appointment").trim().toLowerCase(),
+    ].join("|");
+
+  const backendSignatures = new Set();
+  (backendRows || []).forEach((appointment) => {
+    if (appointment.cancelled) return;
+    const dt = parseDateSafe(appointment?._backend?.appointment_time) ||
+      parseDateSafe(`${appointment.date}T${appointment.time || "00:00"}`);
+    if (!dt) return;
+    const normalized = {
+      ...appointment,
+      sortKey: Number.isFinite(appointment.sortKey) ? appointment.sortKey : dt.getTime(),
+      isOverdue:
+        !appointment.done &&
+        compareAppointmentToNow(
+          appointment.date,
+          appointment.time,
+          appointment.timeZone || fallbackTimezone,
+          now
+        ) < 0,
+    };
+    backendSignatures.add(normalizedSignature(normalized));
+    list.push(normalized);
+  });
+
   (leads || []).forEach((lead) =>
     (lead.appointments || []).forEach((app, idx) => {
-      const dt = new Date(`${app.date}T${app.time || "00:00"}`);
-      list.push({
+      const dt = parseDateSafe(`${app.date}T${app.time || "00:00"}`);
+      if (!dt) return;
+      const normalized = {
         ...app,
         _local: true,
         _localKey:
           app._localKey ||
           `${String(lead.id)}|${String(app.title)}|${String(app.date)}|${String(app.time || "")}|${idx}`,
         lead,
+        timeZone: fallbackTimezone,
         sortKey: dt.getTime(),
-        isOverdue: !app.done && dt < now,
-      });
+        isOverdue:
+          !app.done &&
+          compareAppointmentToNow(app.date, app.time || "00:00", fallbackTimezone, now) < 0,
+      };
+      if (!backendSignatures.has(normalizedSignature(normalized))) list.push(normalized);
     })
   );
-
-  (backendRows || []).forEach((a) => {
-    const dt = new Date(`${a.date}T${a.time || "00:00"}`);
-    list.push({
-      ...a,
-      sortKey: dt.getTime(),
-      isOverdue: !a.done && dt < now,
-    });
-  });
 
   list.sort((a, b) => a.sortKey - b.sortKey);
   return list;
@@ -240,20 +266,22 @@ function categorize(appointments) {
   const now = new Date();
 
   appointments.forEach((a) => {
-    const when = new Date(`${a.date}T${a.time || "00:00"}`);
     if (a.done) {
       buckets.done.push(a);
       return;
     }
-    if (when < now) {
-      buckets.overdue.push(a);
-      return;
-    }
-    if (isSameDay(when, now)) {
+    const todayKey = dayKeyNow(a.timeZone, now);
+    const relative = compareAppointmentToNow(a.date, a.time || "00:00", a.timeZone, now);
+    if (!Number.isFinite(relative)) return;
+    if (a.date === todayKey && relative >= 0) {
       buckets.today.push(a);
       return;
     }
-    const diff = Math.ceil((startOfDay(when) - startOfDay(now)) / 86400000);
+    if (relative < 0) {
+      buckets.overdue.push(a);
+      return;
+    }
+    const diff = calendarDayDistance(todayKey, a.date);
     if (diff <= 7) buckets.next7.push(a);
     else buckets.later.push(a);
   });
@@ -262,9 +290,7 @@ function categorize(appointments) {
 }
 
 function monthLabel(dateStr) {
-  const d = parseDateSafe(dateStr);
-  if (!d) return "";
-  return d.toLocaleDateString([], { month: "short", day: "numeric", year: "numeric" });
+  return formatDateKey(dateStr, { month: "short", day: "numeric", year: "numeric" });
 }
 
 function statusMeta(appt) {
@@ -281,19 +307,24 @@ function getLeadDisplayName(lead) {
   return lead?.name || lead?.email || "Lead";
 }
 
-function dateWeeksFromNow(weeks) {
-  const date = new Date();
-  date.setDate(date.getDate() + (weeks * 7));
-  return `${date.getFullYear()}-${pad2(date.getMonth() + 1)}-${pad2(date.getDate())}`;
+function dateWeeksFromNow(weeks, timeZone) {
+  return addDaysToDateKey(dayKeyNow(timeZone), weeks * 7);
 }
 
 export default function Appointments({ user, leads = [], setLeads }) {
   const [backendAppointments, setBackendAppointments] = useState([]);
+  const [backendWorkspace, setBackendWorkspace] = useState("");
+  const [workspaceTimezone, setWorkspaceTimezone] = useState("");
+  const [loadingAppointments, setLoadingAppointments] = useState(false);
+  const [appointmentsError, setAppointmentsError] = useState("");
+  const [actionError, setActionError] = useState("");
+  const [busyAction, setBusyAction] = useState("");
   const [hiddenIds, setHiddenIds] = useState({});
   const [doneOverride, setDoneOverride] = useState({});
   const [timeOverride, setTimeOverride] = useState({});
   const [slotMap, setSlotMap] = useState({});
   const slotMapRef = useRef({});
+  const activeWorkspaceRef = useRef("");
   const capturedReminderRef = useRef(false);
 
   const [search, setSearch] = useState("");
@@ -319,7 +350,22 @@ export default function Appointments({ user, leads = [], setLeads }) {
     notes: "",
   });
 
-  const userEmail = user?.org_id || user?.email || "";
+  const userEmail = getWorkspaceEmail(user);
+  activeWorkspaceRef.current = userEmail;
+  const effectiveTimezone =
+    workspaceTimezone || user?.timezone || getBrowserTimeZone();
+  const freshAppointmentForm = () => {
+    const suggested = new Date(Date.now() + 30 * 60 * 1000);
+    suggested.setMinutes(Math.ceil(suggested.getMinutes() / 15) * 15, 0, 0);
+    const parts = appointmentDateTimeParts(suggested, effectiveTimezone);
+    return {
+      leadId: "",
+      title: "",
+      date: dateKeyFromParts(parts),
+      time: timeKeyFromParts(parts),
+      notes: "",
+    };
+  };
   const suggestedRebookWeeks = useMemo(() => {
     const business = String(user?.businessType || user?.lineOfBusiness || user?.business || "").toLowerCase();
     if (/barber|hair|nail|salon|beauty|spa/.test(business)) return 4;
@@ -340,6 +386,10 @@ export default function Appointments({ user, leads = [], setLeads }) {
     setTimeOverride(loadedTime);
     setSlotMap(loadedSlots);
     slotMapRef.current = loadedSlots;
+    setBackendWorkspace("");
+    setWorkspaceTimezone("");
+    setAppointmentsError("");
+    setActionError("");
   }, [userEmail]);
 
   useEffect(() => {
@@ -397,19 +447,39 @@ export default function Appointments({ user, leads = [], setLeads }) {
   }
 
   const fetchBackend = async () => {
-    if (!user?.email) return;
+    const requestedWorkspace = userEmail;
+    if (!requestedWorkspace) {
+      setBackendAppointments([]);
+      setBackendWorkspace("");
+      setWorkspaceTimezone("");
+      setAppointmentsError("");
+      setLoadingAppointments(false);
+      return [];
+    }
+    setLoadingAppointments(true);
     try {
-      const r = await fetch(`${API_BASE}/api/appointments/${encodeURIComponent(user.email)}`, {
+      const r = await fetch(`${API_BASE}/api/appointments/${encodeURIComponent(requestedWorkspace)}`, {
         credentials: "include",
         headers: { Accept: "application/json" },
       });
       const j = await r.json().catch(() => ({}));
-      const rows = Array.isArray(j?.appointments) ? j.appointments : [];
+      if (!r.ok) throw new Error(j?.error || `Appointments request failed (${r.status})`);
+      if (!Array.isArray(j?.appointments)) throw new Error("Appointments response was incomplete");
+      const rows = j.appointments;
+      if (activeWorkspaceRef.current !== requestedWorkspace) return null;
       setBackendAppointments(rows);
+      setBackendWorkspace(requestedWorkspace);
+      setWorkspaceTimezone(j?.timezone || "");
+      setAppointmentsError("");
       syncBackendCountsToApp(rows);
-    } catch {
-      setBackendAppointments([]);
-      syncBackendCountsToApp([]);
+      return rows;
+    } catch (error) {
+      if (activeWorkspaceRef.current === requestedWorkspace) {
+        setAppointmentsError(error?.message || "Appointments could not be loaded");
+      }
+      return null;
+    } finally {
+      if (activeWorkspaceRef.current === requestedWorkspace) setLoadingAppointments(false);
     }
   };
 
@@ -429,11 +499,12 @@ export default function Appointments({ user, leads = [], setLeads }) {
       document.removeEventListener("visibilitychange", onVis);
     };
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [user?.email]);
+  }, [userEmail]);
 
   const assignedBackend = useMemo(() => {
-    return assignStableRIDs(backendAppointments || [], slotMapRef.current || {});
-  }, [backendAppointments]);
+    const rows = backendWorkspace === userEmail ? backendAppointments : [];
+    return assignStableRIDs(rows, slotMapRef.current || {});
+  }, [backendAppointments, backendWorkspace, userEmail]);
 
   useEffect(() => {
     const oldStr = JSON.stringify(slotMapRef.current || {});
@@ -457,13 +528,13 @@ export default function Appointments({ user, leads = [], setLeads }) {
   }, [assignedBackend.rows, hiddenIds, doneOverride, timeOverride]);
 
   const normalizedBackend = useMemo(
-    () => effectiveBackend.map((r) => normalizeBackend(r)).filter(Boolean),
-    [effectiveBackend]
+    () => effectiveBackend.map((r) => normalizeBackend(r, effectiveTimezone)).filter(Boolean),
+    [effectiveBackend, effectiveTimezone]
   );
 
   const allAppointments = useMemo(
-    () => getAppointments(leads, normalizedBackend),
-    [leads, normalizedBackend]
+    () => getAppointments(leads, normalizedBackend, effectiveTimezone),
+    [leads, normalizedBackend, effectiveTimezone]
   );
 
   useEffect(() => {
@@ -472,7 +543,17 @@ export default function Appointments({ user, leads = [], setLeads }) {
     if (params.get("capture") !== "1") return;
     const now = Date.now();
     const mostRecent = allAppointments
-      .filter((appointment) => !appointment.done && appointment.sortKey <= now)
+      .filter((appointment) =>
+        !appointment.done &&
+        (appointment._backend
+          ? appointment.sortKey <= now
+          : compareAppointmentToNow(
+              appointment.date,
+              appointment.time || "00:00",
+              appointment.timeZone || effectiveTimezone,
+              new Date(now)
+            ) <= 0)
+      )
       .sort((a, b) => b.sortKey - a.sortKey)[0];
     if (mostRecent) {
       capturedReminderRef.current = true;
@@ -503,7 +584,7 @@ export default function Appointments({ user, leads = [], setLeads }) {
 
   const buckets = useMemo(() => categorize(filtered), [filtered]);
 
-  const withSeconds = (date, time) => `${date}T${time || "00:00"}:00`;
+  const withSeconds = (date, time) => buildAppointmentTimestamp(date, time);
   const serverIdOf = (appt) => getRealIdField(appt?._backend) ?? null;
   const isBackend = (appt) => Boolean(appt._backend);
 
@@ -519,6 +600,17 @@ export default function Appointments({ user, leads = [], setLeads }) {
     const sid = serverIdOf(appt);
     setDoneOverride((m) => ({ ...m, [rid]: prevVal, ...(sid ? { [sid]: prevVal } : {}) }));
     ping("appointments:overrides-updated");
+  };
+
+  const removeDoneOverrides = (appt) => {
+    const rid = appt._rid;
+    const sid = serverIdOf(appt);
+    setDoneOverride((current) => {
+      const next = { ...current };
+      delete next[rid];
+      if (sid) delete next[sid];
+      return next;
+    });
   };
 
   const updateTimeOverrides = (appt, iso) => {
@@ -565,7 +657,7 @@ export default function Appointments({ user, leads = [], setLeads }) {
 
   async function apiUpdateBackend(appt, updates) {
     const sid = serverIdOf(appt);
-    if (!user?.email || !sid) return false;
+    if (!userEmail || !sid) throw new Error("This appointment is missing its server ID.");
 
     const body = {
       ...updates,
@@ -581,120 +673,117 @@ export default function Appointments({ user, leads = [], setLeads }) {
       appointment_time: updates.appointment_time,
       date: updates.appointment_time ? updates.appointment_time.slice(0, 10) : undefined,
       time: updates.appointment_time ? updates.appointment_time.slice(11, 16) : undefined,
+      timezone: updates.timezone || appt.timeZone || effectiveTimezone,
     };
 
-    try {
-      const putRes = await fetch(
-        `${API_BASE}/api/appointments/${encodeURIComponent(user.email)}/${encodeURIComponent(
-          String(sid)
-        )}`,
-        {
-          method: "PUT",
-          credentials: "include",
-          headers: { "Content-Type": "application/json", Accept: "application/json" },
-          body: JSON.stringify(body),
-        }
-      );
-      if (putRes.ok) return true;
-    } catch {}
-
-    try {
-      const patchRes = await fetch(
-        `${API_BASE}/api/appointments/${encodeURIComponent(user.email)}/${encodeURIComponent(
-          String(sid)
-        )}`,
-        {
-          method: "PATCH",
-          credentials: "include",
-          headers: { "Content-Type": "application/json", Accept: "application/json" },
-          body: JSON.stringify(body),
-        }
-      );
-      return patchRes.ok;
-    } catch {
-      return false;
+    const response = await fetch(
+      `${API_BASE}/api/appointments/${encodeURIComponent(userEmail)}/${encodeURIComponent(
+        String(sid)
+      )}`,
+      {
+        method: "PUT",
+        credentials: "include",
+        headers: { "Content-Type": "application/json", Accept: "application/json" },
+        body: JSON.stringify(body),
+      }
+    );
+    const payload = await response.json().catch(() => ({}));
+    if (!response.ok) {
+      throw new Error(payload?.error || `Appointment update failed (${response.status})`);
     }
+    return payload?.appointment || true;
   }
 
   async function apiDeleteBackend(appt) {
     const sid = serverIdOf(appt);
-    if (!user?.email || !sid) return false;
+    if (!userEmail || !sid) throw new Error("This appointment is missing its server ID.");
 
-    try {
-      const res = await fetch(
-        `${API_BASE}/api/appointments/${encodeURIComponent(user.email)}/${encodeURIComponent(
-          String(sid)
-        )}`,
-        {
-          method: "DELETE",
-          credentials: "include",
-        }
-      );
-      return res.ok;
-    } catch {
-      return false;
+    const response = await fetch(
+      `${API_BASE}/api/appointments/${encodeURIComponent(userEmail)}/${encodeURIComponent(
+        String(sid)
+      )}`,
+      {
+        method: "DELETE",
+        credentials: "include",
+        headers: { Accept: "application/json" },
+      }
+    );
+    const payload = await response.json().catch(() => ({}));
+    if (!response.ok) {
+      throw new Error(payload?.error || `Appointment deletion failed (${response.status})`);
     }
+    return true;
   }
 
   async function persistLocalLeads(nextLeads) {
-    if (!userEmail) return;
-    try {
-      await fetch(`${API_BASE}/api/leads`, {
-        method: "POST",
-        credentials: "include",
-        headers: {
-          "Content-Type": "application/json",
-          Accept: "application/json",
-          "X-User-Email": userEmail,
-        },
-        body: JSON.stringify({ leads: nextLeads }),
-      });
-    } catch {}
+    if (!userEmail) throw new Error("Your workspace session is unavailable.");
+    const response = await fetch(`${API_BASE}/api/leads`, {
+      method: "POST",
+      credentials: "include",
+      headers: {
+        "Content-Type": "application/json",
+        Accept: "application/json",
+      },
+      body: JSON.stringify({ leads: nextLeads }),
+    });
+    const payload = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(payload?.error || "Customer record update failed.");
   }
 
-  function updateLocalLeadAppointments(mutator) {
-    setLeads((prev) => {
-      const safePrev = Array.isArray(prev) ? prev : [];
-      const next = mutator(safePrev);
-      persistLocalLeads(next);
-      return next;
-    });
+  async function updateLocalLeadAppointments(mutator) {
+    if (typeof setLeads !== "function") throw new Error("Customer records are unavailable.");
+    const safeCurrent = Array.isArray(leads) ? leads : [];
+    const next = mutator(safeCurrent);
+    await persistLocalLeads(next);
+    setLeads(next);
+    return next;
   }
 
   async function toggleDone(appt) {
     const markingComplete = !appt.done;
+    const actionId = `done:${keyFor(appt)}`;
+    if (busyAction) return;
+    setBusyAction(actionId);
+    setActionError("");
     if (isBackend(appt)) {
       const newDone = markingComplete;
       updateDoneOverrides(appt, newDone);
-
-      const ok = await apiUpdateBackend(appt, { done: newDone, title: appt.title });
-      if (serverIdOf(appt) && !ok) {
+      try {
+        await apiUpdateBackend(appt, { done: newDone, title: appt.title });
+        removeDoneOverrides(appt);
+        await fetchBackend();
+        ping("appointments:changed");
+        if (newDone) openVisitNote({ ...appt, done: true });
+      } catch (error) {
         rollbackDoneOverrides(appt, !newDone);
+        setActionError(error?.message || "The appointment could not be updated.");
+      } finally {
+        setBusyAction("");
       }
-
-      await fetchBackend();
-      ping("appointments:changed");
-      if (newDone) openVisitNote(appt);
       return;
     }
-
-    updateLocalLeadAppointments((prev) =>
-      prev.map((l) => {
-        if (String(l.id) !== String(appt.lead.id)) return l;
-        return {
-          ...l,
-          appointments: (l.appointments || []).map((x) =>
-            String(x._localKey || `${l.id}|${x.title}|${x.date}|${x.time || ""}`) ===
-            String(appt._localKey)
-              ? { ...x, done: !x.done }
-              : x
-          ),
-        };
-      })
-    );
-
-    ping("appointments:changed");
-    if (markingComplete) openVisitNote(appt);
+    try {
+      await updateLocalLeadAppointments((prev) =>
+        prev.map((l) => {
+          if (String(l.id) !== String(appt.lead.id)) return l;
+          return {
+            ...l,
+            appointments: (l.appointments || []).map((x) =>
+              String(x._localKey || `${l.id}|${x.title}|${x.date}|${x.time || ""}`) ===
+              String(appt._localKey)
+                ? { ...x, done: !x.done }
+                : x
+            ),
+          };
+        })
+      );
+      ping("appointments:changed");
+      if (markingComplete) openVisitNote({ ...appt, done: true });
+    } catch (error) {
+      setActionError(error?.message || "The appointment could not be updated.");
+    } finally {
+      setBusyAction("");
+    }
   }
 
   function openVisitNote(appt) {
@@ -722,6 +811,7 @@ export default function Appointments({ user, leads = [], setLeads }) {
     if (!summary) return;
 
     setNoteSaving(true);
+    setActionError("");
     try {
       if (isBackend(noteAppointment)) {
         const previous = String(noteAppointment.notes || "").trim();
@@ -732,7 +822,7 @@ export default function Appointments({ user, leads = [], setLeads }) {
         });
       }
 
-      updateLocalLeadAppointments((prev) =>
+      await updateLocalLeadAppointments((prev) =>
         prev.map((lead) => {
           if (String(lead.id) !== String(noteAppointment.lead?.id)) return lead;
           const prior = String(lead.notes || "").trim();
@@ -765,84 +855,100 @@ export default function Appointments({ user, leads = [], setLeads }) {
   }
 
   async function reschedule(appt, days) {
+    const actionId = `reschedule:${keyFor(appt)}`;
+    if (busyAction) return;
+    setBusyAction(actionId);
+    setActionError("");
     if (isBackend(appt)) {
-      const base = new Date(`${appt.date}T${appt.time || "00:00"}`);
-      base.setDate(base.getDate() + days);
-
-      const newDate = `${base.getFullYear()}-${pad2(base.getMonth() + 1)}-${pad2(base.getDate())}`;
-      const newTime = `${pad2(base.getHours())}:${pad2(base.getMinutes())}`;
+      const newDate = addDaysToDateKey(appt.date, days);
+      const newTime = appt.time;
       const iso = withSeconds(newDate, newTime);
-
-      updateTimeOverrides(appt, iso);
-
-      const ok = await apiUpdateBackend(appt, {
-        appointment_time: iso,
-        title: appt.title,
-        notes: appt.notes || "",
-      });
-      if (serverIdOf(appt) && !ok) {
-        removeTimeOverrides(appt);
+      if (!iso) {
+        setActionError("This appointment has an invalid date or time.");
+        setBusyAction("");
+        return;
       }
-
-      await fetchBackend();
-      ping("appointments:changed");
+      try {
+        updateTimeOverrides(appt, iso);
+        await apiUpdateBackend(appt, {
+          appointment_time: iso,
+          timezone: appt.timeZone || effectiveTimezone,
+          title: appt.title,
+          notes: appt.notes || "",
+        });
+        removeTimeOverrides(appt);
+        await fetchBackend();
+        ping("appointments:changed");
+      } catch (error) {
+        removeTimeOverrides(appt);
+        setActionError(error?.message || "The appointment could not be rescheduled.");
+      } finally {
+        setBusyAction("");
+      }
       return;
     }
-
-    updateLocalLeadAppointments((prev) =>
-      prev.map((l) => {
-        if (String(l.id) !== String(appt.lead.id)) return l;
-
-        return {
-          ...l,
-          appointments: (l.appointments || []).map((x) => {
-            const localKey = x._localKey || `${l.id}|${x.title}|${x.date}|${x.time || ""}`;
-            if (String(localKey) !== String(appt._localKey)) return x;
-
-            const base = new Date(`${x.date}T${x.time || "00:00"}`);
-            base.setDate(base.getDate() + days);
-
-            const movedDate = `${base.getFullYear()}-${pad2(base.getMonth() + 1)}-${pad2(base.getDate())}`;
-            const movedTime = `${pad2(base.getHours())}:${pad2(base.getMinutes())}`;
-
-            return { ...x, date: movedDate, time: movedTime };
-          }),
-        };
-      })
-    );
-
-    ping("appointments:changed");
+    try {
+      await updateLocalLeadAppointments((prev) =>
+        prev.map((l) => {
+          if (String(l.id) !== String(appt.lead.id)) return l;
+          return {
+            ...l,
+            appointments: (l.appointments || []).map((x) => {
+              const localKey = x._localKey || `${l.id}|${x.title}|${x.date}|${x.time || ""}`;
+              if (String(localKey) !== String(appt._localKey)) return x;
+              return { ...x, date: addDaysToDateKey(x.date, days) || x.date };
+            }),
+          };
+        })
+      );
+      ping("appointments:changed");
+    } catch (error) {
+      setActionError(error?.message || "The appointment could not be rescheduled.");
+    } finally {
+      setBusyAction("");
+    }
   }
 
   async function remove(appt) {
+    if (!window.confirm(`Delete “${appt.title || "Appointment"}”? This cannot be undone.`)) return;
+    const actionId = `delete:${keyFor(appt)}`;
+    if (busyAction) return;
+    setBusyAction(actionId);
+    setActionError("");
     if (isBackend(appt)) {
       hideOverrides(appt);
-
-      const ok = await apiDeleteBackend(appt);
-      if (serverIdOf(appt) && !ok) {
+      try {
+        await apiDeleteBackend(appt);
+        await fetchBackend();
+        ping("appointments:changed");
+      } catch (error) {
         unhideOverrides(appt);
+        setActionError(error?.message || "The appointment could not be deleted.");
+      } finally {
+        setBusyAction("");
       }
-
-      await fetchBackend();
-      ping("appointments:changed");
       return;
     }
-
-    updateLocalLeadAppointments((prev) =>
-      prev.map((l) =>
-        String(l.id) === String(appt.lead.id)
-          ? {
-              ...l,
-              appointments: (l.appointments || []).filter((x) => {
-                const localKey = x._localKey || `${l.id}|${x.title}|${x.date}|${x.time || ""}`;
-                return String(localKey) !== String(appt._localKey);
-              }),
-            }
-          : l
-      )
-    );
-
-    ping("appointments:changed");
+    try {
+      await updateLocalLeadAppointments((prev) =>
+        prev.map((l) =>
+          String(l.id) === String(appt.lead.id)
+            ? {
+                ...l,
+                appointments: (l.appointments || []).filter((x) => {
+                  const localKey = x._localKey || `${l.id}|${x.title}|${x.date}|${x.time || ""}`;
+                  return String(localKey) !== String(appt._localKey);
+                }),
+              }
+            : l
+        )
+      );
+      ping("appointments:changed");
+    } catch (error) {
+      setActionError(error?.message || "The appointment could not be deleted.");
+    } finally {
+      setBusyAction("");
+    }
   }
 
   function beginEdit(appt) {
@@ -859,57 +965,61 @@ export default function Appointments({ user, leads = [], setLeads }) {
 
   async function handleSave() {
     const { leadId, title, date, time, notes } = form;
-    if (!leadId || !title || !date) return;
+    const appointmentTime = withSeconds(date, time);
+    if (!leadId || !title.trim() || !date || !time || !appointmentTime) {
+      setActionError("Choose a customer, title, valid date, and time.");
+      return;
+    }
 
     setSaving(true);
+    setActionError("");
+    let saved = false;
 
     try {
       if (editing && editing._backend) {
-        const iso = `${date}T${time || "00:00"}:00`;
+        const iso = appointmentTime;
 
         updateTimeOverrides(editing, iso);
 
-        const ok = await apiUpdateBackend(editing, {
+        await apiUpdateBackend(editing, {
           appointment_time: iso,
-          title,
+          timezone: editing.timeZone || effectiveTimezone,
+          title: title.trim(),
           notes: notes || "",
         });
-
-        if (serverIdOf(editing) && !ok) {
-          removeTimeOverrides(editing);
-        }
-
+        removeTimeOverrides(editing);
         await fetchBackend();
         ping("appointments:changed");
+        saved = true;
       } else if (editing) {
-        updateLocalLeadAppointments((prev) => {
+        await updateLocalLeadAppointments((prev) => {
           return prev.map((l) => {
-            if (String(l.id) !== String(leadId)) return l;
-
             const filtered = (l.appointments || []).filter((x) => {
               const localKey =
                 x._localKey || `${l.id}|${x.title}|${x.date}|${x.time || ""}`;
               return String(localKey) !== String(editing._localKey);
             });
-
+            if (String(l.id) !== String(leadId)) {
+              return filtered.length === (l.appointments || []).length
+                ? l
+                : { ...l, appointments: filtered };
+            }
             return {
               ...l,
-              appointments: [
-                ...filtered,
-                {
-                  _localKey: editing._localKey,
-                  title,
-                  date,
-                  time,
-                  notes,
-                  done: false,
-                },
-              ],
+              appointments: [...filtered, {
+                _localKey: editing._localKey,
+                title: title.trim(),
+                date,
+                time,
+                notes,
+                done: !!editing.done,
+              }],
             };
           });
         });
 
         ping("appointments:changed");
+        saved = true;
       } else {
         const selectedLead = (leads || []).find((l) => String(l.id) === String(leadId));
         if (!selectedLead) {
@@ -932,18 +1042,19 @@ export default function Appointments({ user, leads = [], setLeads }) {
           lead_last_name: leadLastName,
           lead_full_name: fullName,
           user_name: user?.name || "",
-          user_email: user?.email || "",
+          user_email: userEmail,
           business_name: user?.business || user?.businessType || "",
-          appointment_time: `${date}T${time || "00:00"}:00`,
+          appointment_time: appointmentTime,
+          timezone: effectiveTimezone,
           appointment_location: selectedLead.location || user?.location || "",
           duration: 30,
           notes: notes || "",
           status: "scheduled",
-          title,
+          title: title.trim(),
         };
 
         const res = await fetch(
-          `${API_BASE}/api/appointments/${encodeURIComponent(user.email)}`,
+          `${API_BASE}/api/appointments/${encodeURIComponent(userEmail)}`,
           {
             method: "POST",
             credentials: "include",
@@ -962,15 +1073,19 @@ export default function Appointments({ user, leads = [], setLeads }) {
 
         await fetchBackend();
         ping("appointments:changed");
+        saved = true;
       }
     } catch (err) {
+      if (editing?._backend) removeTimeOverrides(editing);
       console.error(err);
-      alert(err?.message || "Failed to save appointment.");
+      setActionError(err?.message || "Failed to save appointment.");
     } finally {
       setSaving(false);
-      setShowModal(false);
-      setEditing(null);
-      setForm({ leadId: "", title: "", date: "", time: "", notes: "" });
+      if (saved) {
+        setShowModal(false);
+        setEditing(null);
+        setForm({ leadId: "", title: "", date: "", time: "", notes: "" });
+      }
     }
   }
 
@@ -1026,7 +1141,8 @@ export default function Appointments({ user, leads = [], setLeads }) {
           onClick={() => {
             setShowModal(true);
             setEditing(null);
-            setForm({ leadId: "", title: "", date: "", time: "", notes: "" });
+            setActionError("");
+            setForm(freshAppointmentForm());
           }}
           style={{
             background: GOLD,
@@ -1046,6 +1162,26 @@ export default function Appointments({ user, leads = [], setLeads }) {
           <FaPlus /> Add Appointment
         </button>
       </div>
+
+      {(appointmentsError || actionError) && (
+        <div className="appointments-error" role="alert">
+          <span>{actionError || appointmentsError || "Appointments could not be refreshed. Your last loaded schedule remains visible."}</span>
+          <button
+            type="button"
+            disabled={loadingAppointments}
+            onClick={() => {
+              setActionError("");
+              fetchBackend();
+            }}
+          >
+            {loadingAppointments ? "Retrying…" : "Retry"}
+          </button>
+        </div>
+      )}
+
+      {!appointmentsError && loadingAppointments && backendWorkspace !== userEmail && (
+        <div className="appointments-loading" role="status">Loading appointments…</div>
+      )}
 
       <div
         className="appointments-toolbar"
@@ -1138,6 +1274,13 @@ export default function Appointments({ user, leads = [], setLeads }) {
         <StatCard icon={<FaCheckCircle />} label="Completed" value={stat.done} color={GREEN} />
       </div>
 
+      {!loadingAppointments && !appointmentsError && allAppointments.length === 0 ? (
+        <div className="appointments-empty">
+          <strong>No appointments yet</strong>
+          <span>Add an appointment to start building your schedule.</span>
+        </div>
+      ) : null}
+
       {!showCompleted ? (
         <>
           <Section
@@ -1152,6 +1295,7 @@ export default function Appointments({ user, leads = [], setLeads }) {
                 onEdit={() => beginEdit(a)}
                 onDelete={() => remove(a)}
                 onResched={(d) => reschedule(a, d)}
+                disabled={!!busyAction}
               />
             )}
           />
@@ -1168,6 +1312,7 @@ export default function Appointments({ user, leads = [], setLeads }) {
                 onEdit={() => beginEdit(a)}
                 onDelete={() => remove(a)}
                 onResched={(d) => reschedule(a, d)}
+                disabled={!!busyAction}
               />
             )}
           />
@@ -1184,6 +1329,7 @@ export default function Appointments({ user, leads = [], setLeads }) {
                 onEdit={() => beginEdit(a)}
                 onDelete={() => remove(a)}
                 onResched={(d) => reschedule(a, d)}
+                disabled={!!busyAction}
               />
             )}
           />
@@ -1200,6 +1346,7 @@ export default function Appointments({ user, leads = [], setLeads }) {
                 onEdit={() => beginEdit(a)}
                 onDelete={() => remove(a)}
                 onResched={(d) => reschedule(a, d)}
+                disabled={!!busyAction}
               />
             )}
           />
@@ -1217,6 +1364,7 @@ export default function Appointments({ user, leads = [], setLeads }) {
               onEdit={() => beginEdit(a)}
               onDelete={() => remove(a)}
               onResched={(d) => reschedule(a, d)}
+              disabled={!!busyAction}
             />
           )}
         />
@@ -1267,7 +1415,11 @@ export default function Appointments({ user, leads = [], setLeads }) {
                 leads={leads}
                 value={form.leadId}
                 onChange={(id) => setForm((f) => ({ ...f, leadId: id }))}
+                disabled={!!editing?._backend}
               />
+              {editing?._backend ? (
+                <div className="appointments-field-hint">The customer cannot be changed after an appointment is created.</div>
+              ) : null}
             </div>
 
             <Field label="Title">
@@ -1294,8 +1446,13 @@ export default function Appointments({ user, leads = [], setLeads }) {
                 value={form.time}
                 onChange={(e) => setForm((f) => ({ ...f, time: e.target.value }))}
                 style={inputStyle}
+                required
               />
             </Field>
+
+            <div className="appointments-timezone-note">
+              Times are saved in {effectiveTimezone.replace(/_/g, " ")}.
+            </div>
 
             <Field label="Notes">
               <textarea
@@ -1412,7 +1569,7 @@ export default function Appointments({ user, leads = [], setLeads }) {
                     type="button"
                     onClick={() => setVisitNote((current) => ({
                       ...current,
-                      rebook: dateWeeksFromNow(suggestedRebookWeeks),
+                       rebook: dateWeeksFromNow(suggestedRebookWeeks, effectiveTimezone),
                     }))}
                   >
                     Use suggestion
@@ -1477,7 +1634,6 @@ function Section({ title, color, subtitle, items, renderItem }) {
   return (
     <div style={{ marginTop: 16 }}>
       <div
-        className="appointments-card-grid"
         style={{
           display: "flex",
           alignItems: "baseline",
@@ -1504,6 +1660,7 @@ function Section({ title, color, subtitle, items, renderItem }) {
       </div>
 
       <div
+        className="appointments-card-grid"
         style={{
           display: "grid",
           gridTemplateColumns: "repeat(auto-fit, minmax(420px, 1fr))",
@@ -1518,7 +1675,7 @@ function Section({ title, color, subtitle, items, renderItem }) {
   );
 }
 
-function AppointmentCard({ appt, onDone, onEdit, onDelete, onResched }) {
+function AppointmentCard({ appt, onDone, onEdit, onDelete, onResched, disabled = false }) {
   const meta = statusMeta(appt);
 
   return (
@@ -1625,11 +1782,11 @@ function AppointmentCard({ appt, onDone, onEdit, onDelete, onResched }) {
 
         {!appt.done && (
           <div style={{ display: "flex", gap: 8, marginTop: 10, flexWrap: "wrap" }}>
-            <Chip icon={<FaClock />} onClick={() => onResched(1)}>
+            <Chip icon={<FaClock />} onClick={() => onResched(1)} disabled={disabled}>
               +1 day
             </Chip>
-            <Chip onClick={() => onResched(3)}>+3 days</Chip>
-            <Chip onClick={() => onResched(7)}>+1 week</Chip>
+            <Chip onClick={() => onResched(3)} disabled={disabled}>+3 days</Chip>
+            <Chip onClick={() => onResched(7)} disabled={disabled}>+1 week</Chip>
           </div>
         )}
       </div>
@@ -1637,6 +1794,7 @@ function AppointmentCard({ appt, onDone, onEdit, onDelete, onResched }) {
       <div className="appointment-card-actions" style={{ display: "flex", gap: 8, flexWrap: "wrap", justifyContent: "flex-end" }}>
         <button
           onClick={onDone}
+          disabled={disabled}
           style={{
             background: appt.done ? GREEN : "transparent",
             color: appt.done ? "#172119" : GOLD,
@@ -1652,6 +1810,7 @@ function AppointmentCard({ appt, onDone, onEdit, onDelete, onResched }) {
 
         <button
           onClick={onEdit}
+          disabled={disabled}
           style={{
             background: "transparent",
             color: GOLD,
@@ -1667,6 +1826,7 @@ function AppointmentCard({ appt, onDone, onEdit, onDelete, onResched }) {
 
         <button
           onClick={onDelete}
+          disabled={disabled}
           style={{
             background: "transparent",
             color: RED,
@@ -1684,10 +1844,11 @@ function AppointmentCard({ appt, onDone, onEdit, onDelete, onResched }) {
   );
 }
 
-function Chip({ children, onClick, icon }) {
+function Chip({ children, onClick, icon, disabled = false }) {
   return (
     <button
       onClick={onClick}
+      disabled={disabled}
       style={{
         background: SOFT,
         color: TEXT,
@@ -1739,7 +1900,7 @@ const inputStyle = {
   boxSizing: "border-box",
 };
 
-function LiveLeadSearch({ leads, value, onChange }) {
+function LiveLeadSearch({ leads, value, onChange, disabled = false }) {
   const [search, setSearch] = useState("");
 
   const selected = leads.find((l) => String(l.id) === String(value));
@@ -1762,6 +1923,7 @@ function LiveLeadSearch({ leads, value, onChange }) {
           setSearch(e.target.value);
           onChange("");
         }}
+        disabled={disabled}
         style={inputStyle}
       />
 
@@ -1792,6 +1954,7 @@ function LiveLeadSearch({ leads, value, onChange }) {
                 fontWeight: 900,
               }}
               onClick={() => {
+                if (disabled) return;
                 onChange(String(l.id));
                 setSearch(l.name || "");
               }}

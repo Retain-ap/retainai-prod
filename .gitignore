@@ -7,10 +7,30 @@ frontend/build
 # python
 **/__pycache__/
 venv
+.testdeps/
+.testdeps-*/
+.npm-cache/
+.pip-cache/
+.tmp-pip/
 # data files - deploy uses Render Disk
 leads.json
 notifications.json
 appointments.json
+/data/
 # Local runtime state
 backend/platform_audit.json
 backend/platform_features.json
+backend/automation_state.json
+backend/automations.json
+backend/google_sync.json
+backend/google_tokens.json
+backend/import_history.json
+backend/invites.json
+backend/wa_outbox.json
+backend/ics_files/*.ics
+backend/backups/
+backend/data/
+backend/automations_state.json
+backend/*.db
+backend/*.db-shm
+backend/*.db-wal

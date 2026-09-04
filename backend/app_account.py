@@ -7,7 +7,7 @@ from uuid import uuid4
 import stripe
 from flask import Blueprint, Response, jsonify, request, session
 
-from storage import DATA_ROOT, delete_users, load_users, save_user_leads, save_users
+from storage import DATA_ROOT, delete_users, load_leads, load_users, save_user_leads, save_users
 from account_history import record_account_deletion
 
 
@@ -25,6 +25,10 @@ _WORKSPACE_JSON_FILES = (
     "automation_users.json",
     "subscriptions.json",
     "invites.json",
+    "appointments_pending.json",
+    "google_tokens.json",
+    "google_sync.json",
+    "import_history.json",
 )
 
 
@@ -65,33 +69,67 @@ def _atomic_json(path, value):
 
 def _purge_workspace_json(workspace):
     identity_fields = {"email", "user_email", "owner_email", "org_email", "org_id", "workspace"}
+
+    def scrub(value):
+        changed = False
+        if isinstance(value, list):
+            output = []
+            for item in value:
+                belongs = isinstance(item, dict) and any(
+                    _norm(item.get(field)) == workspace for field in identity_fields
+                )
+                if belongs:
+                    changed = True
+                    continue
+                cleaned, item_changed = scrub(item)
+                output.append(cleaned)
+                changed = changed or item_changed
+            return output, changed
+        if isinstance(value, dict):
+            output = {}
+            for key, item in value.items():
+                belongs = _norm(key) == workspace or (
+                    isinstance(item, dict)
+                    and any(_norm(item.get(field)) == workspace for field in identity_fields)
+                )
+                if belongs:
+                    changed = True
+                    continue
+                cleaned, item_changed = scrub(item)
+                output[key] = cleaned
+                changed = changed or item_changed
+            return output, changed
+        return value, False
+
+    appointment_ids = set()
     for filename in _WORKSPACE_JSON_FILES:
         path = os.path.join(DATA_ROOT, filename)
         if not os.path.isfile(path):
             continue
-        try:
-            with open(path, "r", encoding="utf-8") as handle:
-                value = json.load(handle)
-            changed = False
-            if isinstance(value, dict):
-                for key in list(value):
-                    if _norm(key) == workspace:
-                        value.pop(key, None)
-                        changed = True
-            elif isinstance(value, list):
-                kept = []
-                for row in value:
-                    belongs = isinstance(row, dict) and any(
-                        _norm(row.get(field)) == workspace for field in identity_fields
-                    )
-                    changed = changed or belongs
-                    if not belongs:
-                        kept.append(row)
-                value = kept
-            if changed:
-                _atomic_json(path, value)
-        except Exception:
+        with open(path, "r", encoding="utf-8") as handle:
+            value = json.load(handle)
+        if filename == "appointments.json" and isinstance(value, dict):
+            raw_rows = value.get(workspace) or (
+                (value.get("appointments") or {}).get(workspace)
+                if isinstance(value.get("appointments"), dict) else []
+            )
+            for row in raw_rows or []:
+                if isinstance(row, dict) and row.get("id"):
+                    appointment_ids.add(str(row["id"]))
+        value, changed = scrub(value)
+        if changed:
+            _atomic_json(path, value)
+
+    ics_root = os.path.realpath(os.path.join(DATA_ROOT, "ics_files"))
+    for appointment_id in appointment_ids:
+        safe_id = "".join(
+            char for char in appointment_id if char.isalnum() or char in {"-", "_", "."}
+        )
+        if not safe_id:
             continue
+        target = os.path.realpath(os.path.join(ics_root, f"{safe_id}.ics"))
+        if os.path.dirname(target) == ics_root and os.path.isfile(target):
+            os.remove(target)
 
 
 def _purge_workspace(workspace, users):
@@ -115,23 +153,44 @@ def _purge_workspace(workspace, users):
 def _cancel_workspace_subscriptions(owner):
     subscription_id = str(owner.get("stripe_subscription_id") or "").strip()
     customer_id = str(owner.get("stripe_customer_id") or "").strip()
-    if not subscription_id and not customer_id:
-        return 0
+    checkout_session_id = str(owner.get("stripe_checkout_session_id") or "").strip()
+    account_email = _norm(owner.get("email"))
     secret = str(os.getenv("STRIPE_SECRET_KEY") or "").strip()
-    if not secret:
+    if not secret and (subscription_id or customer_id or checkout_session_id):
         raise RuntimeError("billing_cancellation_unavailable")
+    if not secret:
+        return 0
     stripe.api_key = secret
     subscriptions = set()
+    customer_ids = {customer_id} if customer_id else set()
     cancellable_statuses = {
         "active", "trialing", "past_due", "unpaid", "incomplete", "paused"
     }
-    if customer_id:
-        page = stripe.Subscription.list(customer=customer_id, status="all", limit=100)
+    if checkout_session_id:
+        checkout = stripe.checkout.Session.retrieve(checkout_session_id)
+        checkout_customer = str(checkout.get("customer") or "")
+        checkout_subscription = checkout.get("subscription")
+        if checkout_customer:
+            customer_ids.add(checkout_customer)
+        if checkout_subscription:
+            subscriptions.add(
+                str(
+                    checkout_subscription.get("id")
+                    if isinstance(checkout_subscription, dict)
+                    else checkout_subscription
+                )
+            )
+    if account_email:
+        customers = stripe.Customer.list(email=account_email, limit=100)
+        customer_ids.update(
+            str(item.get("id") or "") for item in customers.auto_paging_iter()
+        )
+    for current_customer in filter(None, customer_ids):
+        page = stripe.Subscription.list(customer=current_customer, status="all", limit=100)
         subscriptions.update(
             str(item.get("id") or "")
             for item in page.auto_paging_iter()
-            if str(item.get("status") or "").lower()
-            in cancellable_statuses
+            if str(item.get("status") or "").lower() in cancellable_statuses
         )
     if subscription_id and subscription_id not in subscriptions:
         try:
@@ -149,6 +208,17 @@ def _cancel_workspace_subscriptions(owner):
         else:
             stripe.Subscription.delete(current_id)
         cancelled += 1
+    # Fail closed: deletion must never continue while Stripe still reports a
+    # renewable subscription for any customer associated with this account.
+    for current_customer in filter(None, customer_ids):
+        remaining = stripe.Subscription.list(
+            customer=current_customer, status="all", limit=100
+        )
+        if any(
+            str(item.get("status") or "").lower() in cancellable_statuses
+            for item in remaining.auto_paging_iter()
+        ):
+            raise RuntimeError("billing_cancellation_incomplete")
     return cancelled
 
 

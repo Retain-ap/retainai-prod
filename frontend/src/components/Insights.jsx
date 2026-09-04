@@ -25,6 +25,12 @@ import {
   FaUsers,
 } from "react-icons/fa";
 import { apiUrl } from "../apiBase";
+import { getWorkspaceEmail } from "../workspaceIdentity";
+import {
+  appointmentMonthKey,
+  getBrowserTimeZone,
+  parseAppointmentDateTime,
+} from "./appointmentDateTime";
 import "./product-system.css";
 import "./Insights.css";
 
@@ -33,8 +39,7 @@ const HEALTH_COLORS = ["#57d38c", "#f7cb53", "#ff9f66", "#ff6b6b"];
 const SOURCE_COLORS = ["#f7cb53", "#57d38c", "#70a7ff", "#b891ff", "#ff9f66", "#7d8797"];
 
 function safeDate(value) {
-  const date = value ? new Date(value) : null;
-  return date && !Number.isNaN(date.getTime()) ? date : null;
+  return parseAppointmentDateTime(value);
 }
 
 function daysSince(value) {
@@ -68,10 +73,8 @@ function healthBucket(contact) {
   return "Needs attention";
 }
 
-function monthKey(value) {
-  const date = safeDate(value);
-  if (!date) return null;
-  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}`;
+function monthKey(value, timeZone = "") {
+  return appointmentMonthKey(value, timeZone) || null;
 }
 
 function shortMonth(key) {
@@ -121,30 +124,55 @@ function ChartTooltip({ active, payload, label }) {
 
 export default function Insights({ leads = [], user }) {
   const [appointments, setAppointments] = useState([]);
+  const [appointmentsWorkspace, setAppointmentsWorkspace] = useState("");
+  const [appointmentsTimezone, setAppointmentsTimezone] = useState("");
   const [loadingAppointments, setLoadingAppointments] = useState(true);
-  const workspaceEmail = user?.org_id || user?.orgOwnerEmail || user?.email || "";
+  const [appointmentsError, setAppointmentsError] = useState("");
+  const workspaceEmail = getWorkspaceEmail(user);
 
   useEffect(() => {
     let cancelled = false;
+    let requestId = 0;
     async function loadAppointments() {
-      if (!user?.email) {
+      const currentRequest = ++requestId;
+      if (!workspaceEmail) {
         setAppointments([]);
+        setAppointmentsWorkspace("");
+        setAppointmentsTimezone("");
+        setAppointmentsError("");
         setLoadingAppointments(false);
         return;
       }
+      setLoadingAppointments(true);
       try {
         const response = await fetch(
-          apiUrl(`appointments/${encodeURIComponent(user.email)}`),
+          apiUrl(`appointments/${encodeURIComponent(workspaceEmail)}`),
           { credentials: "include", cache: "no-store", headers: { Accept: "application/json" } }
         );
         const data = await response.json().catch(() => ({}));
-        if (!cancelled) setAppointments(Array.isArray(data?.appointments) ? data.appointments : []);
-      } catch {
-        if (!cancelled) setAppointments([]);
+        if (!response.ok) {
+          throw new Error(data?.error || `Appointments request failed (${response.status})`);
+        }
+        if (!Array.isArray(data?.appointments)) {
+          throw new Error("Appointments response was incomplete");
+        }
+        if (!cancelled && currentRequest === requestId) {
+          setAppointments(data.appointments);
+          setAppointmentsWorkspace(workspaceEmail);
+          setAppointmentsTimezone(data?.timezone || "");
+          setAppointmentsError("");
+        }
+      } catch (error) {
+        if (!cancelled && currentRequest === requestId) {
+          setAppointmentsError(error?.message || "Appointments could not be loaded");
+        }
       } finally {
-        if (!cancelled) setLoadingAppointments(false);
+        if (!cancelled && currentRequest === requestId) setLoadingAppointments(false);
       }
     }
+    setAppointmentsWorkspace("");
+    setAppointmentsTimezone("");
+    setAppointmentsError("");
     loadAppointments();
     const refresh = () => loadAppointments();
     window.addEventListener("appointments:changed", refresh);
@@ -152,14 +180,29 @@ export default function Insights({ leads = [], user }) {
       cancelled = true;
       window.removeEventListener("appointments:changed", refresh);
     };
-  }, [user?.email]);
+  }, [workspaceEmail]);
+
+  const visibleAppointments = useMemo(
+    () => (appointmentsWorkspace === workspaceEmail ? appointments : []),
+    [appointments, appointmentsWorkspace, workspaceEmail]
+  );
 
   const analytics = useMemo(() => {
     const contacts = Array.isArray(leads) ? leads : [];
     const now = new Date();
-    const upcoming = appointments
+    const analyticsTimezone = appointmentsTimezone || user?.timezone || getBrowserTimeZone();
+    const upcoming = visibleAppointments
       .map((item) => ({ ...item, dateObj: appointmentDate(item) }))
-      .filter((item) => item.dateObj && item.dateObj >= now && !item.done && item.status !== "cancelled")
+      .filter((item) => {
+        const status = String(item?.status || "").toLowerCase().replace(/-/g, "_");
+        return (
+          item.dateObj &&
+          item.dateObj >= now &&
+          !item.done &&
+          !item.completed &&
+          !["cancelled", "canceled", "completed"].includes(status)
+        );
+      })
       .sort((a, b) => a.dateObj - b.dateObj);
 
     const healthCounts = { Healthy: 0, Cooling: 0, "At risk": 0, "Needs attention": 0 };
@@ -182,15 +225,18 @@ export default function Insights({ leads = [], user }) {
     const seed = new Date(now.getFullYear(), now.getMonth() - 5, 1);
     for (let index = 0; index < 6; index += 1) {
       const date = new Date(seed.getFullYear(), seed.getMonth() + index, 1);
-      const key = monthKey(date);
+      const key = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}`;
       months.set(key, { key, month: shortMonth(key), contacts: 0, appointments: 0 });
     }
     contacts.forEach((contact) => {
-      const key = monthKey(contact?.createdAt || contact?.created_at);
+      const key = monthKey(contact?.createdAt || contact?.created_at, analyticsTimezone);
       if (months.has(key)) months.get(key).contacts += 1;
     });
-    appointments.forEach((appointment) => {
-      const key = monthKey(appointment?.appointment_time || appointment?.created_at);
+    visibleAppointments.forEach((appointment) => {
+      const key = monthKey(
+        appointment?.appointment_time || appointment?.created_at,
+        appointment?.timezone || analyticsTimezone
+      );
       if (months.has(key)) months.get(key).appointments += 1;
     });
 
@@ -225,7 +271,7 @@ export default function Insights({ leads = [], user }) {
       return age !== null && age <= 14;
     }).length;
     const appointmentContactKeys = new Set(
-      appointments
+      visibleAppointments
         .flatMap((item) => [item?.lead_id, String(item?.lead_email || "").toLowerCase()])
         .filter(Boolean)
     );
@@ -246,7 +292,7 @@ export default function Insights({ leads = [], user }) {
       queue,
       bookingRate: contacts.length ? Math.round((bookedContacts / contacts.length) * 100) : 0,
     };
-  }, [leads, appointments]);
+  }, [appointmentsTimezone, leads, user?.timezone, visibleAppointments]);
 
   const headline =
     analytics.atRisk > 0
@@ -272,7 +318,12 @@ export default function Insights({ leads = [], user }) {
         <Metric icon={<FaUsers />} label="Total contacts" value={compactNumber(analytics.total)} detail="People in this workspace" />
         <Metric icon={<FaUserCheck />} label="Recently engaged" value={compactNumber(analytics.active)} detail="Activity in the last 14 days" tone="healthy" />
         <Metric icon={<FaFire />} label="Needs attention" value={compactNumber(analytics.atRisk)} detail="At-risk or inactive relationships" tone={analytics.atRisk ? "warning" : "healthy"} />
-        <Metric icon={<FaCalendarCheck />} label="Upcoming bookings" value={compactNumber(analytics.upcoming.length)} detail="Scheduled appointments ahead" />
+        <Metric
+          icon={<FaCalendarCheck />}
+          label="Upcoming bookings"
+          value={appointmentsError ? "—" : compactNumber(analytics.upcoming.length)}
+          detail={appointmentsError ? "Appointment data unavailable" : "Scheduled appointments ahead"}
+        />
         <Metric icon={<FaChartLine />} label="Contact-to-booking" value={`${analytics.bookingRate}%`} detail="Contacts with an appointment" />
       </section>
 
@@ -409,7 +460,15 @@ export default function Insights({ leads = [], user }) {
                 <time>{appointment.dateObj.toLocaleString([], { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" })}</time>
               </div>
             ))}
-            {!analytics.upcoming.length && <EmptyState>{loadingAppointments ? "Loading appointments..." : "No upcoming appointments."}</EmptyState>}
+            {!analytics.upcoming.length && (
+              <EmptyState>
+                {loadingAppointments
+                  ? "Loading appointments..."
+                  : appointmentsError
+                  ? "Appointments could not be loaded. Refresh to try again."
+                  : "No upcoming appointments."}
+              </EmptyState>
+            )}
           </div>
         </article>
 

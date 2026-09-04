@@ -373,3 +373,29 @@
     align-self: stretch;
   }
 }
+
+.notif-error {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin: 0 0 16px;
+  padding: 12px 14px;
+  border: 1px solid rgba(255, 102, 102, 0.55);
+  border-radius: 10px;
+  background: rgba(125, 35, 35, 0.22);
+  color: #ffd5d5;
+}
+
+.notif-error button {
+  flex: 0 0 auto;
+  min-height: 36px;
+  padding: 0 14px;
+  border: 1px solid currentColor;
+  border-radius: 8px;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  font-weight: 800;
+  cursor: pointer;
+}

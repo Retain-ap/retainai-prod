@@ -7,12 +7,12 @@ import secrets
 import datetime
 from typing import Any, Dict, Optional, Tuple
 
-from flask import Blueprint, request, jsonify
+from flask import Blueprint, request, jsonify, session
 from werkzeug.security import generate_password_hash
 from sendgrid import SendGridAPIClient
 from sendgrid.helpers.mail import Email, Mail
 
-from storage import load_users, save_users, DATA_ROOT
+from storage import load_users, save_users, delete_users, DATA_ROOT
 
 team_bp = Blueprint("team_bp", __name__)
 
@@ -64,13 +64,10 @@ def _save_invites(data: Dict[str, Dict[str, Any]]) -> None:
 
 
 def _current_user_email() -> str:
-    # This matches the authentication convention already used throughout RetainAI.
-    # Do not use ownerEmail from the request body/query as authorization.
-    return _norm(
-        request.headers.get("X-User-Email")
-        or request.headers.get("X-Auth-Email")
-        or ""
-    )
+    # Authorization identity must come from Flask's signed session. Request
+    # headers remain accepted by some legacy clients as resource selectors, but
+    # they must never decide which team role the caller has.
+    return _norm(session.get("user_email"))
 
 
 def _resolve_actor(users: dict, email: str) -> Tuple[Optional[str], Optional[str], Optional[dict], Optional[dict]]:
@@ -475,14 +472,16 @@ def remove_member():
     if not isinstance(member, dict) or _norm(member.get("org_id")) != actor["org_email"]:
         return jsonify({"error": "member_not_found"}), 404
 
-    users.pop(key, None)
+    delete_keys = [key]
 
     # Remove only the teammate's login record. Organization data remains owned by the owner.
     login_rec = users.get(email)
     if isinstance(login_rec, dict) and _norm(login_rec.get("org_id")) == actor["org_email"]:
-        users.pop(email, None)
+        delete_keys.append(email)
 
-    save_users(users)
+    # save_users() only upserts SQLite rows, so omitted map entries are not
+    # deletions. Use the storage deletion primitive for both JSON and SQLite.
+    delete_users(delete_keys)
     return jsonify({"ok": True}), 200
 
 
@@ -524,8 +523,18 @@ def accept_invite():
 
     if not token or not email:
         return jsonify({"error": "bad_request"}), 400
-    if len(password) < 8:
-        return jsonify({"error": "password_too_short"}), 400
+    if (
+        len(password) < 12
+        or len(password) > 256
+        or not re.search(r"[a-z]", password)
+        or not re.search(r"[A-Z]", password)
+        or not re.search(r"\d", password)
+        or not re.search(r"[^A-Za-z0-9]", password)
+    ):
+        return jsonify({
+            "error": "password_not_strong_enough",
+            "message": "Use 12 or more characters with uppercase and lowercase letters, a number, and a symbol.",
+        }), 400
 
     invites = _load_invites()
     inv = invites.get(token)

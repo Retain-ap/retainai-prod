@@ -1,6 +1,7 @@
 # backend/app_wa_auto_appointments.py
 from flask import Blueprint, request, jsonify
 import os, re, json, uuid, datetime
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 from typing import Any, Dict, List, Optional
 from storage import DATA_ROOT
 
@@ -9,19 +10,26 @@ from storage import DATA_ROOT
 # =========================================================
 WA_AUTO_BP = Blueprint("wa_auto_bp", __name__)
 
-FILE_APPTS   = os.path.join(DATA_ROOT, "appointments.json")          # { "appointments": { "<user_email>": [ ... ] } }
+FILE_APPTS   = os.path.join(DATA_ROOT, "appointments.json")          # { "<workspace_email>": [ ... ] }
 FILE_PENDING = os.path.join(DATA_ROOT, "appointments_pending.json")  # { "pending":      { "<user_email>": [ ... ] } }
-FILE_NOTIFS  = os.path.join(DATA_ROOT, "notifications.json")         # { "notifications":{ "<user_email>": [ ... ] } }
+FILE_NOTIFS  = os.path.join(DATA_ROOT, "notifications.json")         # { "<workspace_email>": [ ... ] }
 
 WHATSAPP_TOKEN       = os.getenv("WHATSAPP_TOKEN", "")
 WHATSAPP_PHONE_ID    = os.getenv("WHATSAPP_PHONE_ID", "")
 WHATSAPP_API_VERSION = os.getenv("WHATSAPP_API_VERSION", "v20.0")
+DEFAULT_TIMEZONE = (
+    os.getenv("APPOINTMENT_TIMEZONE")
+    or os.getenv("AUTOMATION_TIMEZONE")
+    or "America/Toronto"
+)
 
 # =========================================================
 # Utils
 # =========================================================
 def _now_iso() -> str:
-    return datetime.datetime.utcnow().replace(microsecond=0).isoformat() + "Z"
+    return datetime.datetime.now(datetime.timezone.utc).replace(
+        microsecond=0
+    ).isoformat().replace("+00:00", "Z")
 
 def _read_json(path: str, default: Any):
     try:
@@ -31,18 +39,18 @@ def _read_json(path: str, default: Any):
         return default
 
 def _write_json(path: str, data: Any):
-    tmp = path + ".tmp"
+    tmp = f"{path}.{os.getpid()}.{uuid.uuid4().hex}.tmp"
     with open(tmp, "w", encoding="utf-8") as f:
         json.dump(data, f, ensure_ascii=False, indent=2)
     os.replace(tmp, path)
 
 def _ensure_files():
     if not os.path.exists(FILE_APPTS):
-        _write_json(FILE_APPTS, {"appointments": {}})
+        _write_json(FILE_APPTS, {})
     if not os.path.exists(FILE_PENDING):
         _write_json(FILE_PENDING, {"pending": {}})
     if not os.path.exists(FILE_NOTIFS):
-        _write_json(FILE_NOTIFS, {"notifications": {}})
+        _write_json(FILE_NOTIFS, {})
 
 _ensure_files()
 
@@ -54,13 +62,20 @@ def _digits(s: str) -> str:
 # =========================================================
 def _notify(user_email: str, title: str, body: str):
     user_email = (user_email or "").lower()
-    db = _read_json(FILE_NOTIFS, {"notifications": {}})
-    arr = db.setdefault("notifications", {}).setdefault(user_email, [])
+    db = _read_json(FILE_NOTIFS, {})
+    # Recover data created by the retired nested schema before writing the
+    # canonical notification shape used by app.py.
+    if isinstance(db.get("notifications"), dict):
+        nested = db.pop("notifications")
+        for email, rows in nested.items():
+            if isinstance(rows, list):
+                db.setdefault(email, rows)
+    arr = db.setdefault(user_email, [])
     arr.insert(0, {
         "id": "note_" + str(uuid.uuid4())[:8],
-        "title": title,
-        "body": body,
-        "created_at": _now_iso(),
+        "subject": title,
+        "message": body,
+        "timestamp": _now_iso(),
         "read": False
     })
     _write_json(FILE_NOTIFS, db)
@@ -121,12 +136,44 @@ def _next_weekday(base: datetime.date, target_weekday: int) -> datetime.date:
     delta = (target_weekday - base.weekday()) % 7
     return base + datetime.timedelta(days=delta)
 
-def parse_datetime_from_text(text: str) -> Optional[datetime.datetime]:
+def _timezone(name: Optional[str] = None) -> ZoneInfo:
+    candidate = str(name or DEFAULT_TIMEZONE).strip()
+    try:
+        return ZoneInfo(candidate)
+    except (ZoneInfoNotFoundError, ValueError):
+        return ZoneInfo("UTC")
+
+
+def _normalize_when(value: str, timezone_name: Optional[str] = None) -> str:
+    try:
+        parsed = datetime.datetime.fromisoformat(
+            str(value or "").strip().replace("Z", "+00:00")
+        )
+    except (TypeError, ValueError):
+        raise ValueError("appointment_time must be an ISO date-time")
+    zone = _timezone(timezone_name)
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=zone)
+    else:
+        parsed = parsed.astimezone(zone)
+    return parsed.isoformat(timespec="seconds")
+
+
+def parse_datetime_from_text(
+    text: str,
+    timezone_name: Optional[str] = None,
+    now: Optional[datetime.datetime] = None,
+) -> Optional[datetime.datetime]:
     if not text:
         return None
     t = text.lower()
 
-    base_dt = datetime.datetime.now()
+    zone = _timezone(timezone_name)
+    base_dt = now or datetime.datetime.now(zone)
+    if base_dt.tzinfo is None:
+        base_dt = base_dt.replace(tzinfo=zone)
+    else:
+        base_dt = base_dt.astimezone(zone)
     date_anchor = base_dt.date()
     matched_day = False
 
@@ -146,38 +193,54 @@ def parse_datetime_from_text(text: str) -> Optional[datetime.datetime]:
         if m:
             hh = int(m.group("h"))
             mm = int(m.group("m")) if "m" in m.groupdict() and m.group("m") else 0
-            pm = m.group("p") if "p" in m.groupdict() and m.get("p") else None
+            pm = m.group("p") if "p" in m.groupdict() and m.group("p") else None
             break
     if hh is None:
         return None
 
+    if mm is not None and not 0 <= mm <= 59:
+        return None
+    if pm and not 1 <= hh <= 12:
+        return None
+    if not pm and not 0 <= hh <= 23:
+        return None
     if pm == "pm" and 1 <= hh <= 11:
         hh += 12
     if pm == "am" and hh == 12:
         hh = 0
-    if hh == 24:
-        hh = 0
-
-    dt = datetime.datetime(date_anchor.year, date_anchor.month, date_anchor.day, hh, mm or 0)
-    if not matched_day and dt <= base_dt:
-        dt = dt + datetime.timedelta(days=1)
+    dt = datetime.datetime(
+        date_anchor.year,
+        date_anchor.month,
+        date_anchor.day,
+        hh,
+        mm or 0,
+        tzinfo=zone,
+    )
+    if dt <= base_dt:
+        if not matched_day:
+            dt = dt + datetime.timedelta(days=1)
+        elif not any(re.search(rf"\b{k}\b", t) for k in ("today", "tomorrow", "tmrw")):
+            dt = dt + datetime.timedelta(days=7)
+        else:
+            return None
     return dt
 
-def detect_intent(text: str) -> Dict[str, Any]:
+def detect_intent(text: str, timezone_name: Optional[str] = None) -> Dict[str, Any]:
     t = (text or "").strip().lower()
     if not t:
         return {"intent": "unknown"}
 
-    for w in AFFIRM_WORDS:
-        if re.search(rf"\b{re.escape(w)}\b", t):
-            return {"intent": "affirm"}
     for w in REJECT_WORDS:
         if re.search(rf"\b{re.escape(w)}\b", t):
             return {"intent": "reject"}
 
-    dt = parse_datetime_from_text(t)
+    dt = parse_datetime_from_text(t, timezone_name)
     if dt:
         return {"intent": "propose_time", "when": dt.isoformat()}
+
+    for w in AFFIRM_WORDS:
+        if re.search(rf"\b{re.escape(w)}\b", t):
+            return {"intent": "affirm"}
 
     return {"intent": "unknown"}
 
@@ -185,13 +248,23 @@ def detect_intent(text: str) -> Dict[str, Any]:
 # Storage helpers
 # =========================================================
 def _get_appointments(user_email: str) -> List[Dict[str, Any]]:
-    db = _read_json(FILE_APPTS, {"appointments": {}})
-    return db.get("appointments", {}).get(user_email.lower(), [])
+    db = _read_json(FILE_APPTS, {})
+    nested = db.get("appointments") if isinstance(db, dict) else None
+    if isinstance(nested, dict) and user_email.lower() in nested:
+        return nested.get(user_email.lower(), []) or []
+    return db.get(user_email.lower(), []) if isinstance(db, dict) else []
 
 def _save_appointments(user_email: str, arr: List[Dict[str, Any]]):
     user_email = (user_email or "").lower()
-    db = _read_json(FILE_APPTS, {"appointments": {}})
-    db.setdefault("appointments", {})[user_email] = arr
+    db = _read_json(FILE_APPTS, {})
+    if not isinstance(db, dict):
+        db = {}
+    if isinstance(db.get("appointments"), dict):
+        nested = db.pop("appointments")
+        for email, rows in nested.items():
+            if isinstance(rows, list):
+                db.setdefault(str(email).strip().lower(), rows)
+    db[user_email] = arr
     _write_json(FILE_APPTS, db)
 
 def _add_appointment(user_email: str, appt: Dict[str, Any]) -> Dict[str, Any]:
@@ -269,12 +342,18 @@ def _find_pending_by_id(user_email: str, pending_id: str) -> Optional[Dict[str, 
 # =========================================================
 # Core processing for inbound WA messages
 # =========================================================
-def process_incoming_message(user_email: str, lead: Dict[str, Any], text: str) -> Dict[str, Any]:
+def process_incoming_message(
+    user_email: str,
+    lead: Dict[str, Any],
+    text: str,
+    timezone_name: Optional[str] = None,
+) -> Dict[str, Any]:
     ie = (user_email or "").lower().strip()
     if not ie or not lead:
         return {"ok": False, "error": "missing_user_or_lead"}
 
-    intent = detect_intent(text)
+    timezone_name = _timezone(timezone_name).key
+    intent = detect_intent(text, timezone_name)
     intent_name = intent.get("intent")
     e164 = _digits(lead.get("whatsapp") or lead.get("phone") or "")
 
@@ -293,6 +372,7 @@ def process_incoming_message(user_email: str, lead: Dict[str, Any], text: str) -
             "lead_email": lead.get("email"),
             "lead_phone": e164,
             "suggested_time": None,
+            "timezone": timezone_name,
             "status": "await_time",
             "note": "Client affirmed interest in booking.",
         }
@@ -312,6 +392,7 @@ def process_incoming_message(user_email: str, lead: Dict[str, Any], text: str) -
             "lead_email": lead.get("email"),
             "lead_phone": e164,
             "suggested_time": when_iso,
+            "timezone": timezone_name,
             "status": "await_owner_confirm",
             "note": f"Client proposed {when_iso}",
         }
@@ -343,7 +424,12 @@ def wa_auto_inbound():
     user_email = (body.get("user_email") or "").strip().lower()
     lead = body.get("lead") or {}
     text = body.get("text") or ""
-    out = process_incoming_message(user_email, lead, text)
+    out = process_incoming_message(
+        user_email,
+        lead,
+        text,
+        body.get("timezone"),
+    )
     return jsonify(out)
 
 # ----- Pending suggestions -----
@@ -375,27 +461,41 @@ def wa_auto_confirm():
     if not (user_email and sid):
         return jsonify({"ok": False, "error": "missing_params"}), 400
 
-    sug = _remove_pending(user_email, sid)
+    sug = _find_pending_by_id(user_email, sid)
     if not sug:
         return jsonify({"ok": False, "error": "not_found"}), 404
 
+    timezone_name = _timezone(b.get("timezone") or sug.get("timezone")).key
     when_iso = sug.get("suggested_time")
     if not when_iso:
         return jsonify({"ok": False, "error": "pending_has_no_time"}), 400
+    try:
+        when_iso = _normalize_when(when_iso, timezone_name)
+        duration = int(b.get("duration") or 30)
+        if duration < 5 or duration > 1440:
+            raise ValueError("duration must be between 5 and 1440 minutes")
+    except (TypeError, ValueError) as exc:
+        return jsonify({"ok": False, "error": str(exc)}), 400
 
     appt = {
         "id": "apt_" + str(uuid.uuid4())[:8],
         "created_at": _now_iso(),
         "appointment_time": when_iso,  # ISO string
-        "duration": int(b.get("duration") or 30),
+        "timezone": timezone_name,
+        "duration": duration,
         "appointment_location": b.get("location") or "TBD",
         "notes": b.get("notes") or "",
         "lead_id": sug.get("lead_id") or "",
         "lead_first_name": (sug.get("lead_name") or (sug.get("lead_email") or "")).split(" ")[0],
         "lead_email": sug.get("lead_email") or "",
         "business_name": "Your Business",
+        "status": "scheduled",
+        "done": False,
+        "completed": False,
+        "is_done": False,
     }
     _add_appointment(user_email, appt)
+    _remove_pending(user_email, sid)
 
     pretty = datetime.datetime.fromisoformat(when_iso).strftime("%a %b %d, %I:%M %p")
     _notify(user_email, "Appointment booked", f"{appt['lead_first_name']} confirmed for {pretty}.")
@@ -443,28 +543,43 @@ def add_wa_auto_appointment(user_email):
                 break
 
     # 4) pending_id fallback (works with JSON/query/form)
+    pending_timezone = None
     pending_id = b.get("pending_id") or request.args.get("pending_id") or (request.form.get("pending_id") if request.form else None)
     if not when and pending_id:
         sug = _find_pending_by_id(user_email, pending_id)
         if not sug:
             return jsonify({"ok": False, "error": "pending_not_found"}), 404
         when = sug.get("suggested_time")
+        pending_timezone = sug.get("timezone")
 
     if not when:
         return jsonify({"ok": False, "error": "missing_time",
                         "hint": "Send appointment_time (ISO) in JSON, query, or form, or include pending_id"}), 400
+    timezone_name = _timezone(b.get("timezone") or pending_timezone).key
+    try:
+        when = _normalize_when(when, timezone_name)
+        duration = int(b.get("duration") or 30)
+        if duration < 5 or duration > 1440:
+            raise ValueError("duration must be between 5 and 1440 minutes")
+    except (TypeError, ValueError) as exc:
+        return jsonify({"ok": False, "error": str(exc)}), 400
 
     appt = {
         "id": "apt_" + str(uuid.uuid4())[:8],
         "created_at": _now_iso(),
         "appointment_time": when,
-        "duration": int(b.get("duration") or 30),
+        "timezone": timezone_name,
+        "duration": duration,
         "appointment_location": b.get("appointment_location") or "TBD",
         "notes": b.get("notes") or "",
         "lead_id": b.get("lead_id") or "",
         "lead_first_name": b.get("lead_first_name") or "",
         "lead_email": b.get("lead_email") or "",
         "business_name": b.get("business_name") or "Your Business",
+        "status": "scheduled",
+        "done": False,
+        "completed": False,
+        "is_done": False,
     }
     _add_appointment(user_email, appt)
     _notify(user_email, "Appointment added", f"{appt['lead_first_name']} • {appt['appointment_time']}")
@@ -474,9 +589,17 @@ def add_wa_auto_appointment(user_email):
 def mark_wa_auto_appointment_done(user_email, appt_id):
     user_email = (user_email or "").lower()
     arr = _get_appointments(user_email)
+    updated = False
     for a in arr:
         if a.get("id") == appt_id:
             a["done"] = True
+            a["completed"] = True
+            a["is_done"] = True
+            a["status"] = "completed"
+            a["updated_at"] = _now_iso()
+            updated = True
+    if not updated:
+        return jsonify({"ok": False, "error": "not_found"}), 404
     _save_appointments(user_email, arr)
     return jsonify({"ok": True})
 
@@ -484,7 +607,10 @@ def mark_wa_auto_appointment_done(user_email, appt_id):
 def delete_wa_auto_appointment(user_email, appt_id):
     user_email = (user_email or "").lower()
     arr = _get_appointments(user_email)
+    original_count = len(arr)
     arr = [a for a in arr if a.get("id") != appt_id]
+    if len(arr) == original_count:
+        return jsonify({"ok": False, "error": "not_found"}), 404
     _save_appointments(user_email, arr)
     return jsonify({"ok": True})
 
@@ -530,28 +656,43 @@ def add_wa_auto_lead_appointment(user_email, lead_id):
                 break
 
     # 4) pending_id fallback
+    pending_timezone = None
     pending_id = b.get("pending_id") or request.args.get("pending_id") or (request.form.get("pending_id") if request.form else None)
     if not when and pending_id:
         sug = _find_pending_by_id(user_email, pending_id)
         if not sug:
             return jsonify({"ok": False, "error": "pending_not_found"}), 404
         when = sug.get("suggested_time")
+        pending_timezone = sug.get("timezone")
 
     if not when:
         return jsonify({"ok": False, "error": "missing_time",
                         "hint": "Send appointment_time (ISO) in JSON, query, or form, or include pending_id"}), 400
+    timezone_name = _timezone(b.get("timezone") or pending_timezone).key
+    try:
+        when = _normalize_when(when, timezone_name)
+        duration = int(b.get("duration") or 30)
+        if duration < 5 or duration > 1440:
+            raise ValueError("duration must be between 5 and 1440 minutes")
+    except (TypeError, ValueError) as exc:
+        return jsonify({"ok": False, "error": str(exc)}), 400
 
     appt = {
         "id": "apt_" + str(uuid.uuid4())[:8],
         "created_at": _now_iso(),
         "appointment_time": when,
-        "duration": int(b.get("duration") or 30),
+        "timezone": timezone_name,
+        "duration": duration,
         "appointment_location": b.get("appointment_location") or "TBD",
         "notes": b.get("notes") or "",
         "lead_id": lead_id,
         "lead_first_name": b.get("lead_first_name") or "",
         "lead_email": b.get("lead_email") or "",
         "business_name": b.get("business_name") or "Your Business",
+        "status": "scheduled",
+        "done": False,
+        "completed": False,
+        "is_done": False,
     }
     _add_appointment(user_email, appt)
     _notify(user_email, "Appointment added", f"{appt['lead_first_name']} • {appt['appointment_time']}")

@@ -21,6 +21,7 @@ import {
 } from "react-icons/fa";
 import defaultAvatar from "../assets/default-avatar.png";
 import { promptInstall, canPromptInstall } from "../pwaInstall";
+import { getWorkspaceCapabilities } from "../workspaceIdentity";
 
 export default function Sidebar({
   logo,
@@ -37,6 +38,7 @@ export default function Sidebar({
   onMobileClose,
 }) {
   const [profileOpen, setProfileOpen] = useState(false);
+  const capabilities = getWorkspaceCapabilities(user);
 
   // Detect PWA state & listen for install-available event from index.js
   const [installReady, setInstallReady] = useState(canPromptInstall());
@@ -296,14 +298,18 @@ export default function Sidebar({
         >
           <FaRobot /> {!collapsed && "Automations"}
         </button>
-        {!collapsed && <div className="sidebar-nav-label">Business</div>}
-        <button
-          type="button"
-          className={section === "invoices" ? "active" : ""}
-          onClick={() => goTo("invoices")}
-        >
-          <FaFileInvoiceDollar /> {!collapsed && "Invoices"}
-        </button>
+        {!collapsed && capabilities.canManageBilling && (
+          <div className="sidebar-nav-label">Business</div>
+        )}
+        {capabilities.canManageBilling && (
+          <button
+            type="button"
+            className={section === "invoices" ? "active" : ""}
+            onClick={() => goTo("invoices")}
+          >
+            <FaFileInvoiceDollar /> {!collapsed && "Invoices"}
+          </button>
+        )}
       </nav>
 
       {!collapsed && (
@@ -324,7 +330,7 @@ export default function Sidebar({
       )}
 
       {/* Invite Team */}
-      {!collapsed && (
+      {!collapsed && capabilities.canInviteTeam && (
         <button
           type="button"
           className="sidebar-invite-btn"

@@ -25,6 +25,16 @@ import CommandPalette from "./CommandPalette";
 import TrialCommandBar from "./TrialCommandBar";
 import OnboardingGuide from "./OnboardingGuide";
 import "./AppSectionShell.css";
+import { getWorkspaceCapabilities } from "../workspaceIdentity";
+import {
+  appointmentDateTimeParts,
+  buildAppointmentTimestamp,
+  dateKeyFromParts,
+  getBrowserTimeZone,
+  localDateKey,
+  parseAppointmentDateTime,
+  timeKeyFromParts,
+} from "./appointmentDateTime";
 
 const SECTION_LABELS = {
   overview: "Overview",
@@ -104,6 +114,55 @@ function getAppointmentsFromLeads(leads) {
   return out;
 }
 
+function appointmentSignature(appointment) {
+  const lead = appointment?.lead || {};
+  const appointmentTime = String(
+    appointment?.date
+      ? `${appointment.date}T${appointment?.time || "00:00"}:00`
+      : appointment?.appointment_time || ""
+  ).slice(0, 16);
+  return [
+    String(appointment?.lead_id || lead?.id || lead?.email || appointment?.lead_email || "")
+      .trim()
+      .toLowerCase(),
+    appointmentTime,
+    String(appointment?.title || "Appointment").trim().toLowerCase(),
+  ].join("|");
+}
+
+function normalizeBackendAppointment(appointment, leads) {
+  const parsed = parseAppointmentDateTime(appointment?.appointment_time || "");
+  const parts = appointmentDateTimeParts(
+    appointment?.appointment_time,
+    appointment?.timezone || ""
+  );
+  if (!parsed || !parts) return null;
+  const lead =
+    (leads || []).find(
+      (candidate) => String(candidate?.id || "") === String(appointment?.lead_id || "")
+    ) || {
+      id: appointment?.lead_id || "",
+      name:
+        appointment?.lead_full_name ||
+        [appointment?.lead_first_name, appointment?.lead_last_name].filter(Boolean).join(" ") ||
+        appointment?.lead_email ||
+        "Client",
+      email: appointment?.lead_email || "",
+    };
+  return {
+    ...appointment,
+    type: "appointment",
+    date: dateKeyFromParts(parts),
+    time: timeKeyFromParts(parts),
+    timezone: appointment?.timezone || "",
+    sortKey: parsed.getTime(),
+    checked: !!(appointment?.done ?? appointment?.completed ?? appointment?.is_done),
+    done: !!(appointment?.done ?? appointment?.completed ?? appointment?.is_done),
+    lead,
+    _backend: appointment,
+  };
+}
+
 function extractTags(leads, userTags) {
   const tagSet = new Set([...DEFAULT_TAGS, ...(userTags || [])]);
   (leads || []).forEach((lead) => (lead.tags || []).forEach((tag) => tagSet.add(tag)));
@@ -122,6 +181,18 @@ function CrmDashboard({ authenticatedUser }) {
   const navigate = useNavigate();
   const location = useLocation();
   const { settings, setUser } = useSettings();
+  const sessionCapabilities = useMemo(
+    () => getWorkspaceCapabilities(authenticatedUser),
+    [authenticatedUser]
+  );
+  const canOpenSection = useCallback(
+    (nextSection) => {
+      if (nextSection === "owner") return sessionCapabilities.platformOwner;
+      if (nextSection === "invoices") return sessionCapabilities.canManageBilling;
+      return true;
+    },
+    [sessionCapabilities.canManageBilling, sessionCapabilities.platformOwner]
+  );
 
   // When routed to /app/import, auto-open Settings → Imports
   const [settingsTab, setSettingsTab] = useState(null);
@@ -133,7 +204,11 @@ function CrmDashboard({ authenticatedUser }) {
   useEffect(() => {
     const params = new URLSearchParams(location.search);
     const requestedSection = params.get("section");
-    if (requestedSection && Object.prototype.hasOwnProperty.call(SECTION_LABELS, requestedSection)) {
+    if (
+      requestedSection &&
+      Object.prototype.hasOwnProperty.call(SECTION_LABELS, requestedSection) &&
+      canOpenSection(requestedSection)
+    ) {
       setSection(requestedSection);
       if (requestedSection === "calendar" && params.get("view") === "appointments") {
         setCalendarView("appointments");
@@ -150,18 +225,25 @@ function CrmDashboard({ authenticatedUser }) {
       setSettingsTab("imports");
       setSection("settings");
     }
-  }, [location.pathname, location.search]);
+  }, [canOpenSection, location.pathname, location.search]);
 
   useEffect(() => {
     const handleNavigate = (event) => {
       const nextSection = String(event?.detail || "");
-      if (Object.prototype.hasOwnProperty.call(SECTION_LABELS, nextSection)) {
+      if (
+        Object.prototype.hasOwnProperty.call(SECTION_LABELS, nextSection) &&
+        canOpenSection(nextSection)
+      ) {
         setSection(nextSection);
       }
     };
     window.addEventListener("retainai:navigate", handleNavigate);
     return () => window.removeEventListener("retainai:navigate", handleNavigate);
-  }, []);
+  }, [canOpenSection]);
+
+  useEffect(() => {
+    if (!canOpenSection(section)) setSection("overview");
+  }, [canOpenSection, section]);
 
   // user state (single source of truth)
   const [user, setUserState] = useState(() => {
@@ -184,15 +266,14 @@ function CrmDashboard({ authenticatedUser }) {
   // switch the active account behind the session.
   useEffect(() => {
     if (!authenticatedUser?.email) return;
-    setUserState((current) => ({
-      ...(current || {}),
+    setUserState({
       ...authenticatedUser,
       lineOfBusiness:
         authenticatedUser.lineOfBusiness ||
         authenticatedUser.businessType ||
         authenticatedUser.business ||
         "",
-    }));
+    });
     setUser?.(authenticatedUser);
     localStorage.setItem("user", JSON.stringify(authenticatedUser));
   }, [authenticatedUser, setUser]);
@@ -217,18 +298,21 @@ function CrmDashboard({ authenticatedUser }) {
   // Sync across tabs/windows (storage event)
   useEffect(() => {
     function onStorage(e) {
-      if (e.key === "user") {
+      if (e.key === "user" && !authenticatedUser?.email) {
         const next = safeParseJSON(localStorage.getItem("user"), null);
         setUserState(next);
       }
     }
     window.addEventListener("storage", onStorage);
     return () => window.removeEventListener("storage", onStorage);
-  }, []);
+  }, [authenticatedUser?.email]);
 
   const effectiveEmail = useMemo(() => getEffectiveEmail(user), [user]);
 
   const [leads, setLeads] = useState([]);
+  const leadsRef = useRef([]);
+  const [backendAppointments, setBackendAppointments] = useState([]);
+  const [appointmentsTimezone, setAppointmentsTimezone] = useState("");
   const [userTags, setUserTags] = useState([]);
   const [tags, setTags] = useState([]);
 
@@ -237,6 +321,8 @@ function CrmDashboard({ authenticatedUser }) {
   const [draftNotification, setDraftNotification] = useState(null);
   const [highlightLeadIds, setHighlightLeadIds] = useState([]);
   const [loadingLeads, setLoadingLeads] = useState(false);
+  const [leadPersistenceError, setLeadPersistenceError] = useState("");
+  const [deletingLeadId, setDeletingLeadId] = useState(null);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [isMobile, setIsMobile] = useState(() =>
     typeof window !== "undefined" ? window.innerWidth <= 900 : false
@@ -274,7 +360,12 @@ function CrmDashboard({ authenticatedUser }) {
   // 2) Fetch authoritative from backend: GET /api/leads with X-User-Email
   // 3) Save to backend: POST /api/leads with X-User-Email + {leads:[...]} (debounced)
   const saveTimerRef = useRef(null);
+  const leadSaveQueueRef = useRef(Promise.resolve());
   const lastSavedJsonRef = useRef("");
+
+  useEffect(() => {
+    leadsRef.current = leads;
+  }, [leads]);
 
   // Load per-user local cache immediately when user changes
   useEffect(() => {
@@ -331,7 +422,7 @@ function CrmDashboard({ authenticatedUser }) {
 
         // reset save-deduper
         try {
-          lastSavedJsonRef.current = JSON.stringify(serverLeads);
+          lastSavedJsonRef.current = `${effectiveEmail}\n${JSON.stringify(serverLeads)}`;
         } catch {
           lastSavedJsonRef.current = "";
         }
@@ -366,59 +457,118 @@ function CrmDashboard({ authenticatedUser }) {
       try {
         json = JSON.stringify(newLeads);
       } catch {}
-      if (json && json === lastSavedJsonRef.current) return;
+      const saveSignature = json ? `${email}\n${json}` : "";
+      if (saveSignature && saveSignature === lastSavedJsonRef.current) return;
 
       if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
 
-      saveTimerRef.current = setTimeout(async () => {
-        try {
-          const res = await fetch(apiUrl("leads"), {
-            method: "POST",
-            credentials: "include",
-            headers: {
-              "Content-Type": "application/json",
-              Accept: "application/json",
-              "X-User-Email": email,
-            },
-            body: JSON.stringify({ leads: newLeads }),
-          });
+      saveTimerRef.current = setTimeout(() => {
+        const operation = leadSaveQueueRef.current.then(async () => {
+          try {
+            const res = await fetch(apiUrl("leads"), {
+              method: "POST",
+              credentials: "include",
+              headers: {
+                "Content-Type": "application/json",
+                Accept: "application/json",
+                "X-User-Email": email,
+              },
+              body: JSON.stringify({ leads: newLeads }),
+            });
 
-          if (res.ok) {
-            lastSavedJsonRef.current = json || lastSavedJsonRef.current;
-          } else {
+            if (res.ok) {
+              lastSavedJsonRef.current = saveSignature || lastSavedJsonRef.current;
+            }
+          } catch {
             // keep local cache if backend fails
           }
-        } catch {
-          // keep local cache if backend fails
-        }
+        });
+        leadSaveQueueRef.current = operation.catch(() => {});
       }, 450);
     },
     [effectiveEmail, userTags]
   );
 
-  const handleUpdateLead = useCallback(
-    (updated) => {
-      if (!updated) return;
+  const persistLeadsImmediately = useCallback(
+    async (newLeads) => {
+      const email = effectiveEmail;
+      if (!email) throw new Error("Missing workspace email");
 
-      setLeads((prev) => {
-        const match = (a, b) => String(a?.id ?? a?.email) === String(b?.id ?? b?.email);
+      if (saveTimerRef.current) {
+        clearTimeout(saveTimerRef.current);
+        saveTimerRef.current = null;
+      }
 
-        const exists = prev.some((l) => match(l, updated));
-        const next = exists
-          ? prev.map((l) => (match(l, updated) ? { ...l, ...updated } : l))
-          : [updated, ...prev];
+      let json = "";
+      try {
+        json = JSON.stringify(newLeads);
+        localStorage.setItem(leadsKey(email), json);
+      } catch {}
+      setTags(extractTags(newLeads, userTags));
+      const saveSignature = json ? `${email}\n${json}` : "";
 
-        saveLeadsToBackend(next);
-        return next;
+      const operation = leadSaveQueueRef.current.then(async () => {
+        const res = await fetch(apiUrl("leads"), {
+          method: "POST",
+          credentials: "include",
+          headers: {
+            "Content-Type": "application/json",
+            Accept: "application/json",
+            "X-User-Email": email,
+          },
+          body: JSON.stringify({ leads: newLeads }),
+        });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok || data?.ok !== true || Number(data?.count) !== newLeads.length) {
+          throw new Error(data?.error || `Could not save customer changes (${res.status})`);
+        }
+        lastSavedJsonRef.current = saveSignature || lastSavedJsonRef.current;
+        return data;
       });
+
+      leadSaveQueueRef.current = operation.catch(() => {});
+      return operation;
+    },
+    [effectiveEmail, userTags]
+  );
+
+  const handleUpdateLead = useCallback(
+    async (updated) => {
+      if (!updated) throw new Error("Missing customer update");
+
+      const previous = leadsRef.current;
+      const match = (a, b) => String(a?.id ?? a?.email) === String(b?.id ?? b?.email);
+      const exists = previous.some((lead) => match(lead, updated));
+      const next = exists
+        ? previous.map((lead) => (match(lead, updated) ? { ...lead, ...updated } : lead))
+        : [updated, ...previous];
+
+      leadsRef.current = next;
+      setLeads(next);
 
       setDrawerLead((prev) => {
         if (!prev) return prev;
         const same = String(prev?.id ?? prev?.email) === String(updated?.id ?? updated?.email);
         return same ? { ...prev, ...updated } : prev;
       });
+
+      try {
+        await persistLeadsImmediately(next);
+        setLeadPersistenceError("");
+        return updated;
+      } catch (error) {
+        if (leadsRef.current === next) {
+          leadsRef.current = previous;
+          setLeads(previous);
+          try {
+            localStorage.setItem(leadsKey(effectiveEmail), JSON.stringify(previous));
+          } catch {}
+        }
+        setLeadPersistenceError(error?.message || "Could not save customer changes.");
+        throw error;
+      }
     },
-    [saveLeadsToBackend]
+    [effectiveEmail, persistLeadsImmediately]
   );
 
   useEffect(() => {
@@ -470,10 +620,77 @@ function CrmDashboard({ authenticatedUser }) {
     }
   };
 
-  const handleDeleteLead = (id) => {
-    const newLeads = leads.filter((l) => String(l.id) !== String(id));
+  const handleDeleteLead = async (id) => {
+    const leadIndex = leads.findIndex((lead) => String(lead?.id) === String(id));
+    if (leadIndex < 0 || deletingLeadId !== null) return false;
+
+    const leadToDelete = leads[leadIndex];
+    const leadLabel = leadToDelete?.name || leadToDelete?.email || "this contact";
+    if (!window.confirm(`Delete ${leadLabel}? This permanently removes the contact from this workspace.`)) {
+      return false;
+    }
+
+    const email = effectiveEmail;
+    if (!email) {
+      setLeadPersistenceError("This contact could not be deleted because the workspace is unavailable.");
+      return false;
+    }
+
+    const newLeads = leads.filter((lead) => String(lead?.id) !== String(id));
+    const json = JSON.stringify(newLeads);
+    if (saveTimerRef.current) {
+      clearTimeout(saveTimerRef.current);
+      saveTimerRef.current = null;
+    }
+
+    setDeletingLeadId(String(id));
+    setLeadPersistenceError("");
     setLeads(newLeads);
-    saveLeadsToBackend(newLeads);
+    setTags(extractTags(newLeads, userTags));
+
+    try {
+      const operation = leadSaveQueueRef.current.then(async () => {
+        const response = await fetch(apiUrl("leads"), {
+          method: "POST",
+          credentials: "include",
+          headers: {
+            "Content-Type": "application/json",
+            Accept: "application/json",
+            "X-User-Email": email,
+          },
+          body: JSON.stringify({ leads: newLeads }),
+        });
+        const payload = await response.json().catch(() => ({}));
+        return { response, payload };
+      });
+      leadSaveQueueRef.current = operation.then(() => undefined, () => undefined);
+      const { response, payload } = await operation;
+      if (!response.ok || payload?.ok === false || payload?.count !== newLeads.length) {
+        throw new Error(payload?.error || `Contact deletion failed (${response.status})`);
+      }
+
+      lastSavedJsonRef.current = `${email}\n${json}`;
+      try {
+        localStorage.setItem(leadsKey(email), json);
+      } catch {}
+      return true;
+    } catch (error) {
+      if (normEmail(effectiveEmail) === normEmail(email)) {
+        setLeads((current) => {
+          if (current.some((lead) => String(lead?.id) === String(id))) return current;
+          const restored = [...current];
+          restored.splice(Math.min(leadIndex, restored.length), 0, leadToDelete);
+          return restored;
+        });
+        setTags((current) => extractTags([leadToDelete], current));
+        setLeadPersistenceError(
+          error?.message || "This contact could not be deleted. No changes were saved."
+        );
+      }
+      return false;
+    } finally {
+      setDeletingLeadId(null);
+    }
   };
 
   // Lead contacted (backend optional; we ALWAYS update locally + persist)
@@ -557,7 +774,7 @@ function CrmDashboard({ authenticatedUser }) {
     setSection("messages");
   }
 
-  // Send AI prompt email (fix 405 by fallback)
+  // Send AI prompt email through the authenticated POST endpoint only.
   async function handleSendAIPromptEmail(
     lead,
     aiResponse,
@@ -565,69 +782,29 @@ function CrmDashboard({ authenticatedUser }) {
     promptType = ""
   ) {
     if (!lead || !lead.email || !aiResponse) {
-      alert("Missing recipient or message");
-      return;
+      throw new Error("Missing recipient or message.");
     }
 
     const body = {
+      leadId: lead.id,
       leadEmail: lead.email,
-      userEmail: effectiveEmail || user?.email || "",
-      leadName: lead.name || "",
       message: aiResponse,
       subject: aiSubject,
       promptType: promptType || "",
     };
 
-    try {
-      const res = await fetch(apiUrl("send-ai-message"), {
-        method: "POST",
-        credentials: "include",
-        headers: { "Content-Type": "application/json", Accept: "application/json" },
-        body: JSON.stringify(body),
-      });
-
-      // If backend is GET-only by mistake, retry as GET
-      if (res.status === 405) {
-        const params = new URLSearchParams();
-        Object.entries(body).forEach(([k, v]) => params.set(k, String(v ?? "")));
-
-        const res2 = await fetch(`${apiUrl("send-ai-message")}?${params.toString()}`, {
-          method: "GET",
-          credentials: "include",
-          headers: { Accept: "application/json" },
-        });
-
-        if (res2.ok) {
-          setHighlightLeadIds([lead.id]);
-          alert("AI prompt email sent!");
-          return;
-        }
-
-        let err2 = {};
-        try {
-          err2 = await res2.json();
-        } catch {
-          err2 = { error: await res2.text().catch(() => "") };
-        }
-        alert("Failed to send: " + (err2.error || `HTTP ${res2.status}`));
-        return;
-      }
-
-      if (res.ok) {
-        setHighlightLeadIds([lead.id]);
-        alert("AI prompt email sent!");
-      } else {
-        let err = {};
-        try {
-          err = await res.json();
-        } catch {
-          err = { error: await res.text().catch(() => "") };
-        }
-        alert("Failed to send: " + (err.error || `HTTP ${res.status}`));
-      }
-    } catch (e) {
-      alert("Error sending AI prompt: " + e.message);
+    const response = await fetch(apiUrl("send-ai-message"), {
+      method: "POST",
+      credentials: "include",
+      headers: { "Content-Type": "application/json", Accept: "application/json" },
+      body: JSON.stringify(body),
+    });
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok || data?.ok === false) {
+      throw new Error(data?.error || `Message could not be sent (HTTP ${response.status}).`);
     }
+    setHighlightLeadIds([lead.id]);
+    return true;
   }
 
   // Refresh user (best-effort; backend may not support this)
@@ -664,7 +841,49 @@ function CrmDashboard({ authenticatedUser }) {
     } catch {}
   }, [effectiveEmail, user, setUser]);
 
-  const crmAppointments = useMemo(() => getAppointmentsFromLeads(leads), [leads]);
+  const refreshAppointments = useCallback(async () => {
+    if (!effectiveEmail) {
+      setBackendAppointments([]);
+      setAppointmentsTimezone("");
+      return;
+    }
+    const response = await fetch(
+      apiUrl(`appointments/${encodeURIComponent(effectiveEmail)}`),
+      { credentials: "include", headers: { Accept: "application/json" } }
+    );
+    if (!response.ok) throw new Error(`Appointments request failed (${response.status})`);
+    const payload = await response.json().catch(() => ({}));
+    setBackendAppointments(Array.isArray(payload?.appointments) ? payload.appointments : []);
+    setAppointmentsTimezone(payload?.timezone || "");
+  }, [effectiveEmail]);
+
+  useEffect(() => {
+    let cancelled = false;
+    const load = async () => {
+      try {
+        if (!cancelled) await refreshAppointments();
+      } catch {
+        // Keep the last known list visible; child pages surface their own retry state.
+      }
+    };
+    load();
+    window.addEventListener("appointments:changed", load);
+    return () => {
+      cancelled = true;
+      window.removeEventListener("appointments:changed", load);
+    };
+  }, [refreshAppointments]);
+
+  const crmAppointments = useMemo(() => {
+    const backend = (backendAppointments || [])
+      .map((appointment) => normalizeBackendAppointment(appointment, leads))
+      .filter(Boolean);
+    const backendSignatures = new Set(backend.map(appointmentSignature));
+    const unmatchedLegacy = getAppointmentsFromLeads(leads).filter(
+      (appointment) => !backendSignatures.has(appointmentSignature(appointment))
+    );
+    return [...backend, ...unmatchedLegacy];
+  }, [backendAppointments, leads]);
   const SIDEBAR_WIDTH = isMobile ? 0 : sidebarCollapsed ? 60 : 245;
 
   // Google connection
@@ -708,7 +927,12 @@ function CrmDashboard({ authenticatedUser }) {
     if (!email) return;
 
     try {
-      const res = await fetch(apiUrl(`google/events/${encodeURIComponent(email)}`), {
+      let calendarId = "";
+      try {
+        calendarId = localStorage.getItem(`retainai_selected_calendar_${email}`) || "";
+      } catch {}
+      const query = calendarId ? `?calendarId=${encodeURIComponent(calendarId)}` : "";
+      const res = await fetch(apiUrl(`google/events/${encodeURIComponent(email)}${query}`), {
         credentials: "include",
         headers: { Accept: "application/json" },
       });
@@ -733,6 +957,15 @@ function CrmDashboard({ authenticatedUser }) {
     }
   }, [effectiveEmail]);
 
+  useEffect(() => {
+    const refreshSelectedCalendar = () => {
+      if (section === "calendar") getGoogleEvents();
+    };
+    window.addEventListener("google-calendar:changed", refreshSelectedCalendar);
+    return () =>
+      window.removeEventListener("google-calendar:changed", refreshSelectedCalendar);
+  }, [getGoogleEvents, section]);
+
   // Only try to fetch events when in calendar/appointments AND connected.
   useEffect(() => {
     (async () => {
@@ -756,33 +989,37 @@ function CrmDashboard({ authenticatedUser }) {
     setShowQuickAdd(true);
   }
 
-  function handleQuickAddSave({ leadId, title, time }) {
+  async function handleQuickAddSave({ leadId, title, time }) {
     if (!leadId || !title || !quickAddDate) return;
-
-    setLeads((prev) => {
-      const next = prev.map((l) =>
-        String(l.id) === String(leadId)
-          ? {
-              ...l,
-              appointments: [
-                ...(l.appointments || []),
-                {
-                  title,
-                  date: quickAddDate.toISOString().slice(0, 10),
-                  time,
-                  done: false,
-                },
-              ],
-            }
-          : l
+    try {
+      const date = localDateKey(quickAddDate);
+      const appointmentTime = buildAppointmentTimestamp(date, time);
+      if (!appointmentTime) throw new Error("Choose a valid appointment date and time.");
+      const response = await fetch(
+        apiUrl(`appointments/${encodeURIComponent(effectiveEmail)}`),
+        {
+          method: "POST",
+          credentials: "include",
+          headers: { "Content-Type": "application/json", Accept: "application/json" },
+          body: JSON.stringify({
+            lead_id: leadId,
+            title: title.trim(),
+            appointment_time: appointmentTime,
+            timezone: appointmentsTimezone || getBrowserTimeZone(),
+            duration: 30,
+            status: "scheduled",
+          }),
+        }
       );
-
-      saveLeadsToBackend(next);
-      return next;
-    });
-
-    setShowQuickAdd(false);
-    setQuickAddDate(null);
+      const payload = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(payload?.error || "Could not create the appointment.");
+      await refreshAppointments();
+      window.dispatchEvent(new Event("appointments:changed"));
+      setShowQuickAdd(false);
+      setQuickAddDate(null);
+    } catch (error) {
+      alert(error?.message || "Could not create the appointment. Please try again.");
+    }
   }
 
   useEffect(() => {
@@ -807,7 +1044,11 @@ function CrmDashboard({ authenticatedUser }) {
         background: "#181a1b",
       }}
     >
-      <CommandPalette setSection={setSection} isOwner={Boolean(user?.platformOwner)} />
+      <CommandPalette
+        setSection={setSection}
+        isOwner={sessionCapabilities.platformOwner}
+        canManageBilling={sessionCapabilities.canManageBilling}
+      />
       <header className="crm-mobile-header">
         <button
           type="button"
@@ -902,6 +1143,22 @@ function CrmDashboard({ authenticatedUser }) {
 
         {section === "dashboard" && (
           <>
+            {leadPersistenceError && (
+              <div
+                role="alert"
+                style={{
+                  marginBottom: 12,
+                  padding: "11px 13px",
+                  border: "1px solid rgba(230,101,101,.55)",
+                  borderRadius: 10,
+                  background: "rgba(230,101,101,.08)",
+                  color: "#ff9b9b",
+                  fontSize: 13,
+                }}
+              >
+                {leadPersistenceError}
+              </div>
+            )}
             <LeadsDashboard
               leads={leads}
               loading={loadingLeads}
@@ -1094,6 +1351,7 @@ function CrmDashboard({ authenticatedUser }) {
                   </h3>
                   <QuickAddForm
                     leads={leads}
+                    timeZone={appointmentsTimezone || getBrowserTimeZone()}
                     onSave={handleQuickAddSave}
                     onCancel={() => {
                       setShowQuickAdd(false);
@@ -1146,7 +1404,7 @@ function CrmDashboard({ authenticatedUser }) {
 
         {section === "analytics" && <Insights leads={leads} events={crmAppointments} user={user} />}
 
-        {section === "invoices" && (
+        {section === "invoices" && sessionCapabilities.canManageBilling && (
           <Invoices user={user} leads={leads} refreshUser={handleRefreshUser} />
         )}
 
@@ -1161,16 +1419,27 @@ function CrmDashboard({ authenticatedUser }) {
 }
 
 // Quick Add Appointment form
-function QuickAddForm({ leads, onSave, onCancel }) {
+function QuickAddForm({ leads, onSave, onCancel, timeZone }) {
   const [leadId, setLeadId] = useState("");
   const [title, setTitle] = useState("");
-  const [time, setTime] = useState("");
+  const [time, setTime] = useState(() => {
+    const next = new Date(Date.now() + 30 * 60 * 1000);
+    next.setMinutes(Math.ceil(next.getMinutes() / 15) * 15, 0, 0);
+    return timeKeyFromParts(appointmentDateTimeParts(next, timeZone)) || "09:00";
+  });
+  const [saving, setSaving] = useState(false);
 
   return (
     <form
-      onSubmit={(e) => {
+      onSubmit={async (e) => {
         e.preventDefault();
-        onSave({ leadId, title, time });
+        if (saving) return;
+        setSaving(true);
+        try {
+          await onSave({ leadId, title, time });
+        } finally {
+          setSaving(false);
+        }
       }}
     >
       <div style={{ marginBottom: 14 }}>
@@ -1235,12 +1504,17 @@ function QuickAddForm({ leads, onSave, onCancel }) {
             border: "1px solid #444",
             width: "100%",
           }}
+          required
         />
+        <div style={{ color: "#9aa3ab", fontSize: 12, marginTop: 6 }}>
+          Saved in {String(timeZone || "UTC").replace(/_/g, " ")}.
+        </div>
       </div>
 
       <div style={{ display: "flex", gap: 10 }}>
         <button
           type="submit"
+          disabled={saving}
           style={{
             background: "#f7cb53",
             color: "#232323",
@@ -1252,11 +1526,12 @@ function QuickAddForm({ leads, onSave, onCancel }) {
             width: "50%",
           }}
         >
-          Add
+          {saving ? "Adding…" : "Add"}
         </button>
         <button
           type="button"
           onClick={onCancel}
+          disabled={saving}
           style={{
             background: "#232323",
             color: "#fff",

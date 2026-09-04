@@ -1,9 +1,11 @@
 # backend/app_imports.py
 from flask import Blueprint, request, jsonify, redirect, Response, session
 import os, time, json, requests, hashlib, csv, io, re
-from urllib.parse import urlencode
+from urllib.parse import urlencode, urlparse
 from uuid import uuid4
 from storage import DATA_ROOT, load_leads, save_user_leads
+from oauth_state import issue_oauth_state, consume_oauth_state, safe_same_origin_redirect
+from secret_store import encrypt_secret, decrypt_secret
 
 def _load_json_file(path, default):
     try:
@@ -13,12 +15,18 @@ def _load_json_file(path, default):
         return default
 
 def _save_json_file(path, data):
-    with open(path, "w", encoding="utf-8") as f:
+    os.makedirs(os.path.dirname(os.path.abspath(path)), exist_ok=True)
+    temp_path = f"{path}.{uuid4().hex}.tmp"
+    with open(temp_path, "w", encoding="utf-8") as f:
         json.dump(data, f, ensure_ascii=False, indent=2)
+    os.replace(temp_path, path)
 
 # ---------- Config ----------
 GOOGLE_CLIENT_ID = os.getenv("GOOGLE_CLIENT_ID", "")
 GOOGLE_CLIENT_SECRET = os.getenv("GOOGLE_CLIENT_SECRET", "")
+GOOGLE_DEBUG_ENDPOINTS_ENABLED = str(
+    os.getenv("GOOGLE_DEBUG_ENDPOINTS_ENABLED") or ""
+).strip().lower() in {"1", "true", "yes", "on"}
 
 # UNIQUE redirect URI for People/Contacts (avoid conflict with Calendar OAuth)
 GOOGLE_PEOPLE_REDIRECT_URI = os.getenv(
@@ -36,15 +44,19 @@ FRONTEND_BASE = (
 # People API scope (notes require contacts.readonly); include basic identity
 GOOGLE_SCOPE = "openid email profile https://www.googleapis.com/auth/contacts.readonly"
 
-print("[GOOGLE PEOPLE AUTH] client_id=", GOOGLE_CLIENT_ID)
-print("[GOOGLE PEOPLE AUTH] redirect_uri=", GOOGLE_PEOPLE_REDIRECT_URI)
-
 # ---------- Blueprint ----------
 imports_bp = Blueprint("imports_bp", __name__)
 
 # ---------- Storage for Google tokens/sync ----------
-TOKENS_FILE = os.getenv("GOOGLE_TOKENS_FILE", "google_tokens.json")   # per-user tokens
-SYNC_FILE   = os.getenv("GOOGLE_SYNC_FILE",   "google_sync.json")     # nextSyncToken
+def _runtime_path(env_name, filename):
+    configured = str(os.getenv(env_name) or "").strip()
+    if not configured:
+        return os.path.join(DATA_ROOT, filename)
+    return configured if os.path.isabs(configured) else os.path.join(DATA_ROOT, configured)
+
+
+TOKENS_FILE = _runtime_path("GOOGLE_TOKENS_FILE", "google_tokens.json")
+SYNC_FILE = _runtime_path("GOOGLE_SYNC_FILE", "google_sync.json")
 IMPORT_HISTORY_FILE = os.path.join(DATA_ROOT, "import_history.json")
 
 def _load_json(path, default):
@@ -55,11 +67,17 @@ def _load_json(path, default):
         return default
 
 def _save_json(path, data):
-    with open(path, "w", encoding="utf-8") as f:
-        json.dump(data, f, ensure_ascii=False, indent=2)
+    _save_json_file(path, data)
 
 def _normalize_email(e):
     return (e or "").strip().lower()
+
+
+def _token_encryption_keys():
+    return (
+        str(os.getenv("DATA_ENCRYPTION_KEY") or "").strip(),
+        str(os.getenv("PREVIOUS_DATA_ENCRYPTION_KEY") or "").strip(),
+    )
 
 def _load_leads_bucket(user_email):
     all_leads = load_leads()
@@ -69,9 +87,14 @@ def _save_leads_bucket(user_email, leads):
     save_user_leads(user_email, leads)
 
 def _request_user_email():
-    session_user = str(session.get("user_email") or session.get("email") or "").strip().lower()
-    header_user = str(request.headers.get("X-User-Email") or "").strip().lower()
-    return session_user or header_user
+    # Imports and Google People tokens belong to the shared workspace. Never
+    # key them by a caller-supplied header or split a team into private stores.
+    return str(
+        session.get("org_email")
+        or session.get("user_email")
+        or session.get("email")
+        or ""
+    ).strip().lower()
 
 def _clean_phone(value, country_code="+1"):
     raw = str(value or "").strip()
@@ -108,12 +131,45 @@ def _remember_import(user_email, before, after, summary, label):
 # ---------- Token helpers ----------
 def _set_token(user_email, token_payload):
     tokens = _load_json(TOKENS_FILE, {})
-    tokens[user_email] = token_payload
+    # Google can omit refresh_token on later exchanges. Merge into the stored
+    # metadata so a valid encrypted refresh token is never accidentally erased.
+    record = dict(tokens.get(user_email) or {})
+    record.update(dict(token_payload or {}))
+    key, _ = _token_encryption_keys()
+    for field in ("access_token", "refresh_token"):
+        value = str(record.pop(field, "") or "")
+        if value:
+            record[f"{field}_encrypted"] = encrypt_secret(value, key)
+    tokens[user_email] = record
     _save_json(TOKENS_FILE, tokens)
 
 def _get_token(user_email):
     tokens = _load_json(TOKENS_FILE, {})
-    return tokens.get(user_email)
+    stored = tokens.get(user_email)
+    if not isinstance(stored, dict):
+        return None
+    key, previous_key = _token_encryption_keys()
+    result = dict(stored)
+    changed = False
+    for field in ("access_token", "refresh_token"):
+        encrypted_field = f"{field}_encrypted"
+        encrypted = str(stored.get(encrypted_field) or "")
+        legacy = str(stored.get(field) or "")
+        value = decrypt_secret(encrypted, key, previous_key) if encrypted else legacy
+        result.pop(encrypted_field, None)
+        if value:
+            result[field] = value
+        else:
+            result.pop(field, None)
+        if legacy:
+            if value and not encrypted:
+                stored[encrypted_field] = encrypt_secret(value, key)
+            stored.pop(field, None)
+            changed = True
+    if changed:
+        tokens[user_email] = stored
+        _save_json(TOKENS_FILE, tokens)
+    return result
 
 def _set_sync_token(user_email, sync_token):
     syncs = _load_json(SYNC_FILE, {})
@@ -367,6 +423,8 @@ def _popup_finish_html(redirect_to, query=None, message="Google import finished.
         qs = "?" + urlencode(query or {})
     except Exception:
         qs = ""
+    frontend = urlparse(FRONTEND_BASE)
+    frontend_origin = f"{frontend.scheme}://{frontend.netloc}"
     return f"""<!doctype html>
 <html><head><meta charset="utf-8"><title>Done</title>
 <style>
@@ -381,7 +439,7 @@ def _popup_finish_html(redirect_to, query=None, message="Google import finished.
   var redirect = {json.dumps(redirect_to)} + {json.dumps(qs)};
   try {{
     if (window.opener && !window.opener.closed) {{
-      try {{ window.opener.postMessage({{ type: 'google-import-complete', ok: true }}, '*'); }} catch (e) {{}}
+      try {{ window.opener.postMessage({{ type: 'google-import-complete', ok: true }}, {json.dumps(frontend_origin)}); }} catch (e) {{}}
       window.close();
       return;
     }}
@@ -535,7 +593,7 @@ def undo_import(import_id):
 
 @imports_bp.route("/api/google/status")
 def google_status():
-    user_email = (request.args.get("userEmail") or "").strip().lower()
+    user_email = _request_user_email()
     if not user_email:
         return jsonify({"error": "missing_userEmail"}), 400
     tokens = _get_token(user_email)
@@ -551,8 +609,7 @@ def google_status():
 
 @imports_bp.route("/api/google/import-now", methods=["POST"])
 def google_import_now():
-    payload = request.json or {}
-    user_email = (payload.get("userEmail") or "").strip().lower()
+    user_email = _request_user_email()
     if not user_email:
         return jsonify({"error": "missing_userEmail"}), 400
 
@@ -640,7 +697,12 @@ def google_import_now():
 
 @imports_bp.route("/api/google/debug-list")
 def google_debug_list():
-    user_email = (request.args.get("userEmail") or "").strip().lower()
+    # This endpoint exposes a sample of contact names, email addresses and
+    # phone numbers. Keep it unavailable in normal deployments; an operator
+    # must deliberately opt in for a short-lived diagnostic session.
+    if not GOOGLE_DEBUG_ENDPOINTS_ENABLED:
+        return jsonify({"error": "not_found"}), 404
+    user_email = _request_user_email()
     if not user_email:
         return jsonify({"error": "missing_userEmail"}), 400
     tok = _get_token(user_email)
@@ -674,13 +736,14 @@ def google_debug_list():
 
 @imports_bp.route("/api/google/authorize")
 def google_authorize():
-    user_email = (request.args.get("userEmail") or request.headers.get("X-User-Email") or "").strip().lower()
+    user_email = _request_user_email()
     # DEFAULT: return to dashboard unless caller passes a redirect
-    redirect_to = request.args.get("redirect") or f"{FRONTEND_BASE}/app"
+    default_redirect = f"{FRONTEND_BASE}/app"
+    redirect_to = safe_same_origin_redirect(request.args.get("redirect"), default_redirect)
     if not user_email:
         return Response(_popup_close_html(), mimetype="text/html", status=400)
 
-    state = json.dumps({"u": user_email, "r": redirect_to})
+    state = issue_oauth_state("google_people", user_email, redirect_to)
     params = {
         "client_id": GOOGLE_CLIENT_ID,
         "redirect_uri": GOOGLE_PEOPLE_REDIRECT_URI,
@@ -700,20 +763,19 @@ def google_people_oauth_callback():
     state_raw = request.args.get("state")
     code = request.args.get("code")
 
-    # default if state missing -> dashboard
-    redirect_to = FRONTEND_BASE + "/app"
-    user_email = ""
+    default_redirect = FRONTEND_BASE + "/app"
+    state = consume_oauth_state("google_people", state_raw)
+    redirect_to = safe_same_origin_redirect(
+        state.get("redirect_url") if state else "", default_redirect
+    )
+    user_email = str((state or {}).get("subject") or "").strip().lower()
 
-    try:
-        if state_raw and state_raw.strip().startswith("{"):
-            state = json.loads(state_raw)
-            user_email = (state.get("u") or "").strip().lower()
-            redirect_to = (state.get("r") or redirect_to)
-        else:
-            user_email = (state_raw or "").strip().lower()
-    except Exception:
-        user_email = (state_raw or "").strip().lower()
-
+    if not state:
+        return Response(
+            _popup_finish_html(default_redirect, message="This Google authorization request expired. Please try again."),
+            mimetype="text/html",
+            status=400,
+        )
     if error or (not code) or (not user_email):
         return Response(_popup_finish_html(redirect_to, message="Google authorization failed or was cancelled."), mimetype="text/html", status=400)
 
@@ -725,6 +787,12 @@ def google_people_oauth_callback():
         return Response(_popup_finish_html(redirect_to, message="Could not obtain Google tokens."), mimetype="text/html", status=400)
 
     access_token = token_payload.get("access_token")
+    if not access_token:
+        return Response(
+            _popup_finish_html(redirect_to, message="Google did not return a usable access token. Please try again."),
+            mimetype="text/html",
+            status=400,
+        )
     token_payload["obtained_at"] = int(time.time())
     _set_token(user_email, token_payload)
 

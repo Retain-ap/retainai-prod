@@ -2,6 +2,7 @@ import datetime
 import hashlib
 import json
 import os
+import re
 import sqlite3
 import time
 import zipfile
@@ -415,8 +416,17 @@ def owner_create_complimentary_account():
 
     if not email or "@" not in email or len(email) > 254:
         return jsonify({"error": "valid_email_required"}), 400
-    if len(password) < 12 or len(password) > 256:
-        return jsonify({"error": "Password must contain between 12 and 256 characters."}), 400
+    if (
+        len(password) < 12
+        or len(password) > 256
+        or not re.search(r"[a-z]", password)
+        or not re.search(r"[A-Z]", password)
+        or not re.search(r"\d", password)
+        or not re.search(r"[^A-Za-z0-9]", password)
+    ):
+        return jsonify({
+            "error": "Use 12 or more characters with uppercase and lowercase letters, a number, and a symbol."
+        }), 400
     if is_platform_owner(email):
         return jsonify({"error": "platform_owner_account_locked"}), 403
 
@@ -509,8 +519,12 @@ def owner_account_action(email):
         return jsonify({"error": "platform_owner_account_locked"}), 403
     if action == "suspend":
         account["status"] = "suspended"
+        account["access_status"] = "suspended"
+        account["security_version"] = int(account.get("security_version") or 0) + 1
     elif action == "archive":
         account["status"] = "archived"
+        account["access_status"] = "archived"
+        account["security_version"] = int(account.get("security_version") or 0) + 1
         account["archived_at"] = (
             datetime.datetime.now(datetime.timezone.utc).isoformat().replace("+00:00", "Z")
         )
@@ -518,6 +532,9 @@ def owner_account_action(email):
         if account.get("billing_status") == "complimentary_revoked":
             return jsonify({"error": "Revoked complimentary access cannot be reactivated as a paid account."}), 409
         account["status"] = "active"
+        account["access_status"] = "active"
+        account.pop("archived_at", None)
+        account["security_version"] = int(account.get("security_version") or 0) + 1
     elif action == "revoke_complimentary":
         if not account.get("billing_exempt"):
             return jsonify({"error": "account_is_not_complimentary"}), 400
@@ -525,6 +542,7 @@ def owner_account_action(email):
         account["billing_exempt"] = False
         account["billing_status"] = "complimentary_revoked"
         account["status"] = "suspended"
+        account["access_status"] = "suspended"
         account["security_version"] = int(account.get("security_version") or 0) + 1
         details["access_revoked"] = True
     elif action == "restore_complimentary":
@@ -534,6 +552,7 @@ def owner_account_action(email):
         account["billing_exempt"] = True
         account["billing_status"] = "complimentary"
         account["status"] = "active"
+        account["access_status"] = "active"
         account["security_version"] = int(account.get("security_version") or 0) + 1
         details["access_restored"] = True
     elif action == "extend_trial":
@@ -541,7 +560,16 @@ def owner_account_action(email):
         account["trial_start"] = (
             datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(days=14 - days)
         ).isoformat()
+        # This is an explicit platform-owner override. Accounts that already
+        # consumed a trial remain ineligible unless we deliberately restore
+        # eligibility here, which previously made this action appear to work
+        # while access control continued to reject the customer.
+        account["trial_eligible"] = True
+        account["trial_ending_notice_sent"] = False
+        account["billing_status"] = "trial"
         account["status"] = "trial"
+        account["access_status"] = "active"
+        account["security_version"] = int(account.get("security_version") or 0) + 1
         details["days"] = days
     elif action == "support_note":
         note = str(data.get("note") or "").strip()[:1000]
@@ -643,13 +671,19 @@ def owner_health():
             connection.close()
         except Exception:
             database_ok = False
-    scheduler_on = os.getenv("RUN_SCHEDULER", "0") == "1"
+    scheduler_on = str(os.getenv("RUN_SCHEDULER") or "").strip().lower() in {
+        "1", "true", "yes", "on"
+    }
     checks = {
         "backend_online": True,
         "database": database_ok,
         "persistent_disk": disk_ok,
         "scheduler": scheduler_on,
-        "session_secret": bool(os.getenv("SESSION_SECRET") or os.getenv("FLASK_SECRET_KEY")),
+        "session_secret": bool(os.getenv("SESSION_SECRET")),
+        "data_encryption_key": bool(
+            os.getenv("DATA_ENCRYPTION_KEY")
+            and os.getenv("DATA_ENCRYPTION_KEY") != os.getenv("SESSION_SECRET")
+        ),
         "whatsapp_token": bool(os.getenv("WHATSAPP_TOKEN") or os.getenv("WHATSAPP_ACCESS_TOKEN")),
         "whatsapp_phone_id": bool(os.getenv("WHATSAPP_PHONE_ID") or os.getenv("WHATSAPP_PHONE_NUMBER_ID")),
         "meta_app_secret": bool(os.getenv("APP_SECRET") or os.getenv("META_APP_SECRET")),
@@ -680,6 +714,7 @@ def owner_health():
         {"key": "database", "label": "Database", "ok": database_ok, "detail": "Connection verified" if database_ok else "Connection failed", "action": "Check DATABASE_URL and the persistent database service."},
         {"key": "disk", "label": "Persistent disk", "ok": disk_ok, "detail": DATA_ROOT, "action": "Attach a writable Render disk and set DATA_ROOT to its mount path."},
         {"key": "scheduler", "label": "Scheduler", "ok": scheduler_on, "detail": "Enabled" if scheduler_on else "Disabled", "action": "Set RUN_SCHEDULER=1 on exactly one backend instance."},
+        {"key": "secrets", "label": "Independent application secrets", "ok": checks["session_secret"] and checks["data_encryption_key"], "detail": "Session signing and data encryption keys configured" if checks["session_secret"] and checks["data_encryption_key"] else "SESSION_SECRET or independent DATA_ENCRYPTION_KEY missing", "action": "Configure separate high-entropy SESSION_SECRET and DATA_ENCRYPTION_KEY values in Render."},
         {"key": "whatsapp", "label": "WhatsApp credentials", "ok": checks["whatsapp_token"] and checks["whatsapp_phone_id"], "detail": "Token and phone ID configured" if checks["whatsapp_token"] and checks["whatsapp_phone_id"] else "Credentials incomplete", "action": "Open Settings > Integrations and validate a permanent Meta System User token, Phone Number ID, and WABA ID."},
         {"key": "webhook", "label": "Last WhatsApp webhook", "ok": bool(last_event), "detail": str(last_event.get("created_at") or "No event received yet"), "action": "Subscribe the Meta app webhook to messages and verify the callback URL."},
         {"key": "stripe", "label": "Stripe webhooks", "ok": checks["stripe"] and checks["stripe_webhook"], "detail": "Secret and webhook signing secret configured", "action": "Add STRIPE_SECRET_KEY and STRIPE_WEBHOOK_SECRET in Render."},

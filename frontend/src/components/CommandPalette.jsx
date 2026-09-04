@@ -2,7 +2,7 @@ import React, { useEffect, useMemo, useState } from "react";
 import { FaSearch } from "react-icons/fa";
 import "./product-system.css";
 
-export default function CommandPalette({ setSection, isOwner }) {
+export default function CommandPalette({ setSection, isOwner, canManageBilling = false }) {
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState("");
   useEffect(() => {
@@ -25,11 +25,11 @@ export default function CommandPalette({ setSection, isOwner }) {
       ["calendar", "Open calendar", "Scheduling"],
       ["automations", "Open automation playbooks", "Growth"],
       ["analytics", "Open analytics", "Insights"],
-      ["invoices", "Open invoices", "Billing"],
+      ...(canManageBilling ? [["invoices", "Open invoices", "Billing"]] : []),
       ["settings", "Open settings", "Account"],
       ...(isOwner ? [["owner", "Open owner command centre", "Platform"]] : []),
     ],
-    [isOwner]
+    [canManageBilling, isOwner]
   );
   const filtered = actions.filter((item) => `${item[1]} ${item[2]}`.toLowerCase().includes(query.toLowerCase()));
   if (!open) return null;

@@ -289,9 +289,9 @@ export default function LeadsDashboard({
             setDrawerLead(null);
             onEditLead(drawerLead);
           }}
-          onDelete={() => {
-            setDrawerLead(null);
-            onDeleteLead(drawerLead.id);
+          onDelete={async () => {
+            const deleted = await onDeleteLead(drawerLead.id);
+            if (deleted) setDrawerLead(null);
           }}
           onContacted={() => {
             setDrawerLead(null);
