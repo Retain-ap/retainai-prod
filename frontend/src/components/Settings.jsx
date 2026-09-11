@@ -193,6 +193,7 @@ export default function Settings({
   const [editMode, setEditMode] = useState(false);
   const editModeRef = useRef(false);
   const formDirtyRef = useRef(false);
+  const refreshUserRef = useRef(refreshUser);
   const [saving, setSaving] = useState(false);
   const [info, setInfo] = useState("");
   const [profileBackendOk, setProfileBackendOk] = useState(null);
@@ -205,6 +206,10 @@ export default function Settings({
   useEffect(() => {
     editModeRef.current = editMode;
   }, [editMode]);
+
+  useEffect(() => {
+    refreshUserRef.current = refreshUser;
+  }, [refreshUser]);
   const [notificationPrefs, setNotificationPrefs] = useState(() => {
     const saved = safeParse(localStorage.getItem("retainai:notification-preferences") || "");
     return {
@@ -406,8 +411,8 @@ export default function Settings({
 
     const runRefresh = async () => {
       try {
-        if (typeof refreshUser === "function") {
-          await refreshUser();
+        if (typeof refreshUserRef.current === "function") {
+          await refreshUserRef.current();
         }
       } catch {}
 
@@ -432,7 +437,7 @@ export default function Settings({
       cancelled = true;
       clearInterval(timer);
     };
-  }, [profile?.email, refreshUser, syncProfileFromBackend]);
+  }, [profile?.email, syncProfileFromBackend]);
 
   useEffect(() => {
     const params = new URLSearchParams(search);

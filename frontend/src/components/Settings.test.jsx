@@ -50,3 +50,28 @@ test("keeps an unsaved profile draft editable when the backend rejects it", asyn
   expect(warning).toHaveBeenCalledWith("Profile save failed.", expect.any(Error));
   warning.mockRestore();
 });
+
+test("does not restart profile polling when the refresh callback identity changes", async () => {
+  localStorage.setItem("user", JSON.stringify(user));
+  global.fetch = jest.fn().mockResolvedValue(response(user));
+
+  const view = render(
+    <MemoryRouter future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
+      <Settings user={user} refreshUser={jest.fn().mockResolvedValue(undefined)} />
+    </MemoryRouter>
+  );
+
+  await waitFor(() => expect(global.fetch).toHaveBeenCalled());
+  await Promise.resolve();
+  const requestsAfterInitialLoad = global.fetch.mock.calls.length;
+
+  view.rerender(
+    <MemoryRouter future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
+      <Settings user={user} refreshUser={jest.fn().mockResolvedValue(undefined)} />
+    </MemoryRouter>
+  );
+  await Promise.resolve();
+  await Promise.resolve();
+
+  expect(global.fetch).toHaveBeenCalledTimes(requestsAfterInitialLoad);
+});
