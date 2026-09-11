@@ -162,7 +162,8 @@ export default function LeadDrawer({
       const mergedLead = { ...lead, ...patch };
 
       if (typeof onUpdateLead === "function") {
-        onUpdateLead(mergedLead);
+        const result = await onUpdateLead(mergedLead);
+        if (result === false) throw new Error("Failed to save customer changes");
         return mergedLead;
       }
 
@@ -203,7 +204,10 @@ export default function LeadDrawer({
         body: JSON.stringify({ leads: all }),
       });
 
-      if (!save.ok) throw new Error("Failed to save leads");
+      const saved = await save.json().catch(() => ({}));
+      if (!save.ok || saved?.ok !== true || Number(saved?.count) !== all.length) {
+        throw new Error(saved?.error || "Failed to save customer changes");
+      }
       return all[idx];
     },
     [lead, onUpdateLead, userEmail]

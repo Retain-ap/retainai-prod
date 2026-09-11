@@ -1,5 +1,6 @@
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useState } from "react";
 import { API_BASE } from "../config";
+import { getWorkspaceEmail } from "../workspaceIdentity";
 import "./NotificationsCenter.css";
 
 const PAGE_SIZE = 12;
@@ -225,58 +226,75 @@ export default function NotificationsCenter({ user }) {
   const [filter, setFilter] = useState("all");
   const [query, setQuery] = useState("");
   const [visibleCount, setVisibleCount] = useState(PAGE_SIZE);
+  const [error, setError] = useState("");
+  const workspaceEmail = getWorkspaceEmail(user);
 
-  const load = async () => {
-    if (!user?.email) return;
+  const load = useCallback(async () => {
+    if (!workspaceEmail) return;
     setLoading(true);
+    setError("");
 
     try {
-      const res = await fetch(`${API}/api/notifications/${encodeURIComponent(user.email)}`, {
+      const res = await fetch(`${API}/api/notifications/${encodeURIComponent(workspaceEmail)}`, {
         credentials: "include",
         cache: "no-store",
         headers: { Accept: "application/json" },
       });
       const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        throw new Error(data?.error || `Notifications are unavailable (HTTP ${res.status}).`);
+      }
       const rows = Array.isArray(data?.notifications) ? data.notifications : [];
       setNotifications(rows.map((n, idx) => normalizeNotification(n, idx)));
-    } catch {
-      setNotifications([]);
+    } catch (loadError) {
+      setError(loadError?.message || "Notifications could not be loaded. Please try again.");
     } finally {
       setLoading(false);
     }
-  };
+  }, [API, workspaceEmail]);
 
   useEffect(() => {
     load();
     const onChanged = () => load();
     window.addEventListener("notifications:changed", onChanged);
     return () => window.removeEventListener("notifications:changed", onChanged);
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [API, user?.email]);
+  }, [load]);
 
   useEffect(() => {
     setVisibleCount(PAGE_SIZE);
   }, [filter, query]);
 
   const markAsRead = async (notif) => {
+    const wasRead = Boolean(notif.read);
     setNotifications((ns) => ns.map((n) => (n._id === notif._id ? { ...n, read: true } : n)));
+    setError("");
 
     const idParam = notif.id ?? notif._id ?? notif.uuid ?? notif._idx;
 
     try {
-      await fetch(
-        `${API}/api/notifications/${encodeURIComponent(user.email)}/${encodeURIComponent(idParam)}/mark_read`,
+      const response = await fetch(
+        `${API}/api/notifications/${encodeURIComponent(workspaceEmail)}/${encodeURIComponent(idParam)}/mark_read`,
         { method: "POST", credentials: "include", headers: { Accept: "application/json" } }
       );
-    } catch {
-      // keep optimistic state
+      if (!response.ok) {
+        const data = await response.json().catch(() => ({}));
+        throw new Error(data?.error || `Could not update this notification (HTTP ${response.status}).`);
+      }
+      return true;
+    } catch (updateError) {
+      setNotifications((ns) =>
+        ns.map((n) => (n._id === notif._id ? { ...n, read: wasRead } : n))
+      );
+      setError(updateError?.message || "The notification was not updated. Please try again.");
+      return false;
     }
   };
 
   const markAllVisibleAsRead = async (items) => {
     for (const notif of items.filter((n) => !n.read)) {
       // eslint-disable-next-line no-await-in-loop
-      await markAsRead(notif);
+      const updated = await markAsRead(notif);
+      if (!updated) break;
     }
   };
 
@@ -302,7 +320,7 @@ export default function NotificationsCenter({ user }) {
   const visible = filtered.slice(0, visibleCount);
   const grouped = useMemo(() => groupNotifications(visible), [visible]);
 
-  if (!user?.email) {
+  if (!workspaceEmail) {
     return (
       <div className="notif-root">
         <div className="notif-header">
@@ -346,6 +364,13 @@ export default function NotificationsCenter({ user }) {
           All RetainAI activity appears here, including emails, WhatsApp activity, reminders,
           automations, and appointment updates.
         </p>
+
+        {error ? (
+          <div className="notif-error" role="alert">
+            <span>{error}</span>
+            <button type="button" onClick={load}>Try again</button>
+          </div>
+        ) : null}
 
         <div className="notif-stats">
           <StatCard label="Total" value={notifications.length} />

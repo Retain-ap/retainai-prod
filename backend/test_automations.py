@@ -11,6 +11,7 @@ _TEST_DATA = tempfile.TemporaryDirectory()
 os.environ.setdefault("DATA_ROOT", _TEST_DATA.name)
 os.environ.setdefault("USE_SQLITE", "false")
 os.environ.setdefault("SESSION_SECRET", "test-only-session-secret-with-adequate-length")
+os.environ.setdefault("DATA_ENCRYPTION_KEY", "different-test-data-encryption-key-with-adequate-length")
 os.environ.setdefault("RUN_SCHEDULER", "0")
 
 import app as retainai  # noqa: E402
@@ -122,13 +123,26 @@ class WhatsAppValidationTests(unittest.TestCase):
 
 class LiveDeliverySafetyTests(unittest.TestCase):
     def test_live_test_requires_explicit_confirmation(self):
-        with retainai.app.test_request_context(
-            "/api/automations/test-live",
-            method="POST",
-            headers={"X-User-Email": "owner@example.com"},
-            json={"lead_email": "customer@example.com", "flow": {"steps": []}},
-        ):
-            response, status = retainai.automations_test_live()
+        client = retainai.app.test_client()
+        users = {
+            "owner@example.com": {
+                "email": "owner@example.com",
+                "org_id": "owner@example.com",
+                "role": "owner",
+                "status": "active",
+                "security_version": 0,
+            }
+        }
+        with client.session_transaction() as signed_session:
+            signed_session["user_email"] = "owner@example.com"
+            signed_session["org_email"] = "owner@example.com"
+            signed_session["security_version"] = 0
+        with patch.object(retainai, "load_users", return_value=users):
+            response = client.post(
+                "/api/automations/test-live",
+                json={"lead_email": "customer@example.com", "flow": {"steps": []}},
+            )
+        status = response.status_code
         self.assertEqual(status, 400)
         self.assertEqual(response.get_json()["error"], "live_confirmation_required")
 

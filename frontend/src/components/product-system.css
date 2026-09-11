@@ -396,6 +396,37 @@
   animation: retainai-spin 0.8s linear infinite;
 }
 
+.auth-gate h1 {
+  margin: 4px 20px 0;
+  color: #fff;
+  font-size: clamp(1.35rem, 4vw, 1.9rem);
+  text-align: center;
+}
+
+.auth-gate p {
+  max-width: 440px;
+  margin: 0 20px;
+  line-height: 1.6;
+  text-align: center;
+}
+
+.auth-gate-retry {
+  min-height: 44px;
+  padding: 0 22px;
+  border: 1px solid rgba(245, 216, 126, 0.45);
+  border-radius: 10px;
+  background: #f5d87e;
+  color: #111217;
+  font: inherit;
+  font-weight: 900;
+  cursor: pointer;
+}
+
+.auth-gate-retry:focus-visible {
+  outline: 3px solid rgba(245, 216, 126, 0.35);
+  outline-offset: 3px;
+}
+
 @keyframes retainai-spin {
   to { transform: rotate(360deg); }
 }

@@ -1,6 +1,8 @@
-import React, { useState, useEffect, useCallback, useMemo } from "react";
+import React, { useState, useEffect, useCallback, useLayoutEffect, useMemo, useRef } from "react";
 import { EyeIcon, BellIcon, ArrowTopRightOnSquareIcon } from "@heroicons/react/24/outline";
 import { API_BASE } from "../config";
+import { getWorkspaceCapabilities, getWorkspaceEmail } from "../workspaceIdentity";
+import "./Invoices.css";
 
 const CURRENCIES = ["usd", "cad", "eur", "gbp", "aud"];
 
@@ -22,6 +24,10 @@ export default function Invoices({ user, leads }) {
   });
 
   const API = useMemo(() => (API_BASE || "").replace(/\/$/, ""), []);
+  const workspaceEmail = getWorkspaceEmail(user);
+  const { canManageBilling } = getWorkspaceCapabilities(user);
+  const accountRequestRef = useRef(0);
+  const invoicesRequestRef = useRef(0);
 
   const fetchJson = useCallback(async (url, options = {}) => {
     const res = await fetch(url, {
@@ -55,7 +61,8 @@ export default function Invoices({ user, leads }) {
   }, []);
 
   const loadAccount = useCallback(async () => {
-    if (!user?.email || !user?.stripe_connected) {
+    const requestId = ++accountRequestRef.current;
+    if (!canManageBilling || !workspaceEmail || !user?.stripe_connected) {
       setAccount(null);
       setDashboardUrl("");
       setForm((f) => ({ ...f, currency: "usd" }));
@@ -64,8 +71,9 @@ export default function Invoices({ user, leads }) {
 
     try {
       const data = await fetchJson(
-        `${API}/api/stripe/account?user_email=${encodeURIComponent(user.email)}`
+        `${API}/api/stripe/account?user_email=${encodeURIComponent(workspaceEmail)}`
       );
+      if (requestId !== accountRequestRef.current) return;
 
       const acct = data?.account || null;
       setAccount(acct);
@@ -75,36 +83,49 @@ export default function Invoices({ user, leads }) {
 
       try {
         const dash = await fetchJson(
-          `${API}/api/stripe/dashboard-link?user_email=${encodeURIComponent(user.email)}`
+          `${API}/api/stripe/dashboard-link?user_email=${encodeURIComponent(workspaceEmail)}`
         );
-        setDashboardUrl(dash?.url || "");
+        if (requestId === accountRequestRef.current) setDashboardUrl(dash?.url || "");
       } catch {
-        setDashboardUrl("");
+        if (requestId === accountRequestRef.current) setDashboardUrl("");
       }
     } catch (err) {
+      if (requestId !== accountRequestRef.current) return;
       console.error("Failed to load Stripe account", err);
       setAccount(null);
       setDashboardUrl("");
     }
-  }, [API, fetchJson, user?.email, user?.stripe_connected]);
+  }, [API, canManageBilling, fetchJson, user?.stripe_connected, workspaceEmail]);
 
   const loadInvoices = useCallback(async () => {
-    if (!user?.email || !user?.stripe_connected) {
+    const requestId = ++invoicesRequestRef.current;
+    if (!canManageBilling || !workspaceEmail || !user?.stripe_connected) {
       setInvoices([]);
       return;
     }
 
     try {
       const js = await fetchJson(
-        `${API}/api/stripe/invoices?user_email=${encodeURIComponent(user.email)}`
+        `${API}/api/stripe/invoices?user_email=${encodeURIComponent(workspaceEmail)}`
       );
+      if (requestId !== invoicesRequestRef.current) return;
       setInvoices(Array.isArray(js?.invoices) ? js.invoices : []);
     } catch (err) {
+      if (requestId !== invoicesRequestRef.current) return;
       console.error("Failed to load invoices", err);
       setInvoices([]);
       setMessage(`❌ ${err.message || "Failed to load invoices"}`);
     }
-  }, [API, fetchJson, user?.email, user?.stripe_connected]);
+  }, [API, canManageBilling, fetchJson, user?.stripe_connected, workspaceEmail]);
+
+  useLayoutEffect(() => {
+    accountRequestRef.current += 1;
+    invoicesRequestRef.current += 1;
+    setAccount(null);
+    setInvoices([]);
+    setDashboardUrl("");
+    setMessage("");
+  }, [workspaceEmail]);
 
   useEffect(() => {
     loadAccount();
@@ -113,6 +134,14 @@ export default function Invoices({ user, leads }) {
   useEffect(() => {
     loadInvoices();
   }, [loadInvoices]);
+
+  if (!canManageBilling) {
+    return (
+      <div style={styles.notConnected}>
+        <p>Only the workspace owner can manage invoices and Stripe billing.</p>
+      </div>
+    );
+  }
 
   if (!user?.stripe_connected) {
     return (
@@ -174,7 +203,7 @@ export default function Invoices({ user, leads }) {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          user_email: user.email,
+          user_email: workspaceEmail,
           customer_name: form.customer_name,
           customer_email: form.customer_email,
           amount: calculatedAmount,
@@ -195,7 +224,7 @@ export default function Invoices({ user, leads }) {
         }
 
         const shownAmt = data.amount_total ?? data.amount_due;
-        setMessage(`✅ Invoice created${shownAmt ? ` for ${fmt(shownAmt, data.currency)}` : "!"}`);
+        setMessage(`✅ Invoice sent${shownAmt ? ` for ${fmt(shownAmt, data.currency)}` : "!"}`);
 
         setShowModal(false);
         setForm({
@@ -227,7 +256,7 @@ export default function Invoices({ user, leads }) {
       const data = await fetchJson(`${API}/api/stripe/invoice/send`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ invoice_id: inv.id, user_email: user.email }),
+        body: JSON.stringify({ invoice_id: inv.id, user_email: workspaceEmail }),
       });
 
       if (data.success) {
@@ -248,8 +277,8 @@ export default function Invoices({ user, leads }) {
   };
 
   return (
-    <div style={styles.container}>
-      <div style={styles.header}>
+    <div className="invoices-page" style={styles.container}>
+      <div className="invoices-header" style={styles.header}>
         <div>
           <h2 style={styles.title}>Invoice workspace</h2>
           <p style={styles.subtitle}>Create, view, and remind leads about invoices.</p>
@@ -265,7 +294,7 @@ export default function Invoices({ user, leads }) {
           )}
         </div>
 
-        <div style={{ display: "flex", gap: 8 }}>
+        <div className="invoices-header-actions" style={{ display: "flex", gap: 8 }}>
           <button style={styles.secondaryBtn} onClick={loadInvoices}>
             Refresh
           </button>
@@ -282,7 +311,7 @@ export default function Invoices({ user, leads }) {
       </div>
 
       {leads?.length > 0 && (
-        <div style={styles.autofillRow}>
+        <div className="invoices-autofill" style={styles.autofillRow}>
           <span style={styles.autofillLabel}>Autofill:</span>
           {leads.slice(0, 6).map((l) => (
             <button key={l.id} onClick={() => autofill(l)} style={styles.leadBtn}>
@@ -344,8 +373,8 @@ export default function Invoices({ user, leads }) {
       </div>
 
       {showModal && (
-        <div style={styles.modalBg} onClick={() => setShowModal(false)}>
-          <div style={styles.modal} onClick={(e) => e.stopPropagation()}>
+        <div className="invoices-modal-backdrop" style={styles.modalBg} onClick={() => setShowModal(false)}>
+          <div className="invoices-modal" style={styles.modal} onClick={(e) => e.stopPropagation()}>
             <h3 style={styles.modalTitle}>New Invoice</h3>
 
             <form onSubmit={handleSubmit}>

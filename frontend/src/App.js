@@ -11,6 +11,7 @@ import TermsOfService from "./pages/TermsOfService";
 import RefundPolicy from "./pages/RefundPolicy";
 import AcceptInvite from "./pages/AcceptInvite"; // ← added
 import { SettingsProvider } from "./components/SettingsContext";
+import { API_BASE } from "./apiBase";
 import "./index.css";
 
 /** Listens for the Google Contacts popup completion and navigates back to /app/import */
@@ -18,7 +19,17 @@ function OAuthPopupBridge() {
   const navigate = useNavigate();
   useEffect(() => {
     const handler = (e) => {
-      if (e?.data && e.data.type === "google-import-complete") {
+      let trustedOrigin = "";
+      try {
+        trustedOrigin = new URL(API_BASE, window.location.origin).origin;
+      } catch (_) {
+        trustedOrigin = window.location.origin;
+      }
+      if (
+        e.origin === trustedOrigin &&
+        e?.data &&
+        e.data.type === "google-import-complete"
+      ) {
         navigate("/app/import", { replace: true });
       }
     };
@@ -57,9 +68,12 @@ function RouteMetadata() {
   const { pathname } = useLocation();
 
   useEffect(() => {
-    const privateRoute = pathname.startsWith("/app") || pathname === "/login";
+    const privateRoute =
+      pathname.startsWith("/app") ||
+      pathname === "/login" ||
+      pathname === "/accept-invite";
     const meta = ROUTE_META[pathname] || ROUTE_META["/"];
-    const canonicalPath = ROUTE_META[pathname] ? pathname : "/";
+    const canonicalPath = privateRoute ? "/" : ROUTE_META[pathname] ? pathname : "/";
     const canonicalUrl = `https://www.retainai.ca${canonicalPath === "/" ? "/" : canonicalPath}`;
 
     document.title = meta.title;
@@ -87,7 +101,7 @@ function RouteMetadata() {
 function App() {
   return (
     <SettingsProvider>
-      <Router>
+      <Router future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
         <RouteMetadata />
         {/* Always mounted so we catch the popup postMessage */}
         <OAuthPopupBridge />

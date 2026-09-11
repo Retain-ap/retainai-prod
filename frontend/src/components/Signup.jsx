@@ -37,15 +37,15 @@ function Progress({ step, total }) {
 }
 
 function Slide({ active, children }) {
+  if (!active) return null;
   return (
     <div
       style={{
-        position: "absolute",
-        left: active ? 0 : "120%",
+        position: "relative",
+        left: 0,
         top: 0,
         width: "100%",
-        opacity: active ? 1 : 0,
-        transition: "left .35s cubic-bezier(.9,.01,.29,.98), opacity .35s",
+        opacity: 1,
       }}
     >
       {children}
@@ -91,7 +91,7 @@ export default function Signup() {
   const [website, setWebsite] = useState("");
   const [instagram, setInstagram] = useState("");
   const [referral, setReferral] = useState("");
-  const [agree, setAgree] = useState(true);
+  const [agree, setAgree] = useState(false);
 
   const [error, setError] = useState("");
   const [googleProcessing, setGoogleProcessing] = useState(false);
@@ -102,7 +102,8 @@ export default function Signup() {
 
   const pwStrength = useMemo(() => {
     let s = 0;
-    if (password.length >= 8) s++;
+    if (password.length >= 12) s++;
+    if (/[a-z]/.test(password)) s++;
     if (/[A-Z]/.test(password)) s++;
     if (/[0-9]/.test(password)) s++;
     if (/[^A-Za-z0-9]/.test(password)) s++;
@@ -131,6 +132,12 @@ export default function Signup() {
   function handleAvatarUpload(e) {
     const file = e.target.files && e.target.files[0];
     if (!file) return;
+    if (!file.type.startsWith("image/") || file.size > 1_500_000) {
+      setError("Choose an image smaller than 1.5 MB.");
+      e.target.value = "";
+      return;
+    }
+    setError("");
     const reader = new FileReader();
     reader.onload = () => setAvatar(reader.result);
     reader.readAsDataURL(file);
@@ -140,18 +147,22 @@ export default function Signup() {
   function canContinue(current = step) {
     switch (SLIDES[current]) {
       case "email": return /^\S+@\S+\.\S+$/.test(email);
-      case "password": return password.length >= 8;
+      case "password": return pwStrength === 5;
       case "name": return name.trim().length > 1;
       case "businessName": return businessName.trim().length > 1;
       case "businessType": return businessType.trim().length > 1;
       case "location": return location.trim().length > 1;
-      case "teamSize": return String(teamSize).trim().length > 0;
+      case "teamSize": return Number.isInteger(Number(teamSize)) && Number(teamSize) >= 1 && Number(teamSize) <= 1000;
       default: return true;
     }
   }
   function nextStep() { if (!canContinue(step)) return setError("Please complete this step."); setError(""); setStep((s) => Math.min(total - 1, s + 1)); }
   function prevStep() { setError(""); setStep((s) => Math.max(0, s - 1)); }
-  const onEnter = (e, fn) => e.key === "Enter" && fn();
+  const onEnter = (e, fn) => {
+    if (e.key !== "Enter" || e.shiftKey || e.ctrlKey || e.metaKey || e.altKey) return;
+    e.preventDefault();
+    fn();
+  };
 
   // submit
   async function handleSignup(e) {
@@ -369,7 +380,7 @@ export default function Signup() {
                       value={password}
                       onChange={(e) => setPassword(e.target.value)}
                       onKeyDown={(e) => onEnter(e, nextStep)}
-                      placeholder="Min 8 characters"
+                      placeholder="Min 12 characters"
                       style={{ width: "100%", padding: "12px 14px", paddingRight: 54, borderRadius: 12, border: `1px solid ${BG.line}`, background: "#0E1013", color: "#fff", fontSize: 16 }}
                     />
                     <button type="button" onClick={() => setShowPw((v) => !v)} style={{ position: "absolute", right: 10, top: "50%", transform: "translateY(-50%)", fontSize: 12, color: BG.text60, background: "transparent", border: 0, cursor: "pointer" }}>
@@ -379,15 +390,15 @@ export default function Signup() {
                   {/* strength */}
                   <div>
                     <div style={{ height: 4, borderRadius: 999, overflow: "hidden", background: "#0E1013", border: `1px solid ${BG.line}` }}>
-                      <div style={{ width: `${(pwStrength / 4) * 100}%`, height: "100%", background: pwStrength >= 3 ? BG.gold : "#7a6c3a", transition: "width .2s" }} />
+                      <div style={{ width: `${(pwStrength / 5) * 100}%`, height: "100%", background: pwStrength >= 4 ? BG.gold : "#7a6c3a", transition: "width .2s" }} />
                     </div>
                     <div style={{ fontSize: 12, color: BG.text60, marginTop: 6 }}>
-                      Use 8+ characters with a mix of letters, numbers, and symbols.
+                      Use 12+ characters with uppercase and lowercase letters, a number, and a symbol.
                     </div>
                   </div>
                   <div style={{ display: "flex", gap: 10 }}>
                     <button type="button" onClick={prevStep} style={{ padding: "12px 0", flex: 1, borderRadius: 12, border: `1px solid ${BG.line}`, background: "#101216", color: "#fff" }}>Back</button>
-                    <button type="button" onClick={nextStep} disabled={password.length < 8} style={{ padding: "12px 0", flex: 1, borderRadius: 12, border: 0, fontWeight: 800, background: BG.gold, color: "#0B0B0C", opacity: password.length < 8 ? 0.7 : 1 }}>Continue</button>
+                    <button type="button" onClick={nextStep} disabled={pwStrength !== 5} style={{ padding: "12px 0", flex: 1, borderRadius: 12, border: 0, fontWeight: 800, background: BG.gold, color: "#0B0B0C", opacity: pwStrength === 5 ? 1 : 0.7 }}>Continue</button>
                   </div>
                 </div>
               </Slide>
@@ -452,7 +463,7 @@ export default function Signup() {
                   <input type="number" min={1} value={teamSize} onChange={(e) => setTeamSize(e.target.value)} onKeyDown={(e) => onEnter(e, nextStep)} placeholder="1" style={{ padding: "12px 14px", borderRadius: 12, border: `1px solid ${BG.line}`, background: "#0E1013", color: "#fff", fontSize: 16 }} />
                   <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
                     {[1, 2, 5, 10, 20].map((n) => <Chip key={n} onClick={() => setTeamSize(String(n))} active={String(teamSize) === String(n)}>{n}</Chip>)}
-                    <Chip onClick={() => setTeamSize("50+")} active={teamSize === "50+"}>50+</Chip>
+                    <Chip onClick={() => setTeamSize("50")} active={teamSize === "50"}>50+</Chip>
                   </div>
                   <div style={{ display: "flex", gap: 10 }}>
                     <button type="button" onClick={prevStep} style={{ padding: "12px 0", flex: 1, borderRadius: 12, border: `1px solid ${BG.line}`, background: "#101216", color: "#fff" }}>Back</button>

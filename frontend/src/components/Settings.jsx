@@ -33,6 +33,10 @@ import { SiInstagram } from "react-icons/si";
 import "./settings.css";
 
 import { apiUrl } from "../apiBase";
+import {
+  getVisibleSettingsTabKeys,
+  getWorkspaceCapabilities,
+} from "../workspaceIdentity";
 
 /* ------------------------------------------------------------
    Settings (PROD-SAFE)
@@ -170,6 +174,12 @@ export default function Settings({
     const stored = safeParse(localStorage.getItem("user") || "");
     return normalizeUser(stored);
   });
+  const capabilities = useMemo(() => getWorkspaceCapabilities(profile), [profile]);
+  const visibleTabKeys = useMemo(() => getVisibleSettingsTabKeys(profile), [profile]);
+  const visibleTabs = useMemo(
+    () => TABS.filter((candidate) => visibleTabKeys.includes(candidate.key)),
+    [visibleTabKeys]
+  );
 
   const [form, setForm] = useState(() => ({
     name: profile?.name || "",
@@ -188,6 +198,9 @@ export default function Settings({
   const [profileBackendOk, setProfileBackendOk] = useState(null);
   const [supportCopied, setSupportCopied] = useState(false);
   const [billingUsage, setBillingUsage] = useState(null);
+  const [pushPermission, setPushPermission] = useState(() =>
+    typeof Notification === "undefined" ? "unsupported" : Notification.permission
+  );
 
   useEffect(() => {
     editModeRef.current = editMode;
@@ -212,16 +225,51 @@ export default function Settings({
     });
   }, []);
 
-  useEffect(() => {
-    if (initialTab && TABS.some((t) => t.key === initialTab)) {
-      setTab(initialTab);
+  const enableBrowserAlerts = useCallback(async () => {
+    try {
+      const enable = window.RetainAI?.enablePushNotifications;
+      if (typeof enable !== "function") {
+        setInfo("Browser alerts are unavailable on this device.");
+        return;
+      }
+      const subscription = await enable();
+      const nextPermission =
+        typeof Notification === "undefined" ? "unsupported" : Notification.permission;
+      setPushPermission(nextPermission);
+      setInfo(
+        nextPermission === "granted" && subscription
+          ? "Browser alerts are enabled for this workspace."
+          : "Browser alerts were not enabled. You can change permission in your browser settings."
+      );
+    } catch {
+      setInfo("Browser alerts could not be enabled. Check this site's notification permission and retry.");
     }
-  }, [initialTab]);
+  }, []);
 
   useEffect(() => {
-    if (tab !== "billing") return;
+    if (initialTab && visibleTabKeys.includes(initialTab)) {
+      setTab(initialTab);
+      return;
+    }
+    if (!visibleTabKeys.includes(tab)) {
+      setTab("profile");
+      setEditMode(false);
+      formDirtyRef.current = false;
+      setInfo("");
+    }
+  }, [initialTab, tab, visibleTabKeys]);
+
+  useEffect(() => {
+    if (!capabilities.canEditBusiness && editMode) {
+      setEditMode(false);
+      formDirtyRef.current = false;
+    }
+  }, [capabilities.canEditBusiness, editMode]);
+
+  useEffect(() => {
+    if (tab !== "billing" || !capabilities.canManageBilling) return;
     fetchJson(apiUrl("billing/usage")).then(setBillingUsage).catch(() => setBillingUsage(null));
-  }, [tab]);
+  }, [capabilities.canManageBilling, tab]);
 
   useEffect(() => {
     const next = normalizeUser(user);
@@ -446,6 +494,10 @@ export default function Settings({
   ]);
 
   const handleSave = useCallback(async () => {
+    if (!capabilities.canEditBusiness) {
+      setInfo("Only the workspace owner can edit the business profile.");
+      return;
+    }
     setSaving(true);
     setInfo("");
 
@@ -465,14 +517,13 @@ export default function Settings({
     };
 
     const merged = normalizeUser({ ...(profile || {}), ...payload });
-    setProfile(merged);
-
-    try {
-      localStorage.setItem("user", JSON.stringify(merged));
-    } catch {}
 
     try {
       await postJson("profile", payload);
+      setProfile(merged);
+      try {
+        localStorage.setItem("user", JSON.stringify(merged));
+      } catch {}
       setProfileBackendOk(true);
       setInfo("Saved ✅");
       formDirtyRef.current = false;
@@ -487,14 +538,22 @@ export default function Settings({
       await syncProfileFromBackend(form.email);
     } catch (e) {
       setProfileBackendOk(false);
-      console.warn("Profile save failed (backend). Using localStorage only.", e);
-      setInfo("Saved locally ✅ (backend profile endpoint unavailable)");
-      formDirtyRef.current = false;
-      setEditMode(false);
+      console.warn("Profile save failed.", e);
+      const message =
+        e?.status === 401 || e?.status === 403
+          ? "Your session no longer has permission to save this profile. Sign in again, then retry."
+          : e?.status >= 500
+          ? "RetainAI could not save your changes because the service is temporarily unavailable. Your draft is still here—please try again."
+          : e?.status
+          ? "RetainAI could not save these changes. Review the fields and try again."
+          : "RetainAI could not reach the server. Your draft is still here—check your connection and try again.";
+      setInfo(message);
+      formDirtyRef.current = true;
+      setEditMode(true);
     } finally {
       setSaving(false);
     }
-  }, [form, profile, refreshUser, syncProfileFromBackend]);
+  }, [capabilities.canEditBusiness, form, profile, refreshUser, syncProfileFromBackend]);
 
   const supportEmail = "owner@retainai.ca";
   const supportMailto = useMemo(() => {
@@ -557,6 +616,10 @@ export default function Settings({
   }, []);
 
   const openSubscriptionBilling = async () => {
+    if (!capabilities.canManageBilling) {
+      setInfo("Only the workspace owner can manage billing.");
+      return;
+    }
     setInfo("Opening secure billing…");
     try {
       const endpoint = profile?.hasBillingProfile
@@ -577,6 +640,10 @@ export default function Settings({
   };
 
   const downloadWorkspaceData = async () => {
+    if (!capabilities.isWorkspaceOwner) {
+      setInfo("Only the workspace owner can export workspace data.");
+      return;
+    }
     setInfo("Preparing your workspace export…");
     try {
       const response = await fetch(apiUrl("account/export"), { credentials: "include" });
@@ -600,6 +667,10 @@ export default function Settings({
   };
 
   const scheduleAccountDeletion = async () => {
+    if (!capabilities.isWorkspaceOwner) {
+      setInfo("Only the workspace owner can schedule account deletion.");
+      return;
+    }
     const confirmation = window.prompt(
       `Schedule this workspace for deletion in 14 days? Type ${profile.email} to confirm.`
     );
@@ -619,6 +690,10 @@ export default function Settings({
   };
 
   const cancelAccountDeletion = async () => {
+    if (!capabilities.isWorkspaceOwner) {
+      setInfo("Only the workspace owner can cancel account deletion.");
+      return;
+    }
     try {
       await postJson("account/deletion", { action: "cancel" });
       setInfo("Scheduled deletion cancelled. Your workspace will remain active.");
@@ -630,6 +705,10 @@ export default function Settings({
   };
 
   const deleteAccountNow = async () => {
+    if (!capabilities.isWorkspaceOwner) {
+      setInfo("Only the workspace owner can permanently delete the workspace.");
+      return;
+    }
     const phrase = `DELETE ${profile.email}`;
     const confirmation = window.prompt(
       `This permanently deletes the workspace, team access, contacts, messages, appointments, automations, and account data. This cannot be undone.\n\nType ${phrase} to continue.`
@@ -687,7 +766,7 @@ export default function Settings({
       className="settings-layout"
     >
       <nav className="settings-nav">
-        {TABS.map((t) => (
+        {visibleTabs.map((t) => (
           <button
             key={t.key}
             className={tab === t.key ? "active" : ""}
@@ -770,7 +849,7 @@ export default function Settings({
                 ))}
 
                 <div className="profile-actions">
-                  {editMode ? (
+                  {capabilities.canEditBusiness && editMode ? (
                     <>
                       <button
                         className="btn btn-cancel"
@@ -806,7 +885,7 @@ export default function Settings({
                         {saving ? "Saving…" : "Save"}
                       </button>
                     </>
-                  ) : (
+                  ) : capabilities.canEditBusiness ? (
                     <button
                       className="btn btn-edit"
                       onClick={() => {
@@ -816,6 +895,10 @@ export default function Settings({
                     >
                       Edit Profile
                     </button>
+                  ) : (
+                    <div className="account-detail-box">
+                      Only the workspace owner can edit shared business details.
+                    </div>
                   )}
                 </div>
 
@@ -832,7 +915,7 @@ export default function Settings({
                     {profileBackendOk === true
                       ? "Server"
                       : profileBackendOk === false
-                      ? "Local cache"
+                      ? "Server unavailable"
                       : "Checking…"}
                   </b>
                 </div>
@@ -841,7 +924,7 @@ export default function Settings({
           </div>
         )}
 
-        {tab === "team" && (
+        {tab === "team" && capabilities.canInviteTeam && (
           <TeamTab
             ownerEmail={profile.orgOwnerEmail || profile.email}
             userEmail={profile.email}
@@ -851,7 +934,7 @@ export default function Settings({
           />
         )}
 
-        {tab === "integrations" && (
+        {tab === "integrations" && capabilities.canEditBusiness && (
           <div className="integrations-page" style={{ maxWidth: MAX_W, margin: "0 auto" }}>
             <div className="settings-page-heading">
               <div>
@@ -889,6 +972,9 @@ export default function Settings({
                 user={profile}
                 onStatus={setGcalStatus}
                 onEvents={setGoogleEvents}
+                onCalendarChange={() =>
+                  window.dispatchEvent(new Event("google-calendar:changed"))
+                }
               />
 
               <StripeConnectCard
@@ -939,7 +1025,7 @@ export default function Settings({
 
         {tab === "imports" && <ImportContacts user={user} focusGoogle />}
 
-        {tab === "billing" && (
+        {tab === "billing" && capabilities.canManageBilling && (
           <div className="integrations-page" style={{ maxWidth: MAX_W, margin: "0 auto" }}>
             <div className="settings-page-heading">
               <div>
@@ -1005,6 +1091,25 @@ export default function Settings({
               </div>
             </div>
             <div className="connected-accounts-grid">
+              <article className="account-card">
+                <div className="account-card-copy">
+                  <h3>Browser alerts</h3>
+                  <p>Enable optional appointment and workflow alerts on this device. Your browser will ask for permission.</p>
+                </div>
+                <div className="account-card-actions">
+                  <button
+                    className={pushPermission === "granted" ? "account-secondary-btn" : "account-primary-btn"}
+                    onClick={enableBrowserAlerts}
+                    disabled={pushPermission === "granted" || pushPermission === "unsupported"}
+                  >
+                    {pushPermission === "granted"
+                      ? "Enabled"
+                      : pushPermission === "unsupported"
+                      ? "Not supported"
+                      : "Enable browser alerts"}
+                  </button>
+                </div>
+              </article>
               {[
                 ["actionDigest", "Daily action briefing", "A morning summary of at-risk customers, opportunities, and appointments."],
                 ["automationFailures", "Automation failures", "Immediate notice when a customer workflow needs attention."],
@@ -1053,7 +1158,7 @@ export default function Settings({
           </div>
         )}
 
-        {tab === "account" && (
+        {tab === "account" && capabilities.isWorkspaceOwner && (
           <div className="integrations-page" style={{ maxWidth: MAX_W, margin: "0 auto" }}>
             <div className="settings-page-heading">
               <div>

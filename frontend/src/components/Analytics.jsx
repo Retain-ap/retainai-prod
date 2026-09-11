@@ -26,6 +26,18 @@ import {
   FaUsers,
   FaPhoneAlt,
 } from "react-icons/fa";
+import { getWorkspaceEmail } from "../workspaceIdentity";
+import {
+  appointmentDateTimeParts,
+  appointmentMonthKey,
+  calendarDayDistance,
+  compareAppointmentToNow,
+  dateKeyFromParts,
+  dayKeyNow,
+  getBrowserTimeZone,
+  parseAppointmentDateTime,
+  timeKeyFromParts,
+} from "./appointmentDateTime";
 
 /* ===== THEME ===== */
 const BG = "#181a1b";
@@ -50,28 +62,16 @@ function normEmail(v) {
   return String(v || "").trim().toLowerCase();
 }
 
-function pad2(n) {
-  return String(n).padStart(2, "0");
-}
-
 function safeDate(v) {
-  if (!v) return null;
-  try {
-    const d = new Date(v);
-    return Number.isNaN(d.getTime()) ? null : d;
-  } catch {
-    return null;
-  }
+  return parseAppointmentDateTime(v);
 }
 
 function daysBetween(a, b) {
   return Math.floor((a.getTime() - b.getTime()) / 86400000);
 }
 
-function monthKey(dateValue) {
-  const d = safeDate(dateValue);
-  if (!d) return null;
-  return `${d.getFullYear()}-${pad2(d.getMonth() + 1)}`;
+function monthKey(dateValue, timeZone = "") {
+  return appointmentMonthKey(dateValue, timeZone) || null;
 }
 
 function titleCaseTag(s) {
@@ -91,9 +91,12 @@ function getLeadDisplayName(lead) {
 }
 
 /* ===== APPOINTMENT MERGE ===== */
-function normalizeBackendAppointment(raw) {
+function normalizeBackendAppointment(raw, fallbackTimezone = "") {
   const dt = safeDate(raw?.appointment_time);
-  if (!dt) return null;
+  const timeZone = raw?.timezone || fallbackTimezone;
+  const parts = appointmentDateTimeParts(raw?.appointment_time, timeZone);
+  if (!dt || !parts) return null;
+  const status = String(raw?.status || "").toLowerCase().replace(/-/g, "_");
 
   return {
     source: "backend",
@@ -113,11 +116,16 @@ function normalizeBackendAppointment(raw) {
       "Client",
     title: raw?.title || raw?.lead_first_name || raw?.business_name || "Appointment",
     dateObj: dt,
-    done: !!(raw?.done ?? raw?.completed ?? raw?.is_done),
+    dayKey: dateKeyFromParts(parts),
+    timeKey: timeKeyFromParts(parts),
+    timeZone,
+    status,
+    cancelled: status === "cancelled" || status === "canceled",
+    done: !!(raw?.done ?? raw?.completed ?? raw?.is_done) || status === "completed",
   };
 }
 
-function normalizeLocalAppointmentsFromLeads(leads = []) {
+function normalizeLocalAppointmentsFromLeads(leads = [], fallbackTimezone = "") {
   const out = [];
 
   (leads || []).forEach((lead) => {
@@ -133,6 +141,10 @@ function normalizeLocalAppointmentsFromLeads(leads = []) {
         lead_name: getLeadDisplayName(lead),
         title: appt?.title || "Appointment",
         dateObj: dt,
+        dayKey: appt?.date || "",
+        timeKey: appt?.time || "00:00",
+        timeZone: fallbackTimezone,
+        status: String(appt?.status || "").toLowerCase().replace(/-/g, "_"),
         done: !!appt?.done,
       });
     });
@@ -150,7 +162,7 @@ function dedupeAppointments(appointments = []) {
       appt.lead_id || "",
       appt.lead_email || "",
       appt.title || "",
-      appt.dateObj ? appt.dateObj.toISOString() : "",
+      `${appt.dayKey || ""}T${appt.timeKey || "00:00"}`,
     ].join("|");
 
     if (seen.has(key)) return;
@@ -198,12 +210,12 @@ function getFunnelRates(stats) {
   return out;
 }
 
-function getSentimentByMonth(leads = []) {
+function getSentimentByMonth(leads = [], timeZone = "") {
   const map = {};
   leads.forEach((l) => {
     const m =
-      monthKey(l.last_contacted || l.lastContacted || l.createdAt) ||
-      monthKey(new Date());
+      monthKey(l.last_contacted || l.lastContacted || l.createdAt, timeZone) ||
+      monthKey(new Date(), timeZone);
     const tag =
       (l.tags || []).find((t) =>
         ["happy", "upset", "neutral"].includes(String(t || "").trim().toLowerCase())
@@ -268,16 +280,8 @@ function getNextAction(leads = []) {
   return "No urgent follow-up risk detected right now.";
 }
 
-function getAppointmentsSummary(appointments = []) {
+function getAppointmentsSummary(appointments = [], fallbackTimezone = "") {
   const now = new Date();
-  const startToday = new Date(now);
-  startToday.setHours(0, 0, 0, 0);
-
-  const endToday = new Date(now);
-  endToday.setHours(23, 59, 59, 999);
-
-  const sevenDays = new Date(startToday);
-  sevenDays.setDate(sevenDays.getDate() + 7);
 
   let overdue = 0;
   let today = 0;
@@ -286,25 +290,33 @@ function getAppointmentsSummary(appointments = []) {
   let done = 0;
 
   appointments.forEach((appt) => {
-    const dt = appt.dateObj;
-    if (!dt) return;
+    if (!appt.dateObj || appt.cancelled) return;
 
     if (appt.done) {
       done++;
       return;
     }
 
-    if (dt < now) {
+    const timeZone = appt.timeZone || fallbackTimezone;
+    const relative = compareAppointmentToNow(
+      appt.dayKey,
+      appt.timeKey || "00:00",
+      timeZone,
+      now
+    );
+    if (!Number.isFinite(relative)) return;
+    if (relative < 0) {
       overdue++;
       return;
     }
 
-    if (dt >= startToday && dt <= endToday) {
+    const dayDistance = calendarDayDistance(dayKeyNow(timeZone, now), appt.dayKey);
+    if (dayDistance === 0) {
       today++;
       return;
     }
 
-    if (dt > endToday && dt <= sevenDays) {
+    if (dayDistance > 0 && dayDistance <= 7) {
       next7++;
       return;
     }
@@ -336,10 +348,10 @@ function getLeaderboard(leads = [], appointments = []) {
   return arr.filter((x) => x.count > 0).slice(0, 5);
 }
 
-function getLeadsByMonth(leads = []) {
+function getLeadsByMonth(leads = [], timeZone = "") {
   const map = {};
   leads.forEach((l) => {
-    const m = monthKey(l.createdAt) || monthKey(new Date());
+    const m = monthKey(l.createdAt, timeZone) || monthKey(new Date(), timeZone);
     map[m] = (map[m] || 0) + 1;
   });
 
@@ -387,10 +399,11 @@ function getHeatmapMatrix(appointments = []) {
     .map(() => Array(24).fill(0));
 
   appointments.forEach((appt) => {
-    const d = appt.dateObj;
-    if (!d) return;
-    const day = d.getDay();
-    const hour = d.getHours();
+    const match = String(appt.dayKey || "").match(/^(\d{4})-(\d{2})-(\d{2})$/);
+    const timeMatch = String(appt.timeKey || "").match(/^(\d{2}):(\d{2})$/);
+    if (!match || !timeMatch || appt.cancelled) return;
+    const day = new Date(Date.UTC(Number(match[1]), Number(match[2]) - 1, Number(match[3]))).getUTCDay();
+    const hour = Number(timeMatch[1]);
     if (day >= 0 && day <= 6 && hour >= 0 && hour < 24) matrix[day][hour]++;
   });
 
@@ -500,61 +513,91 @@ const renderPieLabel = ({ cx, cy, midAngle, outerRadius, percent, name }) => {
 
 export default function Analytics({ leads = [], user }) {
   const [backendAppointments, setBackendAppointments] = useState([]);
-  const effectiveEmail = user?.org_id || user?.email || "";
+  const [backendAppointmentsWorkspace, setBackendAppointmentsWorkspace] = useState("");
+  const [workspaceTimezone, setWorkspaceTimezone] = useState("");
+  const [appointmentsLoading, setAppointmentsLoading] = useState(false);
+  const [appointmentsError, setAppointmentsError] = useState("");
+  const effectiveEmail = getWorkspaceEmail(user);
+  const effectiveTimezone = workspaceTimezone || user?.timezone || getBrowserTimeZone();
 
   useEffect(() => {
     let cancelled = false;
 
     async function loadBackendAppointments() {
-      if (!user?.email) {
-        if (!cancelled) setBackendAppointments([]);
+      if (!effectiveEmail) {
+        if (!cancelled) {
+          setBackendAppointments([]);
+          setBackendAppointmentsWorkspace("");
+          setWorkspaceTimezone("");
+          setAppointmentsError("");
+          setAppointmentsLoading(false);
+        }
         return;
       }
 
+      setAppointmentsLoading(true);
       try {
-        const res = await fetch(`${API_BASE}/api/appointments/${encodeURIComponent(user.email)}`, {
+        const res = await fetch(`${API_BASE}/api/appointments/${encodeURIComponent(effectiveEmail)}`, {
           credentials: "include",
+          cache: "no-store",
           headers: { Accept: "application/json" },
         });
         const data = await res.json().catch(() => ({}));
+        if (!res.ok) throw new Error(data?.error || `Appointments request failed (${res.status})`);
+        if (!Array.isArray(data?.appointments)) throw new Error("Appointments response was incomplete");
         if (!cancelled) {
-          setBackendAppointments(Array.isArray(data?.appointments) ? data.appointments : []);
+          setBackendAppointments(data.appointments);
+          setBackendAppointmentsWorkspace(effectiveEmail);
+          setWorkspaceTimezone(data?.timezone || "");
+          setAppointmentsError("");
         }
-      } catch {
-        if (!cancelled) setBackendAppointments([]);
+      } catch (error) {
+        if (!cancelled) setAppointmentsError(error?.message || "Appointments could not be loaded");
+      } finally {
+        if (!cancelled) setAppointmentsLoading(false);
       }
     }
 
+    setBackendAppointmentsWorkspace("");
+    setWorkspaceTimezone("");
+    setAppointmentsError("");
     loadBackendAppointments();
 
     const refresh = () => loadBackendAppointments();
+    const refreshWhenVisible = () => {
+      if (document.visibilityState === "visible") loadBackendAppointments();
+    };
     window.addEventListener("appointments:changed", refresh);
-    document.addEventListener("visibilitychange", refresh);
+    document.addEventListener("visibilitychange", refreshWhenVisible);
 
     return () => {
       cancelled = true;
       window.removeEventListener("appointments:changed", refresh);
-      document.removeEventListener("visibilitychange", refresh);
+      document.removeEventListener("visibilitychange", refreshWhenVisible);
     };
-  }, [user?.email]);
+  }, [effectiveEmail]);
 
   const allAppointments = useMemo(() => {
-    const localAppointments = normalizeLocalAppointmentsFromLeads(leads);
-    const backendNormalized = (backendAppointments || [])
-      .map((raw) => normalizeBackendAppointment(raw))
-      .filter(Boolean);
+    const localAppointments = normalizeLocalAppointmentsFromLeads(leads, effectiveTimezone);
+    const visibleBackend = backendAppointmentsWorkspace === effectiveEmail ? backendAppointments : [];
+    const backendNormalized = (visibleBackend || [])
+      .map((raw) => normalizeBackendAppointment(raw, effectiveTimezone))
+      .filter((appointment) => appointment && !appointment.cancelled);
 
     return dedupeAppointments([...localAppointments, ...backendNormalized]);
-  }, [leads, backendAppointments]);
+  }, [backendAppointments, backendAppointmentsWorkspace, effectiveEmail, effectiveTimezone, leads]);
 
   const funnelStats = useMemo(() => getConversionStats(leads, allAppointments), [leads, allAppointments]);
   const funnelRates = useMemo(() => getFunnelRates(funnelStats), [funnelStats]);
-  const sentimentData = useMemo(() => getSentimentByMonth(leads), [leads]);
+  const sentimentData = useMemo(() => getSentimentByMonth(leads, effectiveTimezone), [leads, effectiveTimezone]);
   const sourceData = useMemo(() => getSourceBreakdown(leads), [leads]);
   const vipLeads = useMemo(() => getVipLeads(leads), [leads]);
   const coldLeads = useMemo(() => getColdLeads(leads), [leads]);
-  const apptSummary = useMemo(() => getAppointmentsSummary(allAppointments), [allAppointments]);
-  const leadsByMonth = useMemo(() => getLeadsByMonth(leads), [leads]);
+  const apptSummary = useMemo(
+    () => getAppointmentsSummary(allAppointments, effectiveTimezone),
+    [allAppointments, effectiveTimezone]
+  );
+  const leadsByMonth = useMemo(() => getLeadsByMonth(leads, effectiveTimezone), [leads, effectiveTimezone]);
   const avgDaysSinceContact = useMemo(() => getAvgDaysSinceContact(leads), [leads]);
   const leaderboard = useMemo(() => getLeaderboard(leads, allAppointments), [leads, allAppointments]);
   const topTags = useMemo(() => getTopTags(leads), [leads]);
@@ -583,7 +626,13 @@ export default function Analytics({ leads = [], user }) {
           Analytics & Insights
         </h2>
         <div style={{ color: SUBTEXT, fontSize: 12 }}>
-          {effectiveEmail ? `Account: ${effectiveEmail}` : ""}
+          {appointmentsLoading
+            ? "Refreshing appointment data…"
+            : appointmentsError
+            ? "Appointment data is temporarily unavailable"
+            : effectiveEmail
+            ? `Account: ${effectiveEmail} · ${effectiveTimezone.replace(/_/g, " ")}`
+            : ""}
         </div>
       </div>
 

@@ -2,12 +2,6 @@
 import React, { useState, useRef } from "react";
 import { API_BASE } from "../config";
 
-// Simulate some user and lead context
-const demoLeads = [
-  { id: 1, name: "Sarah Smith", tags: ["VIP"], phone: "+1123456789" },
-  { id: 2, name: "Ali Rahman", tags: [], phone: "+1987654321" },
-];
-
 // --- Helper: Simulate backend NLP/AI extraction ---
 // Replace with a real API POST if you want (see comment below)
 async function extractAppointmentFromMessage(message) {

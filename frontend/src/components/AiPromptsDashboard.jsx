@@ -34,9 +34,7 @@ export default function AiPromptsDashboard({ leads = [], user = {}, onSendAIProm
   const [error, setError] = useState("");
 
   const brandName = user.business || user.businessName || user.lineOfBusiness || "Your Business";
-  const businessType = user.businessType || "";
   const userName = user.name || user.email?.split("@")[0] || "Your Team";
-  const selectedPlaybook = PLAYBOOKS.find((item) => item.key === activePlaybook) || PLAYBOOKS[0];
 
   const filteredLeads = useMemo(() => {
     const query = search.trim().toLowerCase();
@@ -75,21 +73,11 @@ export default function AiPromptsDashboard({ leads = [], user = {}, onSendAIProm
         credentials: "include",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          userEmail: user.email,
-          leadName: focusedLead.name || "",
-          businessName: brandName,
-          businessType,
-          userName,
-          tags: focusedLead.tags || [],
-          notes: focusedLead.notes || "",
-          birthday: focusedLead.birthday || "",
-          lastContacted: focusedLead.last_contacted || "",
-          status: focusedLead.status || "",
+          leadId: focusedLead.id,
           promptType: activePlaybook,
           tone,
           length,
           additionalContext: context,
-          instruction: selectedPlaybook.instruction,
         }),
       });
       const data = await response.json().catch(() => ({}));
@@ -118,7 +106,13 @@ export default function AiPromptsDashboard({ leads = [], user = {}, onSendAIProm
     try {
       const subject = (SUBJECTS[activePlaybook] || SUBJECTS.followup)(focusedLead.name);
       if (typeof onSendAIPromptEmail === "function") {
-        await onSendAIPromptEmail(focusedLead, draft.trim(), subject, activePlaybook);
+        const sent = await onSendAIPromptEmail(
+          focusedLead,
+          draft.trim(),
+          subject,
+          activePlaybook
+        );
+        if (sent !== true) throw new Error("Message could not be sent.");
       } else {
         const response = await fetch(apiUrl("send-ai-message"), {
           method: "POST",

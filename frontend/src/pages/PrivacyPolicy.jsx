@@ -59,50 +59,77 @@ export default function PrivacyPolicy() {
           We may disclose information if required by law or to protect rights, safety, and security.
         </p>
 
-        <h2 className="text-2xl font-bold text-yellow-300 mt-8 mb-2">5. Customer Responsibilities</h2>
+        <h2 className="text-2xl font-bold text-yellow-300 mt-8 mb-2">5. Google User Data</h2>
+        <p className="mb-3">
+          If you connect Google, RetainAI requests read-only access to the Google data needed for the feature you choose:
+          your calendar list and calendar events for the calendar view, and your contacts for contact import. We use this data
+          only to provide and improve those user-facing RetainAI features. RetainAI does not use Google user data for advertising,
+          sell it, or allow people to read it except when needed to provide support or security with your permission, to comply
+          with law, or through service providers acting under our instructions.
+        </p>
+        <p className="mb-6">
+          Authorization credentials and synchronized data are retained only as needed to keep the integration working.
+          Authorization credentials are encrypted at the application layer, and synchronized data is protected by tenant access
+          controls and our hosting and storage safeguards. You can disconnect a Google integration in RetainAI settings,
+          revoke RetainAI in your Google Account permissions, delete imported contacts, or delete your RetainAI account. These
+          actions remove the active connection and associated stored credentials, subject to limited backup, legal, fraud-prevention,
+          and security retention described below. RetainAI&apos;s use and transfer of information received from Google APIs complies
+          with the{" "}
+          <a
+            href="https://developers.google.com/terms/api-services-user-data-policy"
+            className="text-yellow-300 underline"
+            target="_blank"
+            rel="noreferrer"
+          >
+            Google API Services User Data Policy
+          </a>
+          , including its Limited Use requirements.
+        </p>
+
+        <h2 className="text-2xl font-bold text-yellow-300 mt-8 mb-2">6. Customer Responsibilities</h2>
         <p className="mb-6">
           RetainAI customers decide which contacts and messages they place in the Service and are responsible for having a lawful basis,
           required consent, and appropriate notices for customer communications. Do not upload payment-card data, government identifiers,
           health records, account passwords, or other sensitive information unless RetainAI expressly supports that use in writing.
         </p>
 
-        <h2 className="text-2xl font-bold text-yellow-300 mt-8 mb-2">6. Data Retention</h2>
+        <h2 className="text-2xl font-bold text-yellow-300 mt-8 mb-2">7. Data Retention</h2>
         <p className="mb-6">
           We retain personal data for as long as your account is active or as needed to provide the Service.
           Workspace data is deleted or de-identified after a valid deletion request and any displayed recovery period, subject to backup
           rotation and records we must retain for legal, accounting, fraud-prevention, dispute, or security purposes.
         </p>
 
-        <h2 className="text-2xl font-bold text-yellow-300 mt-8 mb-2">7. Security</h2>
+        <h2 className="text-2xl font-bold text-yellow-300 mt-8 mb-2">8. Security</h2>
         <p className="mb-6">
           We use administrative, technical, and organizational safeguards including access controls, hashed passwords, session protection,
           encrypted provider connections, backups, monitoring, and incident procedures. No system is completely secure. If a breach creates
           a real risk of significant harm, RetainAI will investigate and provide legally required notices.
         </p>
 
-        <h2 className="text-2xl font-bold text-yellow-300 mt-8 mb-2">8. Your Choices & Rights</h2>
+        <h2 className="text-2xl font-bold text-yellow-300 mt-8 mb-2">9. Your Choices & Rights</h2>
         <ul className="list-disc ml-6 mb-6 space-y-2">
           <li>Access, correct, or delete profile data from your account settings or by contacting support.</li>
           <li>Unsubscribe from marketing communications (where applicable) using provided links.</li>
           <li>EEA/UK residents may have additional rights (e.g., objection, restriction, portability).</li>
         </ul>
 
-        <h2 className="text-2xl font-bold text-yellow-300 mt-8 mb-2">9. International Transfers</h2>
+        <h2 className="text-2xl font-bold text-yellow-300 mt-8 mb-2">10. International Transfers</h2>
         <p className="mb-6">
           If we transfer data internationally, we use appropriate safeguards (e.g., SCCs) to protect your information.
         </p>
 
-        <h2 className="text-2xl font-bold text-yellow-300 mt-8 mb-2">10. Children’s Privacy</h2>
+        <h2 className="text-2xl font-bold text-yellow-300 mt-8 mb-2">11. Children’s Privacy</h2>
         <p className="mb-6">
           RetainAI is not directed to children under 13 (or minimum age in your region). We do not knowingly collect data from children.
         </p>
 
-        <h2 className="text-2xl font-bold text-yellow-300 mt-8 mb-2">11. Changes to this Policy</h2>
+        <h2 className="text-2xl font-bold text-yellow-300 mt-8 mb-2">12. Changes to this Policy</h2>
         <p className="mb-6">
           We may update this policy from time to time. We’ll notify you of material changes by email or in-app notices.
         </p>
 
-        <h2 className="text-2xl font-bold text-yellow-300 mt-8 mb-2">12. Contact</h2>
+        <h2 className="text-2xl font-bold text-yellow-300 mt-8 mb-2">13. Contact</h2>
         <p className="mb-6">
           Privacy questions, access/correction requests, or complaints may be sent to{" "}
           <a href="mailto:owner@retainai.ca" className="text-yellow-300 underline">owner@retainai.ca</a>.

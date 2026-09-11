@@ -9,6 +9,15 @@ import {
   FaRegClock,
   FaUsers,
 } from "react-icons/fa";
+import {
+  appointmentDateKey,
+  appointmentTimeKey,
+  calendarDayDistance,
+  compareAppointmentToNow,
+  dayKeyNow,
+  getBrowserTimeZone,
+  parseAppointmentDateTime,
+} from "./appointmentDateTime";
 import "./product-system.css";
 
 const DAY = 24 * 60 * 60 * 1000;
@@ -31,8 +40,7 @@ function dateFromLead(lead) {
     lead.updated_at ||
     lead.createdAt ||
     lead.created_at;
-  const parsed = raw ? new Date(raw) : null;
-  return parsed && !Number.isNaN(parsed.getTime()) ? parsed : null;
+  return parseAppointmentDateTime(raw);
 }
 
 function healthFor(lead) {
@@ -105,9 +113,19 @@ export default function RetentionCommandCenter({ leads = [], appointments = [], 
     .split(/\s+/)[0];
 
   const upcoming = (appointments || []).filter((item) => {
+    const status = String(item?.status || "").toLowerCase().replace(/-/g, "_");
+    if (item?.done || item?.completed || ["cancelled", "canceled", "completed"].includes(status)) return false;
     const raw = item.appointment_time || item.start || item.date;
-    const date = raw ? new Date(raw) : null;
-    return date && date.getTime() >= Date.now() && date.getTime() <= Date.now() + 7 * DAY;
+    const timeZone = item.timeZone || item.timezone || user?.timezone || getBrowserTimeZone();
+    const dateKey = item.date || appointmentDateKey(raw, timeZone);
+    const timeKey = item.time || appointmentTimeKey(raw, timeZone) || "00:00";
+    const dayDistance = calendarDayDistance(dayKeyNow(timeZone), dateKey);
+    return (
+      Number.isFinite(dayDistance) &&
+      dayDistance >= 0 &&
+      dayDistance <= 7 &&
+      compareAppointmentToNow(dateKey, timeKey, timeZone) >= 0
+    );
   });
 
   const tabs = [
@@ -322,8 +340,8 @@ export default function RetentionCommandCenter({ leads = [], appointments = [], 
                 ["Last outbound message", timelineLead.lead.last_outbound_at || timelineLead.lead.last_contacted],
                 ["Last customer reply", timelineLead.lead.last_inbound_at || timelineLead.lead.last_reply_at],
                 ["Record updated", timelineLead.lead.updated_at],
-              ].filter(([, date]) => date).sort((a, b) => new Date(b[1]) - new Date(a[1])).map(([label, date]) => (
-                <div className="timeline-item" key={`${label}-${date}`}><strong>{label}</strong><small>{new Date(date).toLocaleString()}</small></div>
+              ].filter(([, date]) => date).sort((a, b) => (parseAppointmentDateTime(b[1])?.getTime() || 0) - (parseAppointmentDateTime(a[1])?.getTime() || 0)).map(([label, date]) => (
+                <div className="timeline-item" key={`${label}-${date}`}><strong>{label}</strong><small>{parseAppointmentDateTime(date)?.toLocaleString() || "Date unavailable"}</small></div>
               ))}
             </div>
           </section>

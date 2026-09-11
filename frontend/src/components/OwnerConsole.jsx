@@ -77,23 +77,27 @@ export default function OwnerConsole() {
     setLoading(true);
     setError("");
     try {
-      const [summary, accountData, queueData, healthData, auditData, featureData, backupData] =
-        await Promise.all([
-          ownerRequest("overview"),
-          ownerRequest("accounts"),
-          ownerRequest("support-queue"),
-          ownerRequest("health"),
-          ownerRequest("audit"),
-          ownerRequest("features"),
-          ownerRequest("backups"),
-        ]);
-      setOverview(summary);
-      setAccounts(accountData.accounts || []);
-      setQueue(queueData.queue || []);
-      setHealth(healthData);
-      setAudit(auditData.audit || []);
-      setFeatures(featureData.features || {});
-      setBackups(backupData.backups || []);
+      const sections = [
+        { name: "overview", request: ownerRequest("overview"), apply: setOverview },
+        { name: "customer accounts", request: ownerRequest("accounts"), apply: (data) => setAccounts(data.accounts || []) },
+        { name: "success queue", request: ownerRequest("support-queue"), apply: (data) => setQueue(data.queue || []) },
+        { name: "system health", request: ownerRequest("health"), apply: setHealth },
+        { name: "audit log", request: ownerRequest("audit"), apply: (data) => setAudit(data.audit || []) },
+        { name: "feature controls", request: ownerRequest("features"), apply: (data) => setFeatures(data.features || {}) },
+        { name: "backups", request: ownerRequest("backups"), apply: (data) => setBackups(data.backups || []) },
+      ];
+      const results = await Promise.allSettled(sections.map((section) => section.request));
+      const failed = [];
+      results.forEach((result, index) => {
+        if (result.status === "fulfilled") {
+          sections[index].apply(result.value);
+        } else {
+          failed.push(sections[index].name);
+        }
+      });
+      if (failed.length) {
+        setError(`Some owner data is temporarily unavailable: ${failed.join(", ")}.`);
+      }
     } catch (requestError) {
       setError(requestError.message || "Could not load the owner console.");
     } finally {
@@ -355,7 +359,7 @@ export default function OwnerConsole() {
               </div>
               <div className="owner-account-creator-grid">
                 <label>Email address<input className="product-input" type="email" required autoComplete="off" value={newAccount.email} onChange={(event) => setNewAccount((current) => ({ ...current, email: event.target.value }))} placeholder="tester@example.com" /></label>
-                <label>Temporary password<input className="product-input" type="password" required minLength="12" maxLength="256" autoComplete="new-password" value={newAccount.password} onChange={(event) => setNewAccount((current) => ({ ...current, password: event.target.value }))} placeholder="At least 12 characters" /></label>
+                <label>Temporary password<input className="product-input" type="password" required minLength="12" maxLength="256" pattern="(?=.*[a-z])(?=.*[A-Z])(?=.*\\d)(?=.*[^A-Za-z0-9]).{12,256}" title="Use 12 or more characters with uppercase and lowercase letters, a number, and a symbol." autoComplete="new-password" value={newAccount.password} onChange={(event) => setNewAccount((current) => ({ ...current, password: event.target.value }))} placeholder="12+ mixed characters" /></label>
                 <label>Name<input className="product-input" value={newAccount.name} onChange={(event) => setNewAccount((current) => ({ ...current, name: event.target.value }))} placeholder="Tester name" /></label>
                 <label>Business<input className="product-input" value={newAccount.business} onChange={(event) => setNewAccount((current) => ({ ...current, business: event.target.value }))} placeholder="Business name" /></label>
                 <label>Business type<input className="product-input" value={newAccount.business_type} onChange={(event) => setNewAccount((current) => ({ ...current, business_type: event.target.value }))} placeholder="Salon, home services, coaching…" /></label>

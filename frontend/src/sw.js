@@ -1,3 +1,6 @@
+/* eslint-env serviceworker */
+/* eslint-disable no-restricted-globals */
+
 const VERSION    = "retainai-sw-v1";
 const CACHE_NAME = `retainai-cache-${VERSION}`;
 
@@ -107,7 +110,7 @@ self.addEventListener("notificationclick", (event) => {
 
   event.waitUntil(
     (async () => {
-      const all = await clients.matchAll({ type: "window", includeUncontrolled: true });
+      const all = await self.clients.matchAll({ type: "window", includeUncontrolled: true });
       for (const client of all) {
         if ("focus" in client) {
           // Focus any open tab of our app
@@ -116,7 +119,7 @@ self.addEventListener("notificationclick", (event) => {
           }
         }
       }
-      if (clients.openWindow) return clients.openWindow(url);
+      if (self.clients.openWindow) return self.clients.openWindow(url);
     })()
   );
 });

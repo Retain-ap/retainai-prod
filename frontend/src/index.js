@@ -40,7 +40,7 @@ function getUserEmail() {
 }
 
 // Register service worker + Push (PROD SAFE)
-async function registerSwAndPush() {
+async function registerSwAndPush({ requestPermission = false } = {}) {
   if (!("serviceWorker" in navigator)) return;
 
   try {
@@ -60,8 +60,13 @@ async function registerSwAndPush() {
 
     if (!VAPID_PUBLIC_KEY) return;
 
-    // Ask for push permission (best-effort)
-    const permission = await Notification.requestPermission();
+    if (!("Notification" in window) || !("PushManager" in window)) return registration;
+
+    // Browser permission prompts must follow an explicit user gesture.
+    let permission = Notification.permission;
+    if (permission === "default" && requestPermission) {
+      permission = await Notification.requestPermission();
+    }
     if (permission !== "granted") return;
 
     // If already subscribed, reuse; otherwise subscribe
@@ -74,8 +79,6 @@ async function registerSwAndPush() {
       pushSubscription = await registration.pushManager.subscribe(subscribeOptions);
     }
 
-    console.log("PushSubscription:", pushSubscription);
-
     const email = getUserEmail();
     if (!email) {
       // user not logged in yet; don't store a subscription against empty email
@@ -83,17 +86,23 @@ async function registerSwAndPush() {
     }
 
     // Send to backend using apiUrl (prevents posting to frontend origin)
-    await fetch(apiUrl("save-subscription"), {
+    const response = await fetch(apiUrl("save-subscription"), {
       method: "POST",
       credentials: "include",
       headers: { "Content-Type": "application/json", Accept: "application/json" },
       body: JSON.stringify({
         subscription: pushSubscription,
-        email,
       }),
     });
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok || data?.success === false || data?.ok === false) {
+      throw new Error(data?.error || `Could not link browser alerts (${response.status})`);
+    }
+    return pushSubscription;
   } catch (err) {
     console.error("SW registration / push setup failed:", err);
+    if (requestPermission) throw err;
+    return null;
   }
 }
 
@@ -103,6 +112,10 @@ if (process.env.NODE_ENV === "production") {
   window.addEventListener("load", () => {
     registerSwAndPush();
   });
+
+  window.RetainAI = window.RetainAI || {};
+  window.RetainAI.enablePushNotifications = () =>
+    registerSwAndPush({ requestPermission: true });
 
   // If user logs in after page load, try again once (so subscription gets linked to email)
   window.addEventListener("storage", (e) => {

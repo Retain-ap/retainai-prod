@@ -1,4 +1,58 @@
 .appointments-page { overflow-x: hidden; }
+.appointments-error,
+.appointments-loading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin: 0 0 16px;
+  padding: 11px 13px;
+  border: 1px solid rgba(230, 101, 101, .55);
+  border-radius: 11px;
+  background: rgba(230, 101, 101, .08);
+  color: #ffadad;
+  font-size: 13px;
+  font-weight: 700;
+  line-height: 1.45;
+}
+.appointments-loading {
+  border-color: #343940;
+  background: #1d2024;
+  color: #b9c0c7;
+}
+.appointments-error button {
+  flex: 0 0 auto;
+  min-height: 36px;
+  border: 1px solid currentColor;
+  border-radius: 8px;
+  padding: 6px 10px;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+}
+.appointments-error button:disabled,
+.appointment-card button:disabled { opacity: .55; cursor: wait !important; }
+.appointments-field-hint,
+.appointments-timezone-note {
+  margin-top: 6px;
+  color: #9aa3ab;
+  font-size: 12px;
+  line-height: 1.4;
+}
+.appointments-timezone-note { margin: -3px 0 12px; }
+.appointments-empty {
+  display: grid;
+  gap: 5px;
+  margin: 4px 0 18px;
+  padding: 22px;
+  border: 1px dashed #3a3f46;
+  border-radius: 14px;
+  background: #1d2024;
+  color: #9aa3ab;
+  text-align: center;
+}
+.appointments-empty strong { color: #f3f4f5; font-size: 16px; }
 .visit-note-backdrop {
   position: fixed;
   inset: 0;
@@ -95,6 +149,8 @@
   .appointment-card-actions { width: 100%; justify-content: stretch !important; }
   .appointment-card-actions button { flex: 1; min-height: 42px; }
   .appointments-modal-card { min-width: 0 !important; width: calc(100% - 24px) !important; max-height: calc(100dvh - 24px); overflow: auto; padding: 20px 16px !important; }
+  .appointments-error { align-items: stretch; flex-direction: column; }
+  .appointments-error button { width: 100%; }
   .visit-note-backdrop { padding: 0; place-items: end center; }
   .visit-note-sheet {
     width: 100%;

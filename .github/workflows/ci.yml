@@ -1,0 +1,71 @@
+name: RetainAI release gate
+
+on:
+  pull_request:
+  push:
+    branches:
+      - deploy
+      - "fix/**"
+
+concurrency:
+  group: retainai-ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  backend:
+    name: Backend security and regression tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      PYTHONPATH: backend
+      FLASK_ENV: testing
+      ENVIRONMENT: test
+      RUN_SCHEDULER: "0"
+      SESSION_SECRET: ci-session-secret-is-stable-and-long-enough
+      DATA_ENCRYPTION_KEY: ci-data-key-is-independent-and-long-enough
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: backend/requirements.txt
+      - name: Install backend dependencies
+        run: python -m pip install --disable-pip-version-check -r backend/requirements.txt
+      - name: Compile backend
+        run: python -m compileall -q backend
+      - name: Run backend tests
+        run: python -m unittest discover -s backend -p 'test_*.py' -v
+
+  frontend:
+    name: Frontend tests, lint, build, and production audit
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - name: Install exact dependencies
+        run: npm ci
+      - name: Run frontend tests
+        run: npm test -- --watchAll=false --runInBand
+        env:
+          CI: "true"
+      - name: Run frontend lint
+        run: npx eslint src --ext .js,.jsx --no-cache --max-warnings=0
+      - name: Build production bundle
+        run: npm run build
+        env:
+          CI: "true"
+          DISABLE_ESLINT_PLUGIN: "true"
+      - name: Reject high or critical production dependency findings
+        run: npm audit --omit=dev --audit-level=high

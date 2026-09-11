@@ -2,6 +2,25 @@
 import React, { useEffect, useState } from "react";
 import { apiUrl } from "../apiBase";
 
+export const INVITE_PASSWORD_MIN_LENGTH = 12;
+
+export function getInvitePasswordError(password) {
+  const value = String(password || "");
+  if (value.length < INVITE_PASSWORD_MIN_LENGTH) {
+    return `Use at least ${INVITE_PASSWORD_MIN_LENGTH} characters.`;
+  }
+  if (!/[a-z]/.test(value) || !/[A-Z]/.test(value)) {
+    return "Include both uppercase and lowercase letters.";
+  }
+  if (!/\d/.test(value)) {
+    return "Include at least one number.";
+  }
+  if (!/[^A-Za-z0-9]/.test(value)) {
+    return "Include at least one symbol.";
+  }
+  return "";
+}
+
 export default function AcceptInvite() {
   // ===== Inline CSS (scoped) =====
   const css = `
@@ -17,6 +36,10 @@ export default function AcceptInvite() {
   .ai-input{ width:100%; background:#111317; border:1px solid var(--border); color:var(--fg); padding:12px 12px; border-radius:10px; outline:none; }
   .ai-input:focus{ border-color:#3a3d44; }
   .ai-input[readonly]{ opacity:.85; }
+  .ai-password-wrap{ position:relative; }
+  .ai-password-wrap .ai-input{ padding-right:70px; }
+  .ai-toggle{ position:absolute; right:10px; top:50%; transform:translateY(-50%); border:0; background:transparent; color:var(--accent); font-weight:800; cursor:pointer; }
+  .ai-help{ color:#aeb5bd; font-size:.82rem; line-height:1.45; margin-top:-5px; }
   .ai-btn{ background:var(--accent); color:#111; font-weight:800; border:none; padding:12px 16px; border-radius:10px; cursor:pointer; }
   .ai-btn[disabled]{ opacity:.6; cursor:not-allowed; }
   .ai-msg{ margin-top:6px; }
@@ -31,6 +54,9 @@ export default function AcceptInvite() {
   const [invite, setInvite] = useState(null);
   const [name, setName] = useState("");
   const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
+  const [confirmPassword, setConfirmPassword] = useState("");
+  const [showPassword, setShowPassword] = useState(false);
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState({ type: "", text: "" });
 
@@ -57,9 +83,19 @@ export default function AcceptInvite() {
     return () => { mounted = false; };
   }, [token]);
 
-  async function accept() {
+  async function accept(event) {
+    event?.preventDefault?.();
     if (!name.trim()) {
       setMsg({ type: "err", text: "Please enter your name." });
+      return;
+    }
+    const passwordError = getInvitePasswordError(password);
+    if (passwordError) {
+      setMsg({ type: "err", text: passwordError });
+      return;
+    }
+    if (password !== confirmPassword) {
+      setMsg({ type: "err", text: "Passwords do not match." });
       return;
     }
     setBusy(true);
@@ -68,7 +104,7 @@ export default function AcceptInvite() {
       const res = await fetch(apiUrl("team/accept"), {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ token, name: name.trim(), email })
+        body: JSON.stringify({ token, name: name.trim(), email, password })
       });
       const data = await res.json();
       if (!res.ok || !data.ok) throw new Error(data.error || "Failed to accept invite");
@@ -117,35 +153,76 @@ export default function AcceptInvite() {
             <span className="ai-accept-sub">Secure join flow</span>
           </div>
 
-          <div className="ai-accept-content">
+          <form className="ai-accept-content" onSubmit={accept}>
             <div className="ai-row">
               <span className="ai-chip">Org: {invite.org_id}</span>
               <span className="ai-chip">Role: {invite.role}</span>
             </div>
 
-            <label className="ai-label">Your Name</label>
+            <label className="ai-label" htmlFor="invite-name">Your Name</label>
             <input
+              id="invite-name"
               className="ai-input"
               placeholder="Your Name"
               value={name}
               onChange={e=>setName(e.target.value)}
-              onKeyDown={e => e.key === "Enter" ? accept() : null}
+              autoComplete="name"
               autoFocus
             />
 
-            <label className="ai-label">Email (must match invite)</label>
-            <input className="ai-input" value={email} readOnly />
+            <label className="ai-label" htmlFor="invite-email">Email (must match invite)</label>
+            <input id="invite-email" className="ai-input" value={email} autoComplete="email" readOnly />
+
+            <label className="ai-label" htmlFor="invite-password">Create a password</label>
+            <div className="ai-password-wrap">
+              <input
+                id="invite-password"
+                className="ai-input"
+                type={showPassword ? "text" : "password"}
+                value={password}
+                onChange={(event) => setPassword(event.target.value)}
+                autoComplete="new-password"
+                aria-describedby="invite-password-help"
+              />
+              <button
+                type="button"
+                className="ai-toggle"
+                onClick={() => setShowPassword((visible) => !visible)}
+                aria-label={showPassword ? "Hide password" : "Show password"}
+              >
+                {showPassword ? "Hide" : "Show"}
+              </button>
+            </div>
+            <div id="invite-password-help" className="ai-help">
+              Use {INVITE_PASSWORD_MIN_LENGTH}+ characters with uppercase and lowercase letters, a number, and a symbol.
+            </div>
+
+            <label className="ai-label" htmlFor="invite-password-confirm">Confirm password</label>
+            <input
+              id="invite-password-confirm"
+              className="ai-input"
+              type={showPassword ? "text" : "password"}
+              value={confirmPassword}
+              onChange={(event) => setConfirmPassword(event.target.value)}
+              autoComplete="new-password"
+            />
 
             {msg.text && (
-              <div className={`ai-msg ${msg.type === "err" ? "ai-err" : "ai-ok"}`}>{msg.text}</div>
+              <div
+                className={`ai-msg ${msg.type === "err" ? "ai-err" : "ai-ok"}`}
+                role={msg.type === "err" ? "alert" : "status"}
+                aria-live="polite"
+              >
+                {msg.text}
+              </div>
             )}
 
             <div style={{display:"flex", gap:10, marginTop:4}}>
-              <button className="ai-btn" onClick={accept} disabled={busy}>
+              <button className="ai-btn" type="submit" disabled={busy}>
                 {busy ? "Joining…" : "Accept Invite"}
               </button>
             </div>
-          </div>
+          </form>
 
         </div>
       </div>

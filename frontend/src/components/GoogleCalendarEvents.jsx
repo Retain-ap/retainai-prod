@@ -2,6 +2,7 @@
 import React, { useState, useEffect, useRef, useCallback } from "react";
 import { SiGooglecalendar } from "react-icons/si";
 import { apiUrl } from "../apiBase";
+import { getWorkspaceEmail } from "../workspaceIdentity";
 
 // Key for storing selected calendar per user in localStorage
 function getUserCalKey(email) {
@@ -31,6 +32,7 @@ async function safeJson(res) {
 }
 
 export default function GoogleCalendarEvents({ user, onEvents, onStatus, onCalendarChange }) {
+  const workspaceEmail = getWorkspaceEmail(user);
   const [connected, setConnected] = useState(false);
   const [loading, setLoading] = useState(false);
   const [calendars, setCalendars] = useState([]);
@@ -40,6 +42,8 @@ export default function GoogleCalendarEvents({ user, onEvents, onStatus, onCalen
   const pollingRef = useRef(null);
   const popupRef = useRef(null);
   const tickRef = useRef(0);
+  const activeWorkspaceRef = useRef(workspaceEmail);
+  activeWorkspaceRef.current = workspaceEmail;
 
   const stopPolling = useCallback(() => {
     if (pollingRef.current) {
@@ -50,16 +54,27 @@ export default function GoogleCalendarEvents({ user, onEvents, onStatus, onCalen
   }, []);
 
   const refreshStatus = useCallback(async () => {
-    if (!user?.email) return;
+    const requestedWorkspace = workspaceEmail;
+    if (!requestedWorkspace) {
+      setConnected(false);
+      setCalendars([]);
+      setCalendarId("");
+      setError("");
+      setLoading(false);
+      if (onEvents) onEvents([]);
+      if (onStatus) onStatus("not_connected");
+      return;
+    }
 
     setLoading(true);
     setError("");
     try {
-      const res = await fetch(apiUrl(`google/status/${encodeURIComponent(user.email)}`), {
+      const res = await fetch(apiUrl(`google/status/${encodeURIComponent(requestedWorkspace)}`), {
         credentials: "include",
         headers: { Accept: "application/json" },
       });
       const data = await safeJson(res);
+      if (activeWorkspaceRef.current !== requestedWorkspace) return;
 
       const isConnected = !!data.connected;
       const cals = data.calendars || [];
@@ -67,43 +82,54 @@ export default function GoogleCalendarEvents({ user, onEvents, onStatus, onCalen
       setConnected(isConnected);
       setCalendars(cals);
 
-      const savedId = localStorage.getItem(getUserCalKey(user.email));
+      const savedId = localStorage.getItem(getUserCalKey(requestedWorkspace));
       const fallbackId = cals.find((c) => c.primary)?.id || (cals?.[0]?.id ?? "");
       const nextId = savedId && cals.some((c) => c.id === savedId) ? savedId : fallbackId;
 
       setCalendarId(nextId || "");
       if (onStatus) onStatus(isConnected ? "loaded" : "not_connected");
     } catch (e) {
-      setError(e?.message || "Failed to check Google connection.");
-      if (onStatus) onStatus("error");
+      if (activeWorkspaceRef.current === requestedWorkspace) {
+        setConnected(false);
+        setCalendars([]);
+        setCalendarId("");
+        setError(e?.message || "Failed to check Google connection.");
+        if (onEvents) onEvents([]);
+        if (onStatus) onStatus("error");
+      }
     } finally {
-      setLoading(false);
+      if (activeWorkspaceRef.current === requestedWorkspace) setLoading(false);
     }
-  }, [user?.email, onStatus]);
+  }, [workspaceEmail, onEvents, onStatus]);
 
   useEffect(() => {
+    stopPolling();
+    setConnected(false);
+    setCalendars([]);
+    setCalendarId("");
+    setError("");
     refreshStatus();
-  }, [refreshStatus]);
+  }, [refreshStatus, stopPolling, workspaceEmail]);
 
   useEffect(() => {
-    if (user?.email && calendarId) {
+    if (workspaceEmail && calendarId) {
       try {
-        localStorage.setItem(getUserCalKey(user.email), calendarId);
+        localStorage.setItem(getUserCalKey(workspaceEmail), calendarId);
       } catch {}
       if (onCalendarChange) onCalendarChange(calendarId);
     }
     // eslint-disable-next-line
-  }, [calendarId, user?.email]);
+  }, [calendarId, workspaceEmail]);
 
   const fetchAuthUrl = useCallback(async () => {
-    if (!user?.email) return "";
-    const res = await fetch(apiUrl(`google/auth-url?user_email=${encodeURIComponent(user.email)}`), {
+    if (!workspaceEmail) return "";
+    const res = await fetch(apiUrl(`google/auth-url?user_email=${encodeURIComponent(workspaceEmail)}`), {
       credentials: "include",
       headers: { Accept: "application/json" },
     });
     const data = await safeJson(res);
     return data?.url || "";
-  }, [user?.email]);
+  }, [workspaceEmail]);
 
   const tryClosePopup = useCallback(() => {
     // COOP can block access to popup window in different ways.
@@ -114,7 +140,8 @@ export default function GoogleCalendarEvents({ user, onEvents, onStatus, onCalen
   }, []);
 
   const handleConnect = async () => {
-    if (!user?.email) return;
+    if (!workspaceEmail) return;
+    const requestedWorkspace = workspaceEmail;
 
     setLoading(true);
     setError("");
@@ -129,6 +156,11 @@ export default function GoogleCalendarEvents({ user, onEvents, onStatus, onCalen
 
       // Open popup
       popupRef.current = window.open(url, "googleConnect", "width=520,height=720");
+      if (!popupRef.current) {
+        setLoading(false);
+        setError("The Google sign-in window was blocked. Allow pop-ups for RetainAI and try again.");
+        return;
+      }
       stopPolling();
 
       // Poll connection status only (no popup.closed checks)
@@ -145,11 +177,15 @@ export default function GoogleCalendarEvents({ user, onEvents, onStatus, onCalen
         }
 
         try {
-          const res = await fetch(apiUrl(`google/status/${encodeURIComponent(user.email)}`), {
+          const res = await fetch(apiUrl(`google/status/${encodeURIComponent(workspaceEmail)}`), {
             credentials: "include",
             headers: { Accept: "application/json" },
           });
           const data = await safeJson(res);
+          if (activeWorkspaceRef.current !== requestedWorkspace) {
+            stopPolling();
+            return;
+          }
 
           if (data.connected) {
             stopPolling();
@@ -159,7 +195,7 @@ export default function GoogleCalendarEvents({ user, onEvents, onStatus, onCalen
             setConnected(true);
             setCalendars(cals);
 
-            const savedId = localStorage.getItem(getUserCalKey(user.email));
+            const savedId = localStorage.getItem(getUserCalKey(workspaceEmail));
             const fallbackId = cals.find((c) => c.primary)?.id || (cals?.[0]?.id ?? "");
             setCalendarId(savedId && cals.some((c) => c.id === savedId) ? savedId : fallbackId);
 
@@ -179,17 +215,18 @@ export default function GoogleCalendarEvents({ user, onEvents, onStatus, onCalen
   };
 
   const handleDisconnect = async () => {
-    if (!user?.email) return;
+    if (!workspaceEmail) return;
 
     setLoading(true);
     setError("");
 
     try {
-      await fetch(apiUrl(`google/disconnect/${encodeURIComponent(user.email)}`), {
+      const response = await fetch(apiUrl(`google/disconnect/${encodeURIComponent(workspaceEmail)}`), {
         method: "POST",
         credentials: "include",
         headers: { Accept: "application/json" },
-      }).catch(() => {});
+      });
+      await safeJson(response);
 
       setConnected(false);
       setCalendars([]);
@@ -202,8 +239,10 @@ export default function GoogleCalendarEvents({ user, onEvents, onStatus, onCalen
       tryClosePopup();
 
       try {
-        localStorage.removeItem(getUserCalKey(user.email));
+        localStorage.removeItem(getUserCalKey(workspaceEmail));
       } catch {}
+    } catch (disconnectError) {
+      setError(disconnectError?.message || "Google Calendar could not be disconnected.");
     } finally {
       setLoading(false);
     }
@@ -263,16 +302,16 @@ export default function GoogleCalendarEvents({ user, onEvents, onStatus, onCalen
       <div className="account-card-actions">
         {!connected ? (
           <>
-            <button className="account-primary-btn google" onClick={handleConnect} disabled={loading || !user?.email}>
+            <button className="account-primary-btn google" onClick={handleConnect} disabled={loading || !workspaceEmail}>
               {loading ? "Connecting…" : "Connect Google Calendar"}
             </button>
-            <button className="account-secondary-btn" onClick={refreshStatus} disabled={loading || !user?.email}>
+            <button className="account-secondary-btn" onClick={refreshStatus} disabled={loading || !workspaceEmail}>
               Refresh status
             </button>
           </>
         ) : (
           <>
-            <button className="account-primary-btn google" onClick={refreshStatus} disabled={loading || !user?.email}>
+            <button className="account-primary-btn google" onClick={refreshStatus} disabled={loading || !workspaceEmail}>
               {loading ? "Refreshing…" : "Refresh connection"}
             </button>
             <button className="account-danger-btn" onClick={handleDisconnect} disabled={loading}>
