@@ -668,7 +668,11 @@ export default function Login() {
               marginBottom: 12,
             }}
           >
-            {resetToken ? "Choose a new password" : "Welcome back"}
+            {resetToken
+              ? "Choose a new password"
+              : mfaRequired
+                ? "Two-factor verification"
+                : "Welcome back"}
           </h2>
 
           <form className="auth-form" onSubmit={resetToken ? handlePasswordReset : (mfaRequired ? handleMfa : handleLogin)}>
@@ -705,8 +709,9 @@ export default function Login() {
               ) : mfaRequired ? (
                 <>
                   <div style={{ color: BG.text80, lineHeight: 1.6 }}>
-                    Enter the current code from your authenticator app, or use
-                    one of your RetainAI recovery codes.
+                    Google recognized your account. Enter the current code from
+                    your authenticator app, or use one of your RetainAI recovery
+                    codes to finish signing in.
                   </div>
                   <Input
                     value={mfaCode}
@@ -934,10 +939,14 @@ export default function Login() {
               >
                 {submitting
                   ? (resetToken ? "Updating password…" : "Signing in…")
-                  : (resetToken ? "Update password" : "Login")}
+                  : (resetToken
+                    ? "Update password"
+                    : mfaRequired
+                      ? "Verify code"
+                      : "Login")}
               </button>
 
-              {!resetToken && (
+              {!resetToken && !mfaRequired && (
                 <>
               <div
                 style={{
@@ -966,6 +975,26 @@ export default function Login() {
                 />
               </div>
                 </>
+              )}
+
+              {mfaRequired && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setMfaRequired(false);
+                    setMfaCode("");
+                    setError("");
+                  }}
+                  style={{
+                    color: BG.goldDeep,
+                    background: "transparent",
+                    border: 0,
+                    cursor: "pointer",
+                    fontWeight: 700,
+                  }}
+                >
+                  Use a different account
+                </button>
               )}
 
               <div
