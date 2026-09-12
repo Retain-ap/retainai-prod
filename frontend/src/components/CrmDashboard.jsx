@@ -927,6 +927,20 @@ function CrmDashboard({ authenticatedUser }) {
     navigate("/app?tab=profile");
   }, [navigate]);
 
+  const handleSidebarSectionChange = useCallback(
+    (nextSection) => {
+      if (nextSection === "settings") {
+        openSettings();
+        return;
+      }
+
+      setSettingsTab(null);
+      setSection(nextSection);
+      navigate(nextSection === "overview" ? "/app" : `/app?section=${encodeURIComponent(nextSection)}`);
+    },
+    [navigate, openSettings]
+  );
+
   // Fetch Google events
   const getGoogleEvents = useCallback(async () => {
     const email = effectiveEmail;
@@ -1091,13 +1105,7 @@ function CrmDashboard({ authenticatedUser }) {
         logo={logo}
         onLogout={handleLogout}
         user={user}
-        setSection={(nextSection) => {
-          if (nextSection === "settings") {
-            openSettings();
-            return;
-          }
-          setSection(nextSection);
-        }}
+        setSection={handleSidebarSectionChange}
         section={section}
         collapsed={isMobile ? false : sidebarCollapsed}
         setCollapsed={setSidebarCollapsed}
