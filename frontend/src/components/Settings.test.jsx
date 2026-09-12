@@ -75,3 +75,23 @@ test("does not restart profile polling when the refresh callback identity change
 
   expect(global.fetch).toHaveBeenCalledTimes(requestsAfterInitialLoad);
 });
+
+test("allows leaving the route-selected Import Contacts tab", async () => {
+  localStorage.setItem("user", JSON.stringify(user));
+  global.fetch = jest.fn().mockResolvedValue(response(user));
+
+  render(
+    <MemoryRouter future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
+      <Settings
+        user={user}
+        initialTab="imports"
+        refreshUser={jest.fn().mockResolvedValue(undefined)}
+      />
+    </MemoryRouter>
+  );
+
+  expect(await screen.findByText("Bring your customers with you")).toBeInTheDocument();
+  fireEvent.click(screen.getByRole("button", { name: "Profile" }));
+
+  expect(await screen.findByRole("button", { name: "Edit Profile" })).toBeInTheDocument();
+});

@@ -921,6 +921,12 @@ function CrmDashboard({ authenticatedUser }) {
     navigate("/app/import?source=google");
   }, [navigate]);
 
+  const openSettings = useCallback(() => {
+    setSettingsTab("profile");
+    setSection("settings");
+    navigate("/app?tab=profile");
+  }, [navigate]);
+
   // Fetch Google events
   const getGoogleEvents = useCallback(async () => {
     const email = effectiveEmail;
@@ -1085,7 +1091,13 @@ function CrmDashboard({ authenticatedUser }) {
         logo={logo}
         onLogout={handleLogout}
         user={user}
-        setSection={setSection}
+        setSection={(nextSection) => {
+          if (nextSection === "settings") {
+            openSettings();
+            return;
+          }
+          setSection(nextSection);
+        }}
         section={section}
         collapsed={isMobile ? false : sidebarCollapsed}
         setCollapsed={setSidebarCollapsed}

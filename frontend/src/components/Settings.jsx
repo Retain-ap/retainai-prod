@@ -194,6 +194,7 @@ export default function Settings({
   const editModeRef = useRef(false);
   const formDirtyRef = useRef(false);
   const refreshUserRef = useRef(refreshUser);
+  const appliedInitialTabRef = useRef(null);
   const [saving, setSaving] = useState(false);
   const [info, setInfo] = useState("");
   const [profileBackendOk, setProfileBackendOk] = useState(null);
@@ -252,15 +253,21 @@ export default function Settings({
   }, []);
 
   useEffect(() => {
-    if (initialTab && visibleTabKeys.includes(initialTab)) {
+    if (
+      initialTab &&
+      initialTab !== appliedInitialTabRef.current &&
+      visibleTabKeys.includes(initialTab)
+    ) {
+      appliedInitialTabRef.current = initialTab;
       setTab(initialTab);
       return;
     }
+
     if (!visibleTabKeys.includes(tab)) {
-      setTab("profile");
       setEditMode(false);
       formDirtyRef.current = false;
       setInfo("");
+      setTab("profile");
     }
   }, [initialTab, tab, visibleTabKeys]);
 
