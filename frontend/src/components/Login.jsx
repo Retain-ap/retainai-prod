@@ -3,7 +3,7 @@ import React, { useEffect, useState } from "react";
 import { useNavigate, Link } from "react-router-dom";
 import { GoogleLogin } from "@react-oauth/google";
 import logo from "../assets/logo.png";
-import defaultAvatar from "../assets/default-avatar.png";
+import defaultAvatar from "../assets/default-avatar.svg";
 import { API_BASE, apiUrl } from "../apiBase";
 
 // ---- Theme ----

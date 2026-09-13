@@ -1,9 +1,9 @@
-// public/manifest.webmanifest
 {
   "id": "/",
   "name": "RetainAI",
   "short_name": "RetainAI",
-  "description": "The CRM that keeps clients coming back.",
+  "description": "Customer follow-ups, conversations, appointments, invoices, and retention priorities in one workspace.",
+  "categories": ["business", "productivity"],
   "start_url": "/?source=pwa",
   "scope": "/",
   "display": "standalone",

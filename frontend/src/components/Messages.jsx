@@ -1572,6 +1572,7 @@ export default function Messages({ user, leads = [], defaultTemplate = "", langu
     try {
       const body = {
         lead: {
+          id: lead.id,
           name: lead.name || "",
           email: lead.email || "",
           phone: lead.phone || lead.whatsapp || "",

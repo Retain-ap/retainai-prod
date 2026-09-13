@@ -39,6 +39,31 @@ function getUserEmail() {
   }
 }
 
+async function getVapidPublicKey() {
+  const configured =
+    (window.__ENV__ &&
+      (window.__ENV__.REACT_APP_VAPID_PUBLIC_KEY ||
+        window.__ENV__.VITE_VAPID_PUBLIC_KEY ||
+        window.__ENV__.VAPID_PUBLIC_KEY)) ||
+    (typeof process !== "undefined" &&
+      process.env &&
+      process.env.REACT_APP_VAPID_PUBLIC_KEY) ||
+    "";
+  if (configured) return configured;
+
+  try {
+    const response = await fetch(apiUrl("vapid-public-key"), {
+      credentials: "include",
+      cache: "no-store",
+      headers: { Accept: "application/json" },
+    });
+    const data = await response.json().catch(() => ({}));
+    return response.ok ? String(data?.publicKey || "").trim() : "";
+  } catch {
+    return "";
+  }
+}
+
 // Register service worker + Push (PROD SAFE)
 async function registerSwAndPush({ requestPermission = false } = {}) {
   if (!("serviceWorker" in navigator)) return;
@@ -47,16 +72,9 @@ async function registerSwAndPush({ requestPermission = false } = {}) {
     const registration = await navigator.serviceWorker.register("/service-worker.js");
     console.log("Service Worker registered:", registration);
 
-    // Only attempt push if we have a VAPID key
-    const VAPID_PUBLIC_KEY =
-      (window.__ENV__ &&
-        (window.__ENV__.REACT_APP_VAPID_PUBLIC_KEY ||
-          window.__ENV__.VITE_VAPID_PUBLIC_KEY ||
-          window.__ENV__.VAPID_PUBLIC_KEY)) ||
-      (typeof process !== "undefined" &&
-        process.env &&
-        process.env.REACT_APP_VAPID_PUBLIC_KEY) ||
-      "";
+    // Prefer a build-time key, but use the backend's public key when the
+    // frontend service was deployed without a duplicate environment value.
+    const VAPID_PUBLIC_KEY = await getVapidPublicKey();
 
     if (!VAPID_PUBLIC_KEY) return;
 

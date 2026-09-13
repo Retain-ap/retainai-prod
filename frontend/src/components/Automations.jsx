@@ -537,9 +537,9 @@ function buildDefaultStep(type) {
     case "send_email":
       return {
         type: "send_email",
-        subject: "Quick check-in from {{business_name}}",
+        subject: "Checking in from {{business_name}}",
         body:
-          "Hi {{lead.first_name}},\n\nJust checking in. Book here: {{booking_link}}\n\nThanks,\n{{business_name}}",
+          "Hi {{lead.first_name}},\n\nI wanted to see whether you have any questions or would like help with your next appointment. You can choose a time here: {{booking_link}}\n\nBest,\n{{business_name}}",
       };
     case "wait":
       return { type: "wait", hours: 24 };

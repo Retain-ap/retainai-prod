@@ -19,7 +19,7 @@ import {
   FaCrown,
   FaSearch,
 } from "react-icons/fa";
-import defaultAvatar from "../assets/default-avatar.png";
+import defaultAvatar from "../assets/default-avatar.svg";
 import { promptInstall, canPromptInstall } from "../pwaInstall";
 import { getWorkspaceCapabilities } from "../workspaceIdentity";
 

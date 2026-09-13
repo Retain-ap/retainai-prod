@@ -36,7 +36,7 @@ test("reports success only after the delivery callback confirms success", async 
   await waitFor(() => expect(send).toHaveBeenCalledWith(
     lead,
     "Thanks for visiting us.",
-    "A quick follow-up for Jordan",
+    "Checking in, Jordan",
     "followup"
   ));
 });
