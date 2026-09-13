@@ -456,6 +456,23 @@ def _popup_close_html(msg="Google import finished. You can close this window."):
     return _popup_finish_html(FRONTEND_BASE + "/app", {}, msg)
 
 # ---------- Routes ----------
+@imports_bp.route("/api/google/disconnect", methods=["POST"])
+def google_disconnect():
+    user_email = _request_user_email()
+    if not user_email:
+        return jsonify({"error": "missing_userEmail"}), 400
+
+    tokens = _load_json(TOKENS_FILE, {})
+    tokens.pop(user_email, None)
+    _save_json(TOKENS_FILE, tokens)
+
+    syncs = _load_json(SYNC_FILE, {})
+    syncs.pop(user_email, None)
+    _save_json(SYNC_FILE, syncs)
+
+    return jsonify({"ok": True, "google_connected": False}), 200
+
+
 @imports_bp.post("/api/import/csv/preview")
 def csv_preview():
     user_email = _request_user_email()
