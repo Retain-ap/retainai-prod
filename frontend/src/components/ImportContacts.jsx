@@ -73,15 +73,7 @@ export default function ImportContacts({ user, focusGoogle = false }) {
     setBusy("commit"); setError("");
     try {
       const data = await request("import/csv/commit", {
-          async function disconnectGoogle() {
-    setBusy("google-disconnect"); setError("");
-    try {
-      await request("google/disconnect", { method: "POST" }, userEmail);
-      setGoogle((current) => ({ ...(current || {}), google_connected: false, has_refresh_token: false, sync_token_present: false }));
-    } catch (err) { setError(err.message); } finally { setBusy(""); }
-          }
-
-method: "POST", headers: { "Content-Type": "application/json" },
+        method: "POST", headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ rows: preview.rows, mapping, country_code: countryCode, duplicate_mode: duplicateMode, tag, file_name: file?.name }),
       }, userEmail);
       setResult(data.summary); setPreview(null); setFile(null); await refresh();
@@ -112,12 +104,17 @@ method: "POST", headers: { "Content-Type": "application/json" },
     } catch (err) { setError(err.message); } finally { setBusy(""); }
   }
 
+  async function disconnectGoogle() {
+    setBusy("google-disconnect"); setError("");
+    try {
+      await request("google/disconnect", { method: "POST" }, userEmail);
+      setGoogle((current) => ({ ...(current || {}), google_connected: false, has_refresh_token: false, sync_token_present: false }));
+    } catch (err) { setError(err.message); } finally { setBusy(""); }
+  }
+
   const selectedCount = preview?.rows?.filter((row) => row.selected !== false).length || 0;
   return (
-              <div className="google-import-actions">
-            <button className="product-button primary" onClick={google?.google_connected ? importGoogle : connectGoogle} disabled={Boolean(busy)}>{busy === "google" ? "Importing…" : google?.google_connected ? "Import latest contacts" : "Connect Google"}</button>button>
-                {google?.google_connected ? <button className="product-button danger" onClick={disconnectGoogle} disabled={Boolean(busy)}>{busy === "google-disconnect" ? "Disconnecting…" : "Disconnect"}</button>button> : null}
-              </div>div></div>
+    <div className="product-page import-workspace">
       <header className="product-hero"><div><div className="product-eyebrow">Customer data</div><h1>Bring your customers with you</h1><p>Map, clean, preview, merge, and safely undo contact imports.</p></div></header>
       {error && <div className="product-alert danger">{error}</div>}
       {result && <div className="product-alert success"><strong>Import complete.</strong> Added {result.imported || 0}, updated {result.updated || result.merged || 0}, skipped {result.skipped || 0}.</div>}
@@ -137,7 +134,10 @@ method: "POST", headers: { "Content-Type": "application/json" },
         >
           <div className="product-card-header"><div><h2>Google Contacts</h2><p className="product-card-copy">Securely import from your connected Google account.</p></div><FaGoogle /></div>
           <div className="integration-summary"><span className={`status-pill ${google?.google_connected ? "active" : "pending_payment"}`}>{google?.google_connected ? "Connected" : "Not connected"}</span><strong>{google?.leads_count || 0} contacts in RetainAI</strong></div>
-          <button className="product-button primary" onClick={google?.google_connected ? importGoogle : connectGoogle} disabled={Boolean(busy)}>{busy === "google" ? "Importing…" : google?.google_connected ? "Import latest contacts" : "Connect Google"}</button>
+          <div className="google-import-actions">
+            <button className="product-button primary" onClick={google?.google_connected ? importGoogle : connectGoogle} disabled={Boolean(busy)}>{busy === "google" ? "Importing…" : google?.google_connected ? "Import latest contacts" : "Connect Google"}</button>
+            {google?.google_connected ? <button className="product-button danger" onClick={disconnectGoogle} disabled={Boolean(busy)}>{busy === "google-disconnect" ? "Disconnecting…" : "Disconnect"}</button> : null}
+          </div>
         </section>
       </div>
 
