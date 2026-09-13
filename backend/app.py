@@ -694,11 +694,12 @@ def api_readiness():
     except Exception as exc:
         storage_error = type(exc).__name__
 
-    scheduler_instance = globals().get("scheduler")
+    # Gunicorn workers share the scheduler lock, but only the worker that owns
+    # that lock has a locally-running APScheduler instance.  A non-owner worker
+    # is ready once it has confirmed another worker owns the scheduler.
     scheduler_running = bool(
         globals().get("SCHEDULER_ENABLED", False)
-        and scheduler_instance
-        and getattr(scheduler_instance, "running", False)
+        and app.config.get("BOOTSTRAP_DONE")
     )
     google_redirect = str(os.getenv("GOOGLE_REDIRECT_URI") or "").strip()
     google_people_redirect = str(os.getenv("GOOGLE_PEOPLE_REDIRECT_URI") or "").strip()
