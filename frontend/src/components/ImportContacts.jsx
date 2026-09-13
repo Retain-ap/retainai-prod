@@ -73,7 +73,15 @@ export default function ImportContacts({ user, focusGoogle = false }) {
     setBusy("commit"); setError("");
     try {
       const data = await request("import/csv/commit", {
-        method: "POST", headers: { "Content-Type": "application/json" },
+          async function disconnectGoogle() {
+    setBusy("google-disconnect"); setError("");
+    try {
+      await request("google/disconnect", { method: "POST" }, userEmail);
+      setGoogle((current) => ({ ...(current || {}), google_connected: false, has_refresh_token: false, sync_token_present: false }));
+    } catch (err) { setError(err.message); } finally { setBusy(""); }
+          }
+
+method: "POST", headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ rows: preview.rows, mapping, country_code: countryCode, duplicate_mode: duplicateMode, tag, file_name: file?.name }),
       }, userEmail);
       setResult(data.summary); setPreview(null); setFile(null); await refresh();
@@ -106,7 +114,10 @@ export default function ImportContacts({ user, focusGoogle = false }) {
 
   const selectedCount = preview?.rows?.filter((row) => row.selected !== false).length || 0;
   return (
-    <div className="product-page import-workspace">
+              <div className="google-import-actions">
+            <button className="product-button primary" onClick={google?.google_connected ? importGoogle : connectGoogle} disabled={Boolean(busy)}>{busy === "google" ? "Importing…" : google?.google_connected ? "Import latest contacts" : "Connect Google"}</button>button>
+                {google?.google_connected ? <button className="product-button danger" onClick={disconnectGoogle} disabled={Boolean(busy)}>{busy === "google-disconnect" ? "Disconnecting…" : "Disconnect"}</button>button> : null}
+              </div>div></div>
       <header className="product-hero"><div><div className="product-eyebrow">Customer data</div><h1>Bring your customers with you</h1><p>Map, clean, preview, merge, and safely undo contact imports.</p></div></header>
       {error && <div className="product-alert danger">{error}</div>}
       {result && <div className="product-alert success"><strong>Import complete.</strong> Added {result.imported || 0}, updated {result.updated || result.merged || 0}, skipped {result.skipped || 0}.</div>}
