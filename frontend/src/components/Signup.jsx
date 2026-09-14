@@ -192,6 +192,9 @@ export default function Signup() {
           website,
           instagram,
           referral,
+          termsAccepted: agree,
+          termsVersion: "2026-09-13",
+          privacyVersion: "2026-09-13",
         }),
       });
       const data = await res.json();

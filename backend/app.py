@@ -31,7 +31,7 @@ from werkzeug.security import check_password_hash, generate_password_hash
 from cryptography.fernet import Fernet, InvalidToken
 
 from sendgrid import SendGridAPIClient
-from sendgrid.helpers.mail import Mail, Email
+from sendgrid.helpers.mail import Mail, Email, Header
 
 from google.oauth2 import id_token
 from google.auth.transport import requests as grequests
@@ -206,6 +206,7 @@ _PUBLIC_API_PATHS = {
     "/api/stripe/webhook",
     "/api/stripe/verify",
     "/api/email/inbound",
+    "/api/email/unsubscribe",
     "/api/whatsapp/webhook",
     "/api/vapid-public-key",
     "/api/team/accept",
@@ -389,6 +390,10 @@ def _clear_login_failures(email: str) -> None:
 
 PASSWORD_RESET_TTL_SECONDS = 30 * 60
 _PASSWORD_RESET_REQUESTS = {}
+_SIGNUP_REQUESTS = {}
+SIGNUP_WINDOW_SECONDS = 60 * 60
+SIGNUP_MAX_PER_IP = 10
+SIGNUP_MAX_PER_EMAIL = 4
 
 
 def _password_reset_rate_limited(email: str) -> bool:
@@ -403,6 +408,32 @@ def _password_reset_rate_limited(email: str) -> bool:
     if len(attempts) >= 4:
         return True
     attempts.append(now)
+    return False
+
+
+def _signup_rate_limited(email: str) -> bool:
+    """Bound signup/checkout creation by both source IP and email address."""
+    now = time.time()
+    forwarded = str(request.headers.get("X-Forwarded-For") or "").split(",")[0].strip()
+    client_ip = forwarded or request.remote_addr or "unknown"
+    normalized_email = _norm_email(email)
+    keys = [(f"ip:{client_ip}", SIGNUP_MAX_PER_IP)]
+    if normalized_email:
+        keys.append((f"email:{normalized_email}", SIGNUP_MAX_PER_EMAIL))
+    active = {}
+    for key, limit in keys:
+        rows = [
+            value
+            for value in _SIGNUP_REQUESTS.get(key, [])
+            if now - value < SIGNUP_WINDOW_SECONDS
+        ]
+        active[key] = rows
+        if len(rows) >= limit:
+            _SIGNUP_REQUESTS[key] = rows
+            return True
+    for key, _limit in keys:
+        active[key].append(now)
+        _SIGNUP_REQUESTS[key] = active[key]
     return False
 
 
@@ -1302,6 +1333,75 @@ def _reply_token(owner_email: str, lead_email: str) -> str:
 def make_inbound_reply_address(owner_email: str, lead_email: str) -> str:
     return f"r.{_reply_token(owner_email, lead_email)}@{INBOUND_REPLY_DOMAIN}"
 
+
+def _email_unsubscribe_token(owner_email: str, lead_id: str, lead_email: str) -> str:
+    payload = json.dumps(
+        {
+            "v": 1,
+            "workspace": str(owner_email or "").strip().lower(),
+            "lead_id": str(lead_id or "").strip(),
+            "email": str(lead_email or "").strip().lower(),
+        },
+        separators=(",", ":"),
+        sort_keys=True,
+    )
+    return _encrypt_mfa_secret(payload)
+
+
+def _decode_email_unsubscribe_token(token: str) -> dict:
+    try:
+        payload = json.loads(_decrypt_mfa_secret(str(token or "").strip()))
+    except Exception as exc:
+        raise ValueError("invalid_unsubscribe_token") from exc
+    if not isinstance(payload, dict) or int(payload.get("v") or 0) != 1:
+        raise ValueError("invalid_unsubscribe_token")
+    workspace = str(payload.get("workspace") or "").strip().lower()
+    lead_id = str(payload.get("lead_id") or "").strip()
+    email_value = str(payload.get("email") or "").strip().lower()
+    if not workspace or not email_value:
+        raise ValueError("invalid_unsubscribe_token")
+    return {"workspace": workspace, "lead_id": lead_id, "email": email_value}
+
+
+def _email_unsubscribe_url(owner_email: str, lead: dict) -> str:
+    owner_email = str(owner_email or "").strip().lower()
+    lead_id = str((lead or {}).get("id") or "").strip()
+    lead_email = str((lead or {}).get("email") or "").strip().lower()
+    if not owner_email or not lead_email:
+        return ""
+    token = _email_unsubscribe_token(
+        owner_email,
+        lead_id,
+        lead_email,
+    )
+    return f"{API_PUBLIC_URL}/api/email/unsubscribe?token={urllib.parse.quote(token, safe='')}"
+
+
+def _append_unsubscribe_footer(html_body: str, unsubscribe_url: str, business_name: str) -> str:
+    if not unsubscribe_url:
+        return str(html_body or "")
+    safe_url = html.escape(unsubscribe_url, quote=True)
+    safe_business = html.escape(str(business_name or "this business"), quote=False)
+    footer = (
+        "<div style=\"margin-top:28px;padding-top:16px;border-top:1px solid #ddd;"
+        "font-size:12px;line-height:1.5;color:#666\">"
+        f"You received this message from {safe_business}. "
+        f"<a href=\"{safe_url}\">Unsubscribe from email follow-ups</a>."
+        "</div>"
+    )
+    body = str(html_body or "")
+    if re.search(r"</body\s*>", body, flags=re.I):
+        return re.sub(r"</body\s*>", footer + "</body>", body, count=1, flags=re.I)
+    return body + footer
+
+
+def _apply_email_unsubscribe_headers(message: Mail, unsubscribe_url: str) -> None:
+    if not unsubscribe_url:
+        return
+    message.add_header(Header("List-Unsubscribe", f"<{unsubscribe_url}>"))
+    message.add_header(Header("List-Unsubscribe-Post", "List-Unsubscribe=One-Click"))
+
+
 def parse_inbound_reply_address(addr: str):
     try:
         raw = (addr or "").strip()
@@ -1850,7 +1950,15 @@ def _complete_openrouter_prompt(messages, *, max_tokens=150, temperature=0.35, t
 # ----------------------------
 # SendGrid email helpers
 # ----------------------------
-def send_email_with_template(to_email, template_id, dynamic_data, subject=None, from_email=None, reply_to_email=None):
+def send_email_with_template(
+    to_email,
+    template_id,
+    dynamic_data,
+    subject=None,
+    from_email=None,
+    reply_to_email=None,
+    unsubscribe_url=None,
+):
     if not SENDGRID_API_KEY:
         print("[SENDGRID] SENDGRID_API_KEY missing; skipping email send.")
         return False
@@ -1865,6 +1973,7 @@ def send_email_with_template(to_email, template_id, dynamic_data, subject=None, 
     message.dynamic_template_data = dynamic_data
     if reply_to_email:
         message.reply_to = Email(reply_to_email)
+    _apply_email_unsubscribe_headers(message, unsubscribe_url)
 
     try:
         sg = SendGridAPIClient(SENDGRID_API_KEY)
@@ -2626,6 +2735,83 @@ def mark_notification_read_legacy(user_email):
     if not notif_id:
         return jsonify({"error": "Notification id is required"}), 400
     return mark_notification_read(user_email, notif_id)
+
+
+def _unsubscribe_page(title: str, message: str, token: str = "", status: int = 200):
+    action = ""
+    if token:
+        safe_token = html.escape(token, quote=True)
+        action = (
+            '<form method="post" action="/api/email/unsubscribe" style="margin-top:24px">'
+            f'<input type="hidden" name="token" value="{safe_token}">'
+            '<button type="submit" style="background:#d6b25e;color:#111;border:0;'
+            'border-radius:10px;padding:12px 18px;font-weight:700;cursor:pointer">'
+            'Confirm unsubscribe</button></form>'
+        )
+    page = f"""<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>{html.escape(title)}</title></head>
+<body style="margin:0;background:#0f1115;color:#f6f1e6;font-family:Arial,sans-serif">
+<main style="max-width:560px;margin:10vh auto;padding:32px;border:1px solid #34312a;border-radius:16px;background:#17191d">
+<div style="color:#d6b25e;font-weight:800">RetainAI</div>
+<h1 style="font-size:28px">{html.escape(title)}</h1>
+<p style="color:#d7d3ca;line-height:1.6">{html.escape(message)}</p>{action}
+</main></body></html>"""
+    return page, status, {"Content-Type": "text/html; charset=utf-8"}
+
+
+@app.route("/api/email/unsubscribe", methods=["GET", "POST"])
+def email_unsubscribe():
+    token = str(
+        request.args.get("token")
+        or request.form.get("token")
+        or ((request.get_json(silent=True) or {}).get("token") if request.is_json else "")
+        or ""
+    ).strip()
+    try:
+        payload = _decode_email_unsubscribe_token(token)
+    except ValueError:
+        return _unsubscribe_page(
+            "Link unavailable",
+            "This unsubscribe link is invalid. Contact the business that sent the message for help.",
+            status=400,
+        )
+
+    if request.method == "GET":
+        return _unsubscribe_page(
+            "Stop email follow-ups?",
+            "Confirm below and this business will stop sending follow-up and promotional emails to this address.",
+            token=token,
+        )
+
+    leads = load_leads() or {}
+    rows = leads.get(payload["workspace"], []) if isinstance(leads, dict) else []
+    matched = None
+    for lead in rows or []:
+        lead_id_matches = (
+            not payload["lead_id"]
+            or str((lead or {}).get("id") or "") == payload["lead_id"]
+        )
+        if lead_id_matches and str((lead or {}).get("email") or "").strip().lower() == payload["email"]:
+            matched = lead
+            break
+    if not isinstance(matched, dict):
+        return _unsubscribe_page(
+            "Link unavailable",
+            "This customer record no longer exists. Contact the business that sent the message for help.",
+            status=404,
+        )
+
+    now_iso = datetime.datetime.now(datetime.timezone.utc).isoformat()
+    matched["email_opt_out"] = True
+    matched["email_consent_status"] = "withdrawn"
+    matched["email_consent_updated_at"] = now_iso
+    matched["email_consent_source"] = "customer_unsubscribe_link"
+    save_user_leads(payload["workspace"], rows)
+    return _unsubscribe_page(
+        "You’re unsubscribed",
+        "This business will no longer send follow-up or promotional emails to this address.",
+    )
 
 @app.route("/api/email/inbound", methods=["POST"])
 def inbound_email_webhook():
@@ -4265,6 +4451,13 @@ def signup():
     instagram = (data.get("instagram") or "").strip()
     location = (data.get("location") or "").strip()
     referral = (data.get("referral") or "").strip()
+    terms_accepted = data.get("termsAccepted") is True
+
+    if not terms_accepted:
+        return jsonify({
+            "error": "Please agree to the Terms of Service and Privacy Policy.",
+            "code": "terms_required",
+        }), 400
 
     if not re.fullmatch(r"[^@\s]+@[^@\s]+\.[^@\s]+", email or "") or len(email) > 320:
         return jsonify({"error": "Enter a valid email address."}), 400
@@ -4295,6 +4488,11 @@ def signup():
         return jsonify({"error": "One or more optional fields are too long."}), 400
     if len(logo) > 2_000_000:
         return jsonify({"error": "The uploaded logo is too large. Use an image under 1.5 MB."}), 400
+    if _signup_rate_limited(email):
+        return jsonify({
+            "error": "Too many signup attempts. Please wait before trying again.",
+            "code": "signup_rate_limited",
+        }), 429, {"Retry-After": str(SIGNUP_WINDOW_SECONDS)}
     if not STRIPE_SECRET_KEY or not STRIPE_PRICE_ID:
         return jsonify({"error": "Billing is temporarily unavailable. Please try again later."}), 503
 
@@ -4337,7 +4535,17 @@ def signup():
             "trial_start": "",
             "trial_eligible": not repeat_customer,
             "trial_ending_notice_sent": False,
+            "terms_accepted_at": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+            "terms_version": str(data.get("termsVersion") or "2026-09-13")[:32],
+            "privacy_version": str(data.get("privacyVersion") or "2026-09-13")[:32],
         }
+        users[email] = account
+        save_users(users)
+
+    if not account.get("terms_accepted_at"):
+        account["terms_accepted_at"] = datetime.datetime.now(datetime.timezone.utc).isoformat()
+        account["terms_version"] = str(data.get("termsVersion") or "2026-09-13")[:32]
+        account["privacy_version"] = str(data.get("privacyVersion") or "2026-09-13")[:32]
         users[email] = account
         save_users(users)
 
@@ -7920,6 +8128,12 @@ def send_ai_message():
     to_email = str(lead.get("email") or "").strip().lower()
     if not re.fullmatch(r"[^@\s]+@[^@\s]+\.[^@\s]+", to_email) or len(to_email) > 320:
         return jsonify({"ok": False, "error": "The selected customer needs a valid email address."}), 422
+    if bool(lead.get("email_opt_out")):
+        return jsonify({
+            "ok": False,
+            "error": "This customer has unsubscribed from email follow-ups.",
+            "code": "email_opt_out",
+        }), 403
 
     try:
         users = load_users() or {}
@@ -7986,6 +8200,7 @@ def send_ai_message():
         user_profile.get("booking_link")
         or ""
     ).strip()
+    unsubscribe_url = _email_unsubscribe_url(owner_email, lead)
 
     dynamic_data = {
         "subject": subject,
@@ -8003,6 +8218,8 @@ def send_ai_message():
         "text": model_text,
         "body": model_text,
         "prompt": model_text,
+        "unsubscribe_url": unsubscribe_url,
+        "unsubscribe_link": unsubscribe_url,
     }
 
     try:
@@ -8015,6 +8232,7 @@ def send_ai_message():
             subject=subject,
             from_email=Email(SENDER_EMAIL, business_name),
             reply_to_email=reply_to_addr,
+            unsubscribe_url=unsubscribe_url,
         )
     except Exception:
         try:
@@ -8640,6 +8858,7 @@ def send_email_sendgrid_auto(
     html: str,
     business_name: str,
     owner_email: str = "",
+    unsubscribe_url: str = "",
 ) -> bool:
     if not globals().get("SENDGRID_API_KEY"):
         raise RuntimeError("Email automation is unavailable because SendGrid is not configured.")
@@ -8649,11 +8868,12 @@ def send_email_sendgrid_auto(
             from_email=Email(globals().get("SENDER_EMAIL", "noreply@retainai.ca"), business_name or "RetainAI"),
             to_emails=to_email,
             subject=subject,
-            html_content=html,
+            html_content=_append_unsubscribe_footer(html, unsubscribe_url, business_name),
         )
 
         if owner_email:
             msg.reply_to = Email(make_inbound_reply_address(owner_email, to_email))
+        _apply_email_unsubscribe_headers(msg, unsubscribe_url)
 
         resp = sg.send(msg)
         print("[Automations] SendGrid status:", resp.status_code)
@@ -8822,6 +9042,14 @@ def execute_step(flow: Dict[str, Any], step: Dict[str, Any], lead: Dict[str, Any
         if not email:
             _record_automation_action(run, "send_email", "skipped", {"reason": "Customer has no email address."})
             return True
+        if bool(lead.get("email_opt_out")):
+            _record_automation_action(
+                run,
+                "send_email",
+                "skipped",
+                {"reason": "Customer unsubscribed from email follow-ups."},
+            )
+            return True
 
         subject = render_text(step.get("subject") or "Quick check-in", lead, run, profile)
         html = render_text(
@@ -8835,12 +9063,15 @@ def execute_step(flow: Dict[str, Any], step: Dict[str, Any], lead: Dict[str, Any
             _record_automation_action(run, "send_email", "blocked", {"reason": "Complete the automation profile settings."})
             return True
 
+        owner_email = (lead.get("owner") or flow.get("owner") or "").lower()
+        unsubscribe_url = _email_unsubscribe_url(owner_email, lead)
         ok = send_email_sendgrid_auto(
             email,
             subject,
             html,
             profile.get("business_name") or "RetainAI",
-            owner_email=(lead.get("owner") or flow.get("owner") or "").lower(),
+            owner_email=owner_email,
+            unsubscribe_url=unsubscribe_url,
         )
         if ok:
             mark_sent(run, CHANNEL_EMAIL)

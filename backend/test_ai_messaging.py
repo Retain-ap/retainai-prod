@@ -128,6 +128,8 @@ class AiDraftingTests(unittest.TestCase):
         self.assertEqual(kwargs["to_email"], "jordan@example.com")
         self.assertEqual(kwargs["dynamic_data"]["business_name"], "North Star Studio")
         self.assertNotEqual(kwargs["dynamic_data"]["business_name"], "Forged Business")
+        self.assertIn("/api/email/unsubscribe?token=", kwargs["unsubscribe_url"])
+        self.assertEqual(kwargs["dynamic_data"]["unsubscribe_url"], kwargs["unsubscribe_url"])
 
     def test_automation_missing_booking_link_keeps_blocker_and_skips_provider(self):
         context = {

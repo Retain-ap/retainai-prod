@@ -119,10 +119,17 @@ export default function LeadDrawer({
   const [newReminder, setNewReminder] = useState("");
   const [savingReminder, setSavingReminder] = useState(false);
   const [saveMsg, setSaveMsg] = useState("");
+  const [savingConsent, setSavingConsent] = useState(false);
+  const [emailConsentStatus, setEmailConsentStatus] = useState(
+    lead?.email_opt_out ? "withdrawn" : (lead?.email_consent_status || "unknown")
+  );
 
   useEffect(() => {
     setUpdates(migrateNotesToUpdates(lead));
     setReminders(Array.isArray(lead?.reminders) ? lead.reminders.map(normalizeReminder) : []);
+    setEmailConsentStatus(
+      lead?.email_opt_out ? "withdrawn" : (lead?.email_consent_status || "unknown")
+    );
     setSaveMsg("");
   }, [lead]);
 
@@ -238,6 +245,31 @@ export default function LeadDrawer({
     [persistLeadPatch]
   );
 
+  const updateEmailPermission = useCallback(
+    async (nextStatus) => {
+      setSavingConsent(true);
+      setSaveMsg("");
+      try {
+        await persistLeadPatch({
+          email_opt_out: nextStatus === "withdrawn",
+          email_consent_status: nextStatus,
+          email_consent_updated_at: new Date().toISOString(),
+          email_consent_source: "workspace_user",
+          updated_at: new Date().toISOString(),
+        });
+        setEmailConsentStatus(nextStatus);
+        setSaveMsg("Email permission saved");
+        setTimeout(() => setSaveMsg(""), 1800);
+      } catch (error) {
+        console.warn("Failed to save email permission:", error);
+        setSaveMsg("Could not save email permission");
+      } finally {
+        setSavingConsent(false);
+      }
+    },
+    [persistLeadPatch]
+  );
+
   const addReminder = () => {
     const t = (newReminder || "").trim();
     if (!t) return;
@@ -271,7 +303,7 @@ export default function LeadDrawer({
   if (!lead) return null;
 
   const phone = lead.phone || lead.whatsapp || "";
-  const canEmail = !!lead.email;
+  const canEmail = !!lead.email && emailConsentStatus !== "withdrawn";
   const canCall = !!phone;
 
   return (
@@ -458,6 +490,36 @@ export default function LeadDrawer({
               <DetailRow label="Birthday" value={lead.birthday ? formatDateOnly(lead.birthday) : "—"} />
               <DetailRow label="Owner" value={lead.owner || userEmail || "—"} />
             </SectionCard>
+
+            {lead.email && (
+              <SectionCard title="Email Permission">
+                <label style={{ display: "grid", gap: 8 }}>
+                  <span style={{ color: "#aeb6bd", fontSize: 12, fontWeight: 800 }}>
+                    Follow-up email status
+                  </span>
+                  <select
+                    value={emailConsentStatus}
+                    disabled={savingConsent}
+                    onChange={(event) => updateEmailPermission(event.target.value)}
+                    style={{
+                      width: "100%",
+                      background: "#181a1d",
+                      color: "#f4f6f7",
+                      border: "1px solid #3a3f45",
+                      borderRadius: 10,
+                      padding: "10px 12px",
+                    }}
+                  >
+                    <option value="unknown">Permission not recorded</option>
+                    <option value="confirmed">Consent or existing relationship confirmed</option>
+                    <option value="withdrawn">Do not send follow-up emails</option>
+                  </select>
+                </label>
+                <p style={{ margin: "10px 0 0", color: "#929da6", fontSize: 12, lineHeight: 1.5 }}>
+                  RetainAI blocks AI and automated follow-ups after a customer unsubscribes. Record permission before outreach.
+                </p>
+              </SectionCard>
+            )}
 
             <SectionCard title="Relationship Snapshot">
               <DetailRow
