@@ -70,6 +70,26 @@ class PasswordResetSecurityTests(unittest.TestCase):
 
 
 class RequestBoundarySecurityTests(unittest.TestCase):
+    def test_whatsapp_debug_route_is_platform_owner_only(self):
+        client = retainai.app.test_client()
+        with client.session_transaction() as signed_session:
+            signed_session["user_email"] = "customer@example.com"
+            signed_session["org_email"] = "customer@example.com"
+            signed_session["security_version"] = 0
+        user = {
+            "email": "customer@example.com",
+            "org_id": "customer@example.com",
+            "role": "owner",
+            "status": "active",
+            "security_version": 0,
+        }
+        with patch.object(retainai, "load_users", return_value={"customer@example.com": user}), patch.object(
+            retainai, "wa_fetch_templates_raw"
+        ) as fetch:
+            response = client.get("/api/whatsapp/debug/template-locales?name=welcome")
+        self.assertEqual(response.status_code, 403)
+        fetch.assert_not_called()
+
     def test_production_never_trusts_developer_origins(self):
         origins = [
             "http://localhost:3000",
