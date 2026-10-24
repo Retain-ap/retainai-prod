@@ -7600,6 +7600,9 @@ def send_whatsapp_message():
 
 @app.get("/api/whatsapp/debug/template-locales")
 def debug_template_locales():
+    # Exposes the platform WhatsApp account identifiers; operators only.
+    if not _is_platform_owner(_session_email()):
+        return jsonify({"error": "platform_owner_required"}), 403
     r = wa_fetch_templates_raw()
     name = (request.args.get("name") or "").strip()
     items = (r.json() or {}).get("data", []) if r.ok else []
