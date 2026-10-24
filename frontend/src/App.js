@@ -1,10 +1,9 @@
 // src/App.jsx
-import React, { useEffect } from "react";
+import React, { Suspense, lazy, useEffect } from "react";
 import { BrowserRouter as Router, Routes, Route, Navigate, useLocation, useNavigate } from "react-router-dom";
 import LandingPage from "./components/LandingPage";
 import Login from "./components/Login";
 import Signup from "./components/Signup";
-import CrmDashboard from "./components/CrmDashboard";
 import ProtectedRoute from "./components/ProtectedRoute";
 import PrivacyPolicy from "./pages/PrivacyPolicy";
 import TermsOfService from "./pages/TermsOfService";
@@ -13,6 +12,51 @@ import AcceptInvite from "./pages/AcceptInvite"; // ← added
 import { SettingsProvider } from "./components/SettingsContext";
 import { API_BASE } from "./apiBase";
 import "./index.css";
+
+const CHUNK_RELOAD_KEY = "retainai:chunk-reload";
+
+/** Load the signed-in workspace on demand; reload once if a deploy replaced its chunk. */
+const CrmDashboard = lazy(() =>
+  import("./components/CrmDashboard")
+    .then((module) => {
+      try {
+        window.sessionStorage.removeItem(CHUNK_RELOAD_KEY);
+      } catch {}
+      return module;
+    })
+    .catch((error) => {
+      let reloaded = false;
+      try {
+        reloaded = window.sessionStorage.getItem(CHUNK_RELOAD_KEY) === "1";
+        if (!reloaded) window.sessionStorage.setItem(CHUNK_RELOAD_KEY, "1");
+      } catch {
+        reloaded = true;
+      }
+      if (!reloaded) {
+        window.location.reload();
+        return new Promise(() => {});
+      }
+      throw error;
+    })
+);
+
+function WorkspaceLoading() {
+  return (
+    <div
+      role="status"
+      style={{
+        minHeight: "100vh",
+        display: "grid",
+        placeItems: "center",
+        background: "#0f1115",
+        color: "#d7d3ca",
+        fontWeight: 700,
+      }}
+    >
+      Loading your workspace…
+    </div>
+  );
+}
 
 /** Listens for the Google Contacts popup completion and navigates back to /app/import */
 function OAuthPopupBridge() {
@@ -113,7 +157,9 @@ function App() {
             path="/app/*"
             element={
               <ProtectedRoute>
-                <CrmDashboard />
+                <Suspense fallback={<WorkspaceLoading />}>
+                  <CrmDashboard />
+                </Suspense>
               </ProtectedRoute>
             }
           />
