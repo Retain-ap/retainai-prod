@@ -82,6 +82,63 @@ class EmailConsentTests(unittest.TestCase):
         self.assertEqual(response.get_json()["code"], "email_opt_out")
         send.assert_not_called()
 
+    def test_birthday_greeting_skips_unsubscribed_customers(self):
+        leads = [
+            {"id": "a", "name": "Avery", "email": "avery@example.com", "birthday": "1990-01-02"},
+            {
+                "id": "b",
+                "name": "Blake",
+                "email": "blake@example.com",
+                "birthday": "1990-01-02",
+                "email_opt_out": True,
+            },
+        ]
+        today = retainai.datetime.datetime(2026, 1, 2, 9, 0)
+        with patch.object(retainai, "load_leads", return_value={self.owner: leads}), patch.object(
+            retainai, "load_users", return_value={self.owner: self._active_user(self.owner)}
+        ), patch.object(retainai.datetime, "datetime", wraps=retainai.datetime.datetime) as dt, patch.object(
+            retainai, "send_email_with_template", return_value=True
+        ) as send, patch.object(retainai, "log_notification"):
+            dt.utcnow.return_value = today
+            retainai.send_birthday_greetings()
+
+        recipients = [call.kwargs["to_email"] for call in send.call_args_list]
+        self.assertEqual(recipients, ["avery@example.com"])
+        self.assertIn("/api/email/unsubscribe?token=", send.call_args.kwargs["unsubscribe_url"])
+
+    def test_bulk_lead_save_keeps_customer_unsubscribe_from_stale_client(self):
+        stored = {
+            "id": "lead-1",
+            "email": "jordan@example.com",
+            "email_opt_out": True,
+            "email_consent_status": "withdrawn",
+            "email_consent_updated_at": "2026-10-01T12:00:00+00:00",
+            "email_consent_source": "customer_unsubscribe_link",
+        }
+        stale = {"id": "lead-1", "email": "jordan@example.com", "name": "Jordan"}
+        reconsented = dict(
+            stale,
+            email_opt_out=False,
+            email_consent_status="confirmed",
+            email_consent_updated_at="2026-10-02T08:00:00.000Z",
+            email_consent_source="workspace_user",
+        )
+        client = self._signed_client()
+        with patch.object(
+            retainai, "load_users", return_value={self.owner: self._active_user(self.owner)}
+        ), patch.object(retainai, "load_leads", return_value={self.owner: [stored]}), patch.object(
+            retainai, "save_user_leads"
+        ) as save:
+            client.post("/api/leads", json={"leads": [stale]})
+            saved = save.call_args.args[1][0]
+            self.assertTrue(saved["email_opt_out"])
+            self.assertEqual(saved["email_consent_source"], "customer_unsubscribe_link")
+
+            client.post("/api/leads", json={"leads": [reconsented]})
+            saved = save.call_args.args[1][0]
+            self.assertFalse(saved["email_opt_out"])
+            self.assertEqual(saved["email_consent_status"], "confirmed")
+
     def test_signup_requires_server_verified_terms_acceptance(self):
         client = retainai.app.test_client()
         with patch.object(retainai, "_signup_rate_limited", return_value=False):

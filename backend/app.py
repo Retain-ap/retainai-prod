@@ -2281,11 +2281,17 @@ def check_for_lead_reminders():
             except Exception as e:
                 print("[WARN] lead reminder email/log error:", e)
 
-def send_birthday_email(lead_email, lead_name, business_name):
-    send_email_with_template(
+def send_birthday_email(lead_email, lead_name, business_name, unsubscribe_url=""):
+    return send_email_with_template(
         to_email=lead_email,
         template_id=SG_TEMPLATE_BIRTHDAY,
-        dynamic_data={"lead_name": lead_name, "business_name": business_name},
+        dynamic_data={
+            "lead_name": lead_name,
+            "business_name": business_name,
+            "unsubscribe_url": unsubscribe_url,
+            "unsubscribe_link": unsubscribe_url,
+        },
+        unsubscribe_url=unsubscribe_url,
     )
 
 def send_birthday_reminder_to_user(user_email, user_name, lead_name, business_name, birthday, lead=None):
@@ -2325,9 +2331,15 @@ def send_birthday_greetings():
             bday = (lead.get("birthday") or "").strip()
             if bday and len(bday.split("-")) >= 3:
                 mmdd = "-".join(bday.split("-")[1:3])
-                if mmdd == today:
-                    send_birthday_email(lead.get("email", ""), lead.get("name", ""), business)
-                    log_notification(user_email, f"Happy Birthday, {lead.get('name','')}!", "Automated birthday email", lead.get("email"))
+                if mmdd == today and lead.get("email") and not bool(lead.get("email_opt_out")):
+                    sent = send_birthday_email(
+                        lead.get("email", ""),
+                        lead.get("name", ""),
+                        business,
+                        unsubscribe_url=_email_unsubscribe_url(user_email, lead),
+                    )
+                    if sent:
+                        log_notification(user_email, f"Happy Birthday, {lead.get('name','')}!", "Automated birthday email", lead.get("email"))
                 if mmdd == tomorrow:
                     send_birthday_reminder_to_user(
                         user_email=user_email,
@@ -2577,6 +2589,59 @@ def api_get_leads():
         return jsonify({"ok": False, "error": str(e)[:300]}), 500
 
 
+_EMAIL_CONSENT_FIELDS = (
+    "email_opt_out",
+    "email_consent_status",
+    "email_consent_updated_at",
+    "email_consent_source",
+)
+
+
+def _consent_timestamp(lead: dict) -> float:
+    raw = str((lead or {}).get("email_consent_updated_at") or "").strip()
+    try:
+        parsed = datetime.datetime.fromisoformat(raw.replace("Z", "+00:00"))
+    except ValueError:
+        return 0.0
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=datetime.timezone.utc)
+    return parsed.timestamp()
+
+
+def _preserve_customer_unsubscribes(owner_email: str, incoming: list) -> None:
+    """Keep a customer's own unsubscribe when a stale client saves the whole list.
+
+    A workspace user may still re-record consent, but only with a consent
+    timestamp newer than the customer's withdrawal.
+    """
+    stored = (load_leads() or {}).get(owner_email, [])
+    withdrawn = {}
+    for lead in stored if isinstance(stored, list) else []:
+        if (
+            isinstance(lead, dict)
+            and bool(lead.get("email_opt_out"))
+            and lead.get("email_consent_source") == "customer_unsubscribe_link"
+        ):
+            key = str(lead.get("id") or "").strip() or str(lead.get("email") or "").strip().lower()
+            if key:
+                withdrawn[key] = lead
+    if not withdrawn:
+        return
+    for lead in incoming:
+        if not isinstance(lead, dict):
+            continue
+        key = str(lead.get("id") or "").strip() or str(lead.get("email") or "").strip().lower()
+        prior = withdrawn.get(key)
+        if not prior:
+            continue
+        if str(lead.get("email") or "").strip().lower() != str(prior.get("email") or "").strip().lower():
+            continue
+        if _consent_timestamp(lead) > _consent_timestamp(prior):
+            continue
+        for field in _EMAIL_CONSENT_FIELDS:
+            lead[field] = prior.get(field)
+
+
 @app.route("/api/leads", methods=["POST", "OPTIONS"])
 def api_save_leads():
     if request.method == "OPTIONS":
@@ -2593,6 +2658,7 @@ def api_save_leads():
         return jsonify({"ok": False, "error": "body_must_include_leads_array"}), 400
 
     try:
+        _preserve_customer_unsubscribes(email, leads)
         save_user_leads(email, leads)
 
         return jsonify({"ok": True, "email": email, "count": len(leads)}), 200
