@@ -1,0 +1,59 @@
+name: Production uptime
+
+# Checks the live RetainAI and Closet Muse services. A failed run makes GitHub
+# email the repository owner; nothing here changes production.
+on:
+  schedule:
+    - cron: "7,22,37,52 * * * *"
+  workflow_dispatch:
+
+concurrency:
+  group: production-uptime
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    name: Live readiness
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Check RetainAI and Closet Muse
+        shell: bash
+        run: |
+          set -uo pipefail
+          failures=0
+
+          # Retry each check so one slow response does not page anyone.
+          check() {
+            local name="$1" url="$2" test="$3" body=""
+            for attempt in 1 2 3; do
+              if body="$(curl -fsS --max-time 20 "$url")" && python3 -c "$test" <<<"$body"; then
+                echo "PASS $name"
+                return 0
+              fi
+              sleep 20
+            done
+            echo "::error title=$name is down::$url failed three attempts"
+            failures=$((failures + 1))
+          }
+
+          check "RetainAI API readiness" "https://api.retainai.ca/api/readiness" \
+            'import json,sys; d=json.load(sys.stdin); assert d["status"]=="ready" and all(d["checks"].values())'
+          check "RetainAI website" "https://www.retainai.ca/" \
+            'import sys; assert "<div id=\"root\">" in sys.stdin.read()'
+          check "Closet Muse readiness" "https://closetmuse.ca/api/readiness" \
+            'import json,sys; assert json.load(sys.stdin)["ready"] is True'
+          check "Closet Muse website" "https://closetmuse.ca/" \
+            'import sys; assert "Closet Muse" in sys.stdin.read()'
+
+          # Reported without failing the run until the Render custom domain is verified.
+          if curl -fsS --max-time 20 -o /dev/null https://retainai.ca/; then
+            echo "PASS retainai.ca without www"
+          else
+            echo "::warning title=retainai.ca without www::Add or verify retainai.ca under the frontend static site's Custom Domains on Render"
+          fi
+
+          exit "$failures"
