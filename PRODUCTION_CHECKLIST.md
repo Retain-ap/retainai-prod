@@ -100,14 +100,28 @@ disconnect and reconnect Google so the new grant is recorded.
 
 ## Release verification
 
+These match the release gate in `.github/workflows/ci.yml`, which runs on every
+push to `deploy`. Render deploys from `deploy`, so run them before pushing.
+
 Run the backend regression checks in an environment with `backend/requirements.txt`
 installed:
 
+`python -m compileall -q backend`
+
 `python -m unittest discover -s backend -p "test_*.py"`
 
-Run the frontend production build:
+Run the frontend checks from `frontend/` after `npm ci`:
 
-`npm --prefix frontend run build`
+`CI=true npm test -- --watchAll=false --runInBand`
+
+`npx eslint src --ext .js,.jsx --no-cache --max-warnings=0`
+
+`CI=true npm run build`
+
+`npm audit --omit=dev --audit-level=high`
+
+If the audit reports a high or critical finding, run `npm audit fix --omit=dev`
+and commit the updated `package-lock.json`.
 
 ## Monthly recovery drill
 
