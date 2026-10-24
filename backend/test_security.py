@@ -70,6 +70,21 @@ class PasswordResetSecurityTests(unittest.TestCase):
 
 
 class RequestBoundarySecurityTests(unittest.TestCase):
+    def test_production_never_trusts_developer_origins(self):
+        origins = [
+            "http://localhost:3000",
+            "https://localhost:3000",
+            "http://127.0.0.1:3000",
+            "http://www.retainai.ca",
+            "https://www.retainai.ca",
+            "https://retainai.ca",
+        ]
+        self.assertEqual(
+            retainai._trusted_browser_origins(origins, is_production=True),
+            ["https://www.retainai.ca", "https://retainai.ca"],
+        )
+        self.assertEqual(retainai._trusted_browser_origins(origins, is_production=False), origins)
+
     def test_cross_origin_authenticated_write_is_rejected(self):
         client = retainai.app.test_client()
         email = "customer@example.com"

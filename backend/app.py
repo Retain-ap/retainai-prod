@@ -157,6 +157,22 @@ if not ALLOWED:
         "https://retainai.ca",
     ]
 
+
+def _trusted_browser_origins(origins, is_production):
+    """Production trusts only public HTTPS sites, never a developer machine."""
+    if not is_production:
+        return list(origins)
+    trusted = []
+    for origin in origins:
+        parsed = urllib.parse.urlsplit(origin)
+        host = (parsed.hostname or "").lower()
+        if parsed.scheme != "https" or host in {"localhost", "127.0.0.1", "::1", "0.0.0.0"}:
+            continue
+        trusted.append(origin)
+    return trusted
+
+
+ALLOWED = _trusted_browser_origins(ALLOWED, IS_PRODUCTION)
 print("[CORS] Allowed origins:", ALLOWED)
 
 CORS(
