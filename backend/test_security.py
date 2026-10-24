@@ -63,7 +63,8 @@ class PasswordResetSecurityTests(unittest.TestCase):
             self.email,
         )
         encoded, signature = token.split(".", 1)
-        tampered = f"{encoded}.{signature[:-1]}0"
+        replacement = "1" if signature[-1] == "0" else "0"
+        tampered = f"{encoded}.{signature[:-1]}{replacement}"
         with self.assertRaises(ValueError):
             retainai._decode_email_verification_token(tampered)
 
