@@ -245,8 +245,20 @@ export default function LeadDrawer({
     [persistLeadPatch]
   );
 
+  const customerUnsubscribed =
+    !!lead?.email_opt_out && lead?.email_consent_source === "customer_unsubscribe_link";
+
   const updateEmailPermission = useCallback(
     async (nextStatus) => {
+      if (
+        customerUnsubscribed &&
+        nextStatus !== "withdrawn" &&
+        !window.confirm(
+          "This customer unsubscribed using the link in your email. Only continue if they have given you new permission to email them."
+        )
+      ) {
+        return;
+      }
       setSavingConsent(true);
       setSaveMsg("");
       try {
@@ -267,7 +279,7 @@ export default function LeadDrawer({
         setSavingConsent(false);
       }
     },
-    [persistLeadPatch]
+    [customerUnsubscribed, persistLeadPatch]
   );
 
   const addReminder = () => {
@@ -515,6 +527,13 @@ export default function LeadDrawer({
                     <option value="withdrawn">Do not send follow-up emails</option>
                   </select>
                 </label>
+                {customerUnsubscribed && (
+                  <p role="status" style={{ margin: "10px 0 0", color: "#f2c46d", fontSize: 12, lineHeight: 1.5 }}>
+                    This customer unsubscribed using the email link
+                    {lead.email_consent_updated_at ? ` on ${formatDateTime(lead.email_consent_updated_at)}` : ""}.
+                    Get new permission before emailing them again.
+                  </p>
+                )}
                 <p style={{ margin: "10px 0 0", color: "#929da6", fontSize: 12, lineHeight: 1.5 }}>
                   RetainAI blocks AI and automated follow-ups after a customer unsubscribes. Record permission before outreach.
                 </p>

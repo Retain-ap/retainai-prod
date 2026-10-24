@@ -27,3 +27,39 @@ test("does not claim a reminder was saved when the parent persistence rejects", 
   expect(screen.queryByText("Reminders saved")).not.toBeInTheDocument();
   warn.mockRestore();
 });
+
+test("asks before overriding a customer's own unsubscribe", async () => {
+  const onUpdateLead = jest.fn().mockResolvedValue(undefined);
+  const confirm = jest.spyOn(window, "confirm").mockReturnValue(false);
+  const lead = {
+    id: "lead-1",
+    name: "Jamie",
+    email: "jamie@example.com",
+    email_opt_out: true,
+    email_consent_status: "withdrawn",
+    email_consent_source: "customer_unsubscribe_link",
+    email_consent_updated_at: "2026-10-01T12:00:00+00:00",
+  };
+
+  render(
+    <LeadDrawer
+      lead={lead}
+      onClose={jest.fn()}
+      onEdit={jest.fn()}
+      onDelete={jest.fn()}
+      onUpdateLead={onUpdateLead}
+    />
+  );
+
+  expect(screen.getByText(/unsubscribed using the email link/i)).toBeInTheDocument();
+  const select = screen.getByLabelText("Follow-up email status");
+  fireEvent.change(select, { target: { value: "confirmed" } });
+  expect(confirm).toHaveBeenCalledTimes(1);
+  expect(onUpdateLead).not.toHaveBeenCalled();
+  expect(select).toHaveValue("withdrawn");
+
+  confirm.mockReturnValue(true);
+  fireEvent.change(select, { target: { value: "confirmed" } });
+  await waitFor(() => expect(onUpdateLead).toHaveBeenCalledTimes(1));
+  confirm.mockRestore();
+});
