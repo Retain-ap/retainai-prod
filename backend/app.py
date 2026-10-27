@@ -117,6 +117,7 @@ PREVIOUS_DATA_ENCRYPTION_KEY = str(
     os.getenv("PREVIOUS_DATA_ENCRYPTION_KEY") or ""
 ).strip()
 from account_history import record_trial_start, trial_previously_used
+import rate_limit
 _validate_production_secrets(
     IS_PRODUCTION,
     SESSION_SECRET,
@@ -377,80 +378,61 @@ def _password_matches(stored: str, supplied: str) -> bool:
     return hmac.compare_digest(stored, supplied)
 
 
-_LOGIN_ATTEMPTS = {}
 LOGIN_WINDOW_SECONDS = 15 * 60
 LOGIN_MAX_ATTEMPTS = 8
 
 
-def _login_attempt_key(email: str) -> str:
+def _client_ip() -> str:
+    # Render serves through Cloudflare, which overwrites CF-Connecting-IP with
+    # the real client address; the first X-Forwarded-For entry is client-supplied.
+    cloudflare = str(request.headers.get("CF-Connecting-IP") or "").strip()
+    if cloudflare:
+        return cloudflare
     forwarded = str(request.headers.get("X-Forwarded-For") or "").split(",")[0].strip()
-    return f"{_norm_email(email)}:{forwarded or request.remote_addr or 'unknown'}"
+    return forwarded or request.remote_addr or "unknown"
+
+
+def _login_attempt_key(email: str) -> str:
+    return f"{_norm_email(email)}:{_client_ip()}"
 
 
 def _login_is_limited(email: str) -> bool:
-    key = _login_attempt_key(email)
-    now = time.time()
-    attempts = [value for value in _LOGIN_ATTEMPTS.get(key, []) if now - value < LOGIN_WINDOW_SECONDS]
-    _LOGIN_ATTEMPTS[key] = attempts
-    return len(attempts) >= LOGIN_MAX_ATTEMPTS
+    return rate_limit.hit(
+        [("login", _login_attempt_key(email), LOGIN_MAX_ATTEMPTS)],
+        LOGIN_WINDOW_SECONDS,
+        record=False,
+    )
 
 
 def _record_login_failure(email: str) -> None:
-    key = _login_attempt_key(email)
-    _LOGIN_ATTEMPTS.setdefault(key, []).append(time.time())
+    rate_limit.record("login", _login_attempt_key(email))
 
 
 def _clear_login_failures(email: str) -> None:
-    _LOGIN_ATTEMPTS.pop(_login_attempt_key(email), None)
+    rate_limit.clear("login", _login_attempt_key(email))
 
 
 PASSWORD_RESET_TTL_SECONDS = 30 * 60
-_PASSWORD_RESET_REQUESTS = {}
-_SIGNUP_REQUESTS = {}
+PASSWORD_RESET_MAX_REQUESTS = 4
 SIGNUP_WINDOW_SECONDS = 60 * 60
 SIGNUP_MAX_PER_IP = 10
 SIGNUP_MAX_PER_EMAIL = 4
 
 
 def _password_reset_rate_limited(email: str) -> bool:
-    key = _login_attempt_key(email)
-    now = time.time()
-    attempts = [
-        value
-        for value in _PASSWORD_RESET_REQUESTS.get(key, [])
-        if now - value < LOGIN_WINDOW_SECONDS
-    ]
-    _PASSWORD_RESET_REQUESTS[key] = attempts
-    if len(attempts) >= 4:
-        return True
-    attempts.append(now)
-    return False
+    return rate_limit.hit(
+        [("password_reset", _login_attempt_key(email), PASSWORD_RESET_MAX_REQUESTS)],
+        LOGIN_WINDOW_SECONDS,
+    )
 
 
 def _signup_rate_limited(email: str) -> bool:
     """Bound signup/checkout creation by both source IP and email address."""
-    now = time.time()
-    forwarded = str(request.headers.get("X-Forwarded-For") or "").split(",")[0].strip()
-    client_ip = forwarded or request.remote_addr or "unknown"
+    keys = [("signup_ip", _client_ip(), SIGNUP_MAX_PER_IP)]
     normalized_email = _norm_email(email)
-    keys = [(f"ip:{client_ip}", SIGNUP_MAX_PER_IP)]
     if normalized_email:
-        keys.append((f"email:{normalized_email}", SIGNUP_MAX_PER_EMAIL))
-    active = {}
-    for key, limit in keys:
-        rows = [
-            value
-            for value in _SIGNUP_REQUESTS.get(key, [])
-            if now - value < SIGNUP_WINDOW_SECONDS
-        ]
-        active[key] = rows
-        if len(rows) >= limit:
-            _SIGNUP_REQUESTS[key] = rows
-            return True
-    for key, _limit in keys:
-        active[key].append(now)
-        _SIGNUP_REQUESTS[key] = active[key]
-    return False
+        keys.append(("signup_email", normalized_email, SIGNUP_MAX_PER_EMAIL))
+    return rate_limit.hit(keys, SIGNUP_WINDOW_SECONDS)
 
 
 def _password_reset_token(email: str, user: dict) -> str:

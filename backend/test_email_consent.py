@@ -150,7 +150,7 @@ class EmailConsentTests(unittest.TestCase):
         self.assertEqual(response.get_json()["code"], "terms_required")
 
     def test_signup_rate_limit_is_bounded_per_email(self):
-        retainai._SIGNUP_REQUESTS.clear()
+        retainai.rate_limit.reset()
         with retainai.app.test_request_context(
             "/api/auth/signup",
             headers={"X-Forwarded-For": "203.0.113.8"},
