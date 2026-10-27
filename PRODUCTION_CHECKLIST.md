@@ -64,6 +64,20 @@ Subscribe the production webhook to:
 - `customer.subscription.updated`
 - `customer.subscription.deleted`
 
+## SendGrid customer templates
+
+Customer-facing templates (birthday and the AI follow-up, re-engage, apology
+and upsell emails) must show a visible unsubscribe link. RetainAI sends a
+signed `unsubscribe_url` and one-click List-Unsubscribe headers with each of
+them; the template HTML has to display the link. To check, then fix:
+
+`python backend/sendgrid_unsubscribe_footer.py`
+
+`python backend/sendgrid_unsubscribe_footer.py --apply`
+
+It reads `SENDGRID_API_KEY` from the environment or a hidden prompt. `--apply`
+adds a new active version and keeps the previous one for rollback.
+
 ## Google OAuth verification
 
 Use the same Google Cloud project as the production `GOOGLE_CLIENT_ID` and
