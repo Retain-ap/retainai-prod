@@ -135,7 +135,7 @@ export default function PrivacyPolicy() {
           <a href="mailto:owner@retainai.ca" className="text-yellow-300 underline">owner@retainai.ca</a>.
         </p>
 
-        <p className="text-xs text-gray-500">
+        <p className="text-xs text-gray-400">
           This Privacy Policy is provided for general informational purposes and does not constitute legal advice.
         </p>
       </div>

@@ -72,13 +72,15 @@ async function registerSwAndPush({ requestPermission = false } = {}) {
     const registration = await navigator.serviceWorker.register("/service-worker.js");
     console.log("Service Worker registered:", registration);
 
+    if (!("Notification" in window) || !("PushManager" in window)) return registration;
+    // Visitors who have not allowed alerts need no key, so skip the request.
+    if (Notification.permission !== "granted" && !requestPermission) return;
+
     // Prefer a build-time key, but use the backend's public key when the
     // frontend service was deployed without a duplicate environment value.
     const VAPID_PUBLIC_KEY = await getVapidPublicKey();
 
     if (!VAPID_PUBLIC_KEY) return;
-
-    if (!("Notification" in window) || !("PushManager" in window)) return registration;
 
     // Browser permission prompts must follow an explicit user gesture.
     let permission = Notification.permission;

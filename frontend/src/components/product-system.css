@@ -521,9 +521,34 @@
   padding: 14px;
   border: 1px solid var(--ra-line);
   border-radius: 16px;
-  background: rgba(18, 19, 22, 0.97);
+  max-height: calc(100vh - 36px);
+  overflow-y: auto;
+  background: #121316;
   box-shadow: 0 22px 70px rgba(0, 0, 0, 0.38);
 }
+.onboarding-guide-pill {
+  position: fixed;
+  z-index: 35;
+  right: 18px;
+  bottom: calc(18px + env(safe-area-inset-bottom, 0px));
+  display: grid;
+  gap: 7px;
+  min-width: 170px;
+  min-height: 44px;
+  padding: 10px 14px;
+  border: 1px solid var(--ra-line);
+  border-radius: 14px;
+  background: #121316;
+  box-shadow: 0 14px 40px rgba(0, 0, 0, 0.35);
+  color: white;
+  font-weight: 800;
+  text-align: left;
+  cursor: pointer;
+}
+.onboarding-guide-pill > span { display: flex; align-items: center; gap: 8px; font-size: 13px; }
+.onboarding-guide-pill > span svg { color: #f5d87e; }
+.onboarding-guide-pill .onboarding-progress { margin: 0; }
+.onboarding-guide-head .onboarding-guide-actions { display: flex; align-items: flex-start; gap: 4px; }
 .onboarding-guide-head {
   display: flex;
   justify-content: space-between;
@@ -534,11 +559,16 @@
 .onboarding-guide-head span { color: #f5d87e; font-size: 12px; font-weight: 800; }
 .onboarding-guide-head strong { color: white; }
 .onboarding-guide-head button {
+  min-height: 32px;
+  padding: 4px 8px;
   border: 0;
+  border-radius: 8px;
   background: transparent;
   color: var(--ra-muted);
   cursor: pointer;
 }
+.onboarding-guide-head button:hover,
+.onboarding-guide-head button:focus-visible { color: white; background: rgba(255, 255, 255, 0.06); }
 .onboarding-progress {
   height: 5px;
   background: rgba(255, 255, 255, 0.08);

@@ -662,10 +662,10 @@ function FlowDiagram({ flow }) {
 /* -------------------- FIELD -------------------- */
 function Field({ label, children }) {
   return (
-    <div>
+    <label style={{ display: "block" }}>
       <div style={{ fontSize: 12, color: C.muted, marginBottom: 6, fontWeight: 800 }}>{label}</div>
       {children}
-    </div>
+    </label>
   );
 }
 

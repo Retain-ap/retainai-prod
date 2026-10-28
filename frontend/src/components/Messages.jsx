@@ -1686,7 +1686,7 @@ export default function Messages({ user, leads = [], defaultTemplate = "", langu
               fontWeight: 800,
             }}
           >
-            <SiWhatsapp style={{ color: C.wa }} />
+            <SiWhatsapp style={{ color: C.wa }} aria-hidden="true" />
             Chats
           </div>
 
@@ -2033,6 +2033,7 @@ export default function Messages({ user, leads = [], defaultTemplate = "", langu
 
               <div style={{ width: "100%" }}>
                 <select
+                  aria-label="Message template"
                   value={`${templateName}|${templateLangUI}`}
                   onChange={(e) => {
                     const [n, l] = e.target.value.split("|");

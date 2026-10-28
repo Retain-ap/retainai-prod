@@ -102,6 +102,14 @@ const ROUTE_META = {
     title: "Terms of Service — RetainAI",
     description: "Review the terms governing use of the RetainAI customer retention CRM.",
   },
+  "/login": {
+    title: "Log in — RetainAI",
+    description: "Log in to your RetainAI workspace.",
+  },
+  "/accept-invite": {
+    title: "Join your team — RetainAI",
+    description: "Accept your invitation to a RetainAI workspace.",
+  },
   "/refund-policy": {
     title: "Refund & Cancellation Policy — RetainAI",
     description: "Review RetainAI trial, subscription, cancellation, and refund terms.",
@@ -116,7 +124,11 @@ function RouteMetadata() {
       pathname.startsWith("/app") ||
       pathname === "/login" ||
       pathname === "/accept-invite";
-    const meta = ROUTE_META[pathname] || ROUTE_META["/"];
+    const meta =
+      ROUTE_META[pathname] ||
+      (pathname.startsWith("/app")
+        ? { title: "RetainAI", description: ROUTE_META["/"].description }
+        : ROUTE_META["/"]);
     const canonicalPath = privateRoute ? "/" : ROUTE_META[pathname] ? pathname : "/";
     const canonicalUrl = `https://www.retainai.ca${canonicalPath === "/" ? "/" : canonicalPath}`;
 
