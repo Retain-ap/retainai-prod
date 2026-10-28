@@ -2,6 +2,9 @@
 
 CRM for small businesses. Owner account: `owner@retainai.ca` (GitHub `Retain-ap`).
 
+Read `chats/` first: one summary per past Claude session, covering both apps.
+At the end of a session, add a file there and a row to `chats/README.md`.
+
 ## How it ships
 
 - `deploy` is the production branch. Render auto-deploys it to two services:
