@@ -1250,7 +1250,7 @@ function CrmDashboard({ authenticatedUser }) {
               <button
                 style={{
                   marginLeft: 10,
-                  background: "#2d7ef7",
+                  background: "#1f6ae0",
                   color: "#fff",
                   border: "none",
                   borderRadius: 8,

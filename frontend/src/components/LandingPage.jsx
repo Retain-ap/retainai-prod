@@ -89,7 +89,7 @@ const faqs = [
 
 function AppPreview() {
   return (
-    <div className="lp-preview" aria-label="RetainAI product preview">
+    <div className="lp-preview" role="img" aria-label="RetainAI product preview">
       <div className="lp-preview-top">
         <div className="lp-window-dots"><i /><i /><i /></div>
         <span>Today’s retention briefing</span>
@@ -105,7 +105,7 @@ function AppPreview() {
         <div className="lp-preview-main">
           <div className="lp-preview-heading">
             <div><small>GOOD MORNING</small><strong>Your relationships, prioritized.</strong></div>
-            <button type="button">Open actions</button>
+            <span className="lp-preview-action">Open actions</span>
           </div>
           <div className="lp-preview-stats">
             <div><small>Needs attention</small><strong>4</strong><span>Review today</span></div>
@@ -121,7 +121,7 @@ function AppPreview() {
                 ["AL", "Alex L.", "Visit tomorrow", "Confirm"],
               ].map(([initials, name, status, action]) => (
                 <div className="lp-priority-row" key={name}>
-                  <i>{initials}</i><span><b>{name}</b><small>{status}</small></span><button type="button">{action}</button>
+                  <i>{initials}</i><span><b>{name}</b><small>{status}</small></span><span className="lp-preview-action">{action}</span>
                 </div>
               ))}
             </div>

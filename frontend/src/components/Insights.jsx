@@ -370,7 +370,7 @@ export default function Insights({ leads = [], user }) {
                 <ResponsiveContainer width="100%" height="100%">
                   <PieChart>
                     <Pie data={analytics.healthData} dataKey="value" nameKey="name" innerRadius={64} outerRadius={92} paddingAngle={3}>
-                      {analytics.healthData.map((entry, index) => <Cell key={entry.name} fill={HEALTH_COLORS[index]} />)}
+                      {analytics.healthData.map((entry, index) => <Cell key={entry.name} fill={HEALTH_COLORS[index]} aria-label={`${entry.name}: ${entry.value}`} />)}
                     </Pie>
                     <Tooltip content={<ChartTooltip />} />
                   </PieChart>

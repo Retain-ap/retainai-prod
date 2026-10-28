@@ -141,7 +141,7 @@ export default function AiPromptsDashboard({ leads = [], user = {}, onSendAIProm
       <div className="ai-workspace">
         <aside className="ai-contacts-panel">
           <div className="ai-panel-heading"><div><span>1</span><strong>Choose a customer</strong></div><small>{filteredLeads.length} available</small></div>
-          <label className="ai-search"><FaSearch /><input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search customers…" /></label>
+          <label className="ai-search"><FaSearch /><input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search customers…" aria-label="Search customers" /></label>
           <div className="ai-contact-list">
             {filteredLeads.length === 0 ? <div className="ai-empty">No matching customers.</div> : filteredLeads.map((lead) => (
               <button key={lead.id || lead.email} type="button" className={`ai-contact${focusedLead === lead ? " active" : ""}`} onClick={() => selectLead(lead)}><span className="ai-avatar">{(lead.name || lead.email || "C").charAt(0).toUpperCase()}</span><span><strong>{lead.name || "Unnamed customer"}</strong><small>{lead.email || "No email address"}</small></span>{focusedLead === lead && <FaCheck />}</button>

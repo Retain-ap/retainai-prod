@@ -656,7 +656,7 @@ export default function Calendar({
               gap: 12,
             }}
           >
-            <NavBtn onClick={() => setMonthDate(new Date(monthDate.getFullYear(), monthDate.getMonth() - 1, 1))}>
+            <NavBtn label="Previous month" onClick={() => setMonthDate(new Date(monthDate.getFullYear(), monthDate.getMonth() - 1, 1))}>
               <FaChevronLeft />
             </NavBtn>
 
@@ -671,7 +671,7 @@ export default function Calendar({
               {monthTitle(monthDate)}
             </div>
 
-            <NavBtn onClick={() => setMonthDate(new Date(monthDate.getFullYear(), monthDate.getMonth() + 1, 1))}>
+            <NavBtn label="Next month" onClick={() => setMonthDate(new Date(monthDate.getFullYear(), monthDate.getMonth() + 1, 1))}>
               <FaChevronRight />
             </NavBtn>
           </div>
@@ -725,7 +725,7 @@ export default function Calendar({
                     background: isSelected ? "#23262a" : "#181b1e",
                     border: `2px solid ${isSelected ? GOLD : BORDER}`,
                     borderRadius: 14,
-                    color: inMonth ? TEXT : "#5e666d",
+                    color: inMonth ? TEXT : "#8a929a",
                     padding: "8px 8px 6px",
                     cursor: "pointer",
                     display: "flex",
@@ -1003,9 +1003,11 @@ function MiniStat({ label, value }) {
   );
 }
 
-function NavBtn({ children, onClick }) {
+function NavBtn({ children, label, onClick }) {
   return (
     <button
+      type="button"
+      aria-label={label}
       onClick={onClick}
       style={{
         width: 36,

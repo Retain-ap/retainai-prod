@@ -5,9 +5,20 @@ import { getWorkspaceCapabilities } from "../workspaceIdentity";
 export default function OnboardingGuide({ user, leads = [], setSection, openImports }) {
   const capabilities = getWorkspaceCapabilities(user);
   const storageKey = `retainai:onboarding-dismissed:${user?.email || "user"}`;
+  const collapsedKey = `retainai:onboarding-collapsed:${user?.email || "user"}`;
   const [dismissed, setDismissed] = useState(
     () => localStorage.getItem(storageKey) === "1"
   );
+  // Phones start collapsed so the checklist never covers the dashboard.
+  const [collapsed, setCollapsed] = useState(() => {
+    const saved = localStorage.getItem(collapsedKey);
+    if (saved !== null) return saved === "1";
+    return window.matchMedia?.("(max-width: 760px)").matches ?? false;
+  });
+  const setCollapsedAndRemember = (next) => {
+    localStorage.setItem(collapsedKey, next ? "1" : "0");
+    setCollapsed(next);
+  };
   const steps = useMemo(
     () => [
       ...(capabilities.canEditBusiness ? [{
@@ -63,31 +74,62 @@ export default function OnboardingGuide({ user, leads = [], setSection, openImpo
   const complete = steps.filter((step) => step.done).length;
   if (dismissed || complete === steps.length) return null;
 
+  const progress = (
+    <div className="onboarding-progress">
+      <span style={{ width: `${(complete / steps.length) * 100}%` }} />
+    </div>
+  );
+
+  if (collapsed) {
+    return (
+      <button
+        type="button"
+        className="onboarding-guide-pill"
+        aria-expanded="false"
+        onClick={() => setCollapsedAndRemember(false)}
+      >
+        <span><FaRocket /> Setup · {complete} of {steps.length}</span>
+        {progress}
+      </button>
+    );
+  }
+
   return (
-    <aside className="onboarding-guide">
+    <aside className="onboarding-guide" aria-label="Guided setup">
       <div className="onboarding-guide-head">
         <div>
           <span><FaRocket /> Guided setup</span>
           <strong>{complete} of {steps.length} complete</strong>
         </div>
-        <button
-          type="button"
-          onClick={() => {
-            localStorage.setItem(storageKey, "1");
-            setDismissed(true);
-          }}
-        >
-          Hide
-        </button>
+        <div className="onboarding-guide-actions">
+          <button
+            type="button"
+            aria-expanded="true"
+            onClick={() => setCollapsedAndRemember(true)}
+          >
+            Minimize
+          </button>
+          <button
+            type="button"
+            onClick={() => {
+              localStorage.setItem(storageKey, "1");
+              setDismissed(true);
+            }}
+          >
+            Hide
+          </button>
+        </div>
       </div>
-      <div className="onboarding-progress">
-        <span style={{ width: `${(complete / steps.length) * 100}%` }} />
-      </div>
+      {progress}
       {steps.map((step) => (
         <button
           type="button"
           className={step.done ? "done" : ""}
-          onClick={step.action}
+          onClick={() => {
+            // On phones, get the checklist out of the way of the screen it opens.
+            if (window.matchMedia?.("(max-width: 760px)").matches) setCollapsedAndRemember(true);
+            step.action?.();
+          }}
           key={step.label}
         >
           <FaCheckCircle />

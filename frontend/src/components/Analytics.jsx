@@ -701,7 +701,7 @@ export default function Analytics({ leads = [], user }) {
                 labelLine
               >
                 {sourceData.map((entry, idx) => (
-                  <Cell key={`cell-${idx}`} fill={entry.color} />
+                  <Cell key={`cell-${idx}`} fill={entry.color} aria-label={`${entry.name}: ${entry.value}`} />
                 ))}
               </Pie>
               <Tooltip contentStyle={{ background: CARD, border: `1px solid ${BORDER}`, color: TEXT }} />

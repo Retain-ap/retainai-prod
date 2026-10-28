@@ -185,7 +185,7 @@ export default function WhatsAppIntegrationCard({ user }) {
       }}
     >
       <span style={{ fontSize: 32, color: "#25D366", marginBottom: 10 }}>
-        <SiWhatsapp className="integration-icon whatsapp" />
+        <SiWhatsapp className="integration-icon whatsapp" aria-hidden="true" />
       </span>
 
       <div className="integration-center" style={{ width: "100%", alignItems: "center" }}>
