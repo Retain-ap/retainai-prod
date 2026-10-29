@@ -32,9 +32,12 @@ or the diff becomes the whole file.
   - Render: add or verify `retainai.ca` (no www) under the frontend static site's
     Custom Domains. Until then it fails TLS and the uptime check warns.
   - SendGrid: add `{{unsubscribe_url}}` to the birthday and AI follow-up templates.
-- Known gap: signup and login rate limits are per-process memory and read the
-  first `X-Forwarded-For` value. Fix after confirming the Render worker count and
-  how Render forwards the client IP.
+- Rate limits for login, reset and signup are shared across the 2 gunicorn
+  workers through SQLite on the data disk (`backend/rate_limit.py`) and key on
+  `CF-Connecting-IP`, which Render's Cloudflare edge sets.
+- The Render connector is connected for both workspaces (RetainAI and Closet
+  Muse): use it for logs, metrics, deploys and environment variables. It cannot
+  manage custom domains.
 
 ## Related app
 
