@@ -24,6 +24,18 @@ lists the same commands for running locally. Backend tests need Python 3.11 or 3
 `backend/app.py` mixes CRLF and LF line endings. Edit it without normalizing them,
 or the diff becomes the whole file.
 
+## Frontend layout rules
+
+- Do not add `isolation`, `transform` or a `z-index` stacking context to
+  `.crm-main-content`: it traps drawers and dialogs under the fixed mobile header
+  (z 190) and sidebar (z 200). Full-screen overlays use z-index 1100 or higher.
+- Inline `gridTemplateColumns` collapse to one column only on phones (≤620px).
+  Add `className="ra-keep-grid"` to small fixed rows that must keep columns.
+- Test layout changes against the real backend at iPad portrait (820px), phone
+  and desktop. The app reads its API address from `window.__ENV__` at runtime;
+  build-time `REACT_APP_API_BASE` is ignored because `process` is undefined in
+  the browser.
+
 ## Live status
 
 - `.github/workflows/uptime.yml` checks RetainAI and Closet Muse every 15 minutes;
