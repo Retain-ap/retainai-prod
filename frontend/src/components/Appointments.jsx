@@ -1376,7 +1376,7 @@ export default function Appointments({ user, leads = [], setLeads }) {
             position: "fixed",
             inset: 0,
             background: "#000a",
-            zIndex: 99,
+            zIndex: 1100,
             display: "flex",
             alignItems: "center",
             justifyContent: "center",

@@ -545,6 +545,8 @@
   text-align: left;
   cursor: pointer;
 }
+/* Leave room to scroll the last rows out from under the floating setup button. */
+body:has(.onboarding-guide-pill) .crm-main-content { padding-bottom: 88px !important; }
 .onboarding-guide-pill > span { display: flex; align-items: center; gap: 8px; font-size: 13px; }
 .onboarding-guide-pill > span svg { color: #f5d87e; }
 .onboarding-guide-pill .onboarding-progress { margin: 0; }

@@ -2199,6 +2199,7 @@ export default function Messages({ user, leads = [], defaultTemplate = "", langu
                   .map((it, idx) => (
                     <div
                       key={idx}
+                      className="ra-keep-grid"
                       style={{
                         display: "grid",
                         gridTemplateColumns: "90px 1fr",

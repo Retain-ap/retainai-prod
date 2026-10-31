@@ -648,7 +648,7 @@ export default function Calendar({
           </div>
 
           <div
-            className="calendar-month-grid"
+            className="calendar-month-grid ra-keep-grid"
             style={{
               display: "grid",
               gridTemplateColumns: "40px 1fr 40px",
@@ -677,7 +677,7 @@ export default function Calendar({
           </div>
 
           <div
-            className="calendar-days-grid"
+            className="calendar-days-grid ra-keep-grid"
             style={{
               display: "grid",
               gridTemplateColumns: "repeat(7, 1fr)",
@@ -774,8 +774,9 @@ export default function Calendar({
 
             <button
               type="button"
-              onClick={() => selectedDay && onDayClick && onDayClick(selectedDay)}
-              disabled={!selectedDay}
+              // Without a picked day, book for today rather than doing nothing.
+              onClick={() => onDayClick && onDayClick(selectedDay || new Date())}
+              disabled={!onDayClick}
               className="calendar-quick-add"
             >
               <FaPlus /> Add appointment
@@ -894,7 +895,7 @@ export default function Calendar({
             position: "fixed",
             inset: 0,
             background: "#000a",
-            zIndex: 100,
+            zIndex: 1100,
             display: "flex",
             alignItems: "center",
             justifyContent: "center",
@@ -1069,7 +1070,7 @@ function TimelineCard({ item, onEditNote, onDeleteNote }) {
 
   return (
     <div
-      className="calendar-timeline-card"
+      className="calendar-timeline-card ra-keep-grid"
       style={{
         background: "#17191b",
         border: `1px solid ${BORDER}`,

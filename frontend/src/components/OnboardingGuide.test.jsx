@@ -33,10 +33,12 @@ test("starts collapsed on phones and remembers when it is opened", () => {
   expect(screen.getByText("Import your customer contacts")).toBeInTheDocument();
 });
 
-test("starts open on larger screens and can be minimized", () => {
+test("starts collapsed on larger screens too and can be minimized again", () => {
   mockScreen(false);
   render(<OnboardingGuide user={user} leads={[]} setSection={jest.fn()} openImports={jest.fn()} />);
 
+  expect(screen.queryByText("Import your customer contacts")).not.toBeInTheDocument();
+  fireEvent.click(screen.getByRole("button", { name: /Setup · 0 of/ }));
   expect(screen.getByText("Import your customer contacts")).toBeInTheDocument();
   fireEvent.click(screen.getByRole("button", { name: "Minimize" }));
   expect(screen.queryByText("Import your customer contacts")).not.toBeInTheDocument();

@@ -9,12 +9,10 @@ export default function OnboardingGuide({ user, leads = [], setSection, openImpo
   const [dismissed, setDismissed] = useState(
     () => localStorage.getItem(storageKey) === "1"
   );
-  // Phones start collapsed so the checklist never covers the dashboard.
-  const [collapsed, setCollapsed] = useState(() => {
-    const saved = localStorage.getItem(collapsedKey);
-    if (saved !== null) return saved === "1";
-    return window.matchMedia?.("(max-width: 760px)").matches ?? false;
-  });
+  // Starts collapsed so the floating checklist never covers the page until opened.
+  const [collapsed, setCollapsed] = useState(
+    () => localStorage.getItem(collapsedKey) !== "0"
+  );
   const setCollapsedAndRemember = (next) => {
     localStorage.setItem(collapsedKey, next ? "1" : "0");
     setCollapsed(next);

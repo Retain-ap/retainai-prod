@@ -581,7 +581,7 @@ export default function LeadDrawer({
         )}
 
         {activeTab === "Timeline" && <div style={{ display: "grid", gap: 10 }}>
-          {timeline.map((item, index) => <div key={`${item.type}-${item.date}-${index}`} style={{ display: "grid", gridTemplateColumns: "12px 1fr", gap: 12 }}><span style={{ width: 10, height: 10, borderRadius: "50%", background: item.type === "reply" ? "#30b46c" : item.type === "appointment" ? "#f7cb53" : "#69737d", marginTop: 7 }} /><div style={{ background: "#23262a", border: "1px solid #31353a", borderRadius: 12, padding: 12 }}><strong>{item.title}</strong><div style={{ color: "#929da6", fontSize: 12, marginTop: 3 }}>{formatDateTime(item.date)}</div>{item.detail && <p style={{ margin: "8px 0 0", color: "#cbd2d8" }}>{item.detail}</p>}</div></div>)}
+          {timeline.map((item, index) => <div key={`${item.type}-${item.date}-${index}`} className="ra-keep-grid" style={{ display: "grid", gridTemplateColumns: "12px 1fr", gap: 12 }}><span style={{ width: 10, height: 10, borderRadius: "50%", background: item.type === "reply" ? "#30b46c" : item.type === "appointment" ? "#f7cb53" : "#69737d", marginTop: 7 }} /><div style={{ background: "#23262a", border: "1px solid #31353a", borderRadius: 12, padding: 12 }}><strong>{item.title}</strong><div style={{ color: "#929da6", fontSize: 12, marginTop: 3 }}>{formatDateTime(item.date)}</div>{item.detail && <p style={{ margin: "8px 0 0", color: "#cbd2d8" }}>{item.detail}</p>}</div></div>)}
           {!timeline.length && <EmptyState title="No activity yet" text="Messages, appointments, invoices, notes, reminders, and profile changes will appear here." />}
         </div>}
 
@@ -975,6 +975,7 @@ function SectionCard({ title, children }) {
 function DetailRow({ label, value }) {
   return (
     <div
+      className="ra-keep-grid"
       style={{
         display: "grid",
         gridTemplateColumns: "120px 1fr",
