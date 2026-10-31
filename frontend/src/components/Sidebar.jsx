@@ -154,7 +154,18 @@ export default function Sidebar({
 
       <div
         className="sidebar-profile"
+        role="button"
+        tabIndex={0}
+        aria-haspopup="menu"
+        aria-expanded={profileOpen}
+        aria-label="Account menu, including Log out"
         onClick={() => setProfileOpen((o) => !o)}
+        onKeyDown={(e) => {
+          if (e.target === e.currentTarget && (e.key === "Enter" || e.key === " ")) {
+            e.preventDefault();
+            setProfileOpen((o) => !o);
+          }
+        }}
       >
         {userLogo ? (
           <img src={userLogo} alt="Profile" className="sidebar-avatar" />

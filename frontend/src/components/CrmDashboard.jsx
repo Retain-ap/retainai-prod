@@ -1341,7 +1341,7 @@ function CrmDashboard({ authenticatedUser }) {
                   width: "100%",
                   height: "100vh",
                   background: "#000a",
-                  zIndex: 99,
+                  zIndex: 1100,
                   display: "flex",
                   alignItems: "center",
                   justifyContent: "center",

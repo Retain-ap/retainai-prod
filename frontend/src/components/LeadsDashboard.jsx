@@ -170,7 +170,16 @@ export default function LeadsDashboard({
             return (
               <div
                 key={lead.id}
+                className="lead-row"
+                role="button"
+                tabIndex={0}
                 onClick={() => setDrawerLead(lead)}
+                onKeyDown={(e) => {
+                  if (e.target === e.currentTarget && (e.key === "Enter" || e.key === " ")) {
+                    e.preventDefault();
+                    setDrawerLead(lead);
+                  }
+                }}
                 style={{
                   display: "flex",
                   alignItems: "center",
@@ -233,7 +242,7 @@ export default function LeadsDashboard({
                 </div>
 
                 {/* Right: status + quick action */}
-                <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                <div className="lead-row-actions" style={{ display: "flex", alignItems: "center", gap: 10 }}>
                   <div
                     style={{
                       background: badgeColor,

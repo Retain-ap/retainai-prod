@@ -62,10 +62,11 @@ video {
   min-width: 0;
 }
 
+/* No isolation here: it trapped drawers and dialogs under the fixed mobile
+   header and sidebar. Overlays use z-index 1100+ to sit above the app chrome. */
 .crm-main-content {
   min-width: 0;
   max-width: 100%;
-  isolation: isolate;
 }
 
 .crm-main-content > * {
@@ -704,10 +705,6 @@ video {
     padding-left: 14px !important;
   }
 
-  .crm-main-content [style*="grid-template-columns"] {
-    grid-template-columns: minmax(0, 1fr) !important;
-  }
-
   .crm-main-content [style*="min-width"] {
     min-width: 0 !important;
     max-width: 100% !important;
@@ -816,6 +813,23 @@ video {
 }
 
 @media (max-width: 620px) {
+  /* Phones stack page layouts; small fixed rows (calendar grid, label/value
+     pairs, timeline dots) opt out with .ra-keep-grid. Tablets keep columns. */
+  .crm-main-content [style*="grid-template-columns"]:not(.ra-keep-grid) {
+    grid-template-columns: minmax(0, 1fr) !important;
+  }
+
+  /* Contact rows: status and quick action move under the name so it stays readable. */
+  .lead-row > div:nth-child(2) {
+    flex: 1 1 calc(100% - 56px) !important;
+  }
+
+  .lead-row-actions {
+    flex-basis: 100%;
+    margin-top: 8px;
+    padding-left: 56px;
+  }
+
   .settings-content {
     padding: 22px 12px 36px !important;
   }
