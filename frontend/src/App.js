@@ -168,11 +168,11 @@ function App() {
           <Route
             path="/app/*"
             element={
-              <ProtectedRoute>
-                <Suspense fallback={<WorkspaceLoading />}>
+              <Suspense fallback={<WorkspaceLoading />}>
+                <ProtectedRoute>
                   <CrmDashboard />
-                </Suspense>
-              </ProtectedRoute>
+                </ProtectedRoute>
+              </Suspense>
             }
           />
           <Route path="/accept-invite" element={<AcceptInvite />} /> {/* ← added */}
