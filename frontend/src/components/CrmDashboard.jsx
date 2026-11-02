@@ -43,6 +43,7 @@ const SECTION_LABELS = {
   calendar: "Calendar",
   messages: "Messages",
   notifications: "Notifications",
+  "notification-send": "Send notification",
   automations: "Automations",
   "ai-prompts": "AI Studio",
   invoices: "Invoices",
@@ -201,6 +202,24 @@ function CrmDashboard({ authenticatedUser }) {
   );
   const [calendarView, setCalendarView] = useState("calendar");
 
+  // Every entry point uses the same URL so reload and browser history match
+  // the visible screen, including command-palette and onboarding shortcuts.
+  const openSection = useCallback(
+    (nextSection) => {
+      if (!Object.prototype.hasOwnProperty.call(SECTION_LABELS, nextSection) || !canOpenSection(nextSection)) return;
+      const href = nextSection === "settings"
+        ? "/app?tab=profile"
+        : nextSection === "overview" && !sessionCapabilities.platformOwner
+          ? "/app"
+          : `/app?section=${encodeURIComponent(nextSection)}`;
+      setSettingsTab(nextSection === "settings" ? "profile" : null);
+      setSection(nextSection);
+      if (nextSection === "calendar") setCalendarView("calendar");
+      if (`${location.pathname}${location.search}` !== href) navigate(href);
+    },
+    [canOpenSection, location.pathname, location.search, navigate, sessionCapabilities.platformOwner]
+  );
+
   useEffect(() => {
     const params = new URLSearchParams(location.search);
     const requestedSection = params.get("section");
@@ -210,8 +229,9 @@ function CrmDashboard({ authenticatedUser }) {
       canOpenSection(requestedSection)
     ) {
       setSection(requestedSection);
-      if (requestedSection === "calendar" && params.get("view") === "appointments") {
-        setCalendarView("appointments");
+      setSettingsTab(null);
+      if (requestedSection === "calendar") {
+        setCalendarView(params.get("view") === "appointments" ? "appointments" : "calendar");
       }
       return;
     }
@@ -224,8 +244,11 @@ function CrmDashboard({ authenticatedUser }) {
     if (location.pathname === "/app/import" || params.get("open") === "imports") {
       setSettingsTab("imports");
       setSection("settings");
+      return;
     }
-  }, [canOpenSection, location.pathname, location.search]);
+    setSettingsTab(null);
+    setSection(sessionCapabilities.platformOwner ? "owner" : "overview");
+  }, [canOpenSection, location.pathname, location.search, sessionCapabilities.platformOwner]);
 
   useEffect(() => {
     const handleNavigate = (event) => {
@@ -234,12 +257,12 @@ function CrmDashboard({ authenticatedUser }) {
         Object.prototype.hasOwnProperty.call(SECTION_LABELS, nextSection) &&
         canOpenSection(nextSection)
       ) {
-        setSection(nextSection);
+        openSection(nextSection);
       }
     };
     window.addEventListener("retainai:navigate", handleNavigate);
     return () => window.removeEventListener("retainai:navigate", handleNavigate);
-  }, [canOpenSection]);
+  }, [canOpenSection, openSection]);
 
   useEffect(() => {
     if (!canOpenSection(section)) setSection("overview");
@@ -766,12 +789,12 @@ function CrmDashboard({ authenticatedUser }) {
       leadEmail: lead.email,
       userEmail: effectiveEmail || user?.email || "",
     });
-    setSection("notification-send");
+    openSection("notification-send");
   }
 
   function handleAfterSendNotification(leadId) {
     if (leadId) setHighlightLeadIds([leadId]);
-    setSection("messages");
+    openSection("messages");
   }
 
   // Send AI prompt email through the authenticated POST endpoint only.
@@ -921,26 +944,6 @@ function CrmDashboard({ authenticatedUser }) {
     navigate("/app/import?source=google");
   }, [navigate]);
 
-  const openSettings = useCallback(() => {
-    setSettingsTab("profile");
-    setSection("settings");
-    navigate("/app?tab=profile");
-  }, [navigate]);
-
-  const handleSidebarSectionChange = useCallback(
-    (nextSection) => {
-      if (nextSection === "settings") {
-        openSettings();
-        return;
-      }
-
-      setSettingsTab(null);
-      setSection(nextSection);
-      navigate(nextSection === "overview" ? "/app" : `/app?section=${encodeURIComponent(nextSection)}`);
-    },
-    [navigate, openSettings]
-  );
-
   // Fetch Google events
   const getGoogleEvents = useCallback(async () => {
     const email = effectiveEmail;
@@ -1045,12 +1048,13 @@ function CrmDashboard({ authenticatedUser }) {
   useEffect(() => {
     window.RetainAI = window.RetainAI || {};
     window.RetainAI.openImports = openImports;
-    window.RetainAI.openSection = (nextSection) => setSection(nextSection);
+    window.RetainAI.openSection = openSection;
     window.RetainAI.openTeam = () => {
       setSettingsTab("team");
       setSection("settings");
+      navigate("/app?tab=team");
     };
-  }, [openImports]);
+  }, [navigate, openImports, openSection]);
 
   if (!user) return null;
 
@@ -1065,7 +1069,7 @@ function CrmDashboard({ authenticatedUser }) {
       }}
     >
       <CommandPalette
-        setSection={setSection}
+        setSection={openSection}
         isOwner={sessionCapabilities.platformOwner}
         canManageBilling={sessionCapabilities.canManageBilling}
       />
@@ -1088,7 +1092,7 @@ function CrmDashboard({ authenticatedUser }) {
       <OnboardingGuide
         user={user}
         leads={leads}
-        setSection={setSection}
+        setSection={openSection}
         openImports={openImports}
       />
 
@@ -1105,7 +1109,7 @@ function CrmDashboard({ authenticatedUser }) {
         logo={logo}
         onLogout={handleLogout}
         user={user}
-        setSection={handleSidebarSectionChange}
+        setSection={openSection}
         section={section}
         collapsed={isMobile ? false : sidebarCollapsed}
         setCollapsed={setSidebarCollapsed}
@@ -1151,12 +1155,12 @@ function CrmDashboard({ authenticatedUser }) {
             leads={leads}
             appointments={crmAppointments}
             user={user}
-            onOpenMessages={() => setSection("messages")}
+            onOpenMessages={() => openSection("messages")}
             onOpenAutomations={(playbook) => {
               try {
                 localStorage.setItem("retainai:selected-playbook", playbook || "");
               } catch {}
-              setSection("automations");
+              openSection("automations");
             }}
           />
         )}
@@ -1228,7 +1232,7 @@ function CrmDashboard({ authenticatedUser }) {
                   fontWeight: 700,
                   cursor: "pointer",
                 }}
-                onClick={() => setCalendarView("calendar")}
+                onClick={() => openSection("calendar")}
               >
                 Calendar
               </button>
@@ -1242,7 +1246,9 @@ function CrmDashboard({ authenticatedUser }) {
                   fontWeight: 700,
                   cursor: "pointer",
                 }}
-                onClick={() => setCalendarView("appointments")}
+                onClick={() => {
+                  if (calendarView !== "appointments") navigate("/app?section=calendar&view=appointments");
+                }}
               >
                 Appointments
               </button>
@@ -1409,7 +1415,7 @@ function CrmDashboard({ authenticatedUser }) {
             draft={draftNotification}
             clearDraft={() => setDraftNotification(null)}
             leads={leads}
-            setSection={setSection}
+            setSection={openSection}
             afterSend={handleAfterSendNotification}
           />
         )}
