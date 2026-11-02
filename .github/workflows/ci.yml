@@ -69,3 +69,5 @@ jobs:
           DISABLE_ESLINT_PLUGIN: "true"
       - name: Reject moderate or higher production dependency findings
         run: npm audit --omit=dev --audit-level=moderate
+      - name: Reject critical findings in development tools
+        run: npm audit --audit-level=critical
