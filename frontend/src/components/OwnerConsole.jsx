@@ -24,7 +24,11 @@ async function ownerRequest(path, options = {}) {
     },
   });
   const data = await response.json().catch(() => ({}));
-  if (!response.ok) throw new Error(data.error || `Request failed (${response.status})`);
+  if (!response.ok) {
+    const error = new Error(data.message || data.error || `Request failed (${response.status})`);
+    error.code = data.error;
+    throw error;
+  }
   return data;
 }
 
@@ -69,6 +73,7 @@ export default function OwnerConsole() {
   const [supportNote, setSupportNote] = useState("");
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
+  const [mfaRequired, setMfaRequired] = useState(false);
   const [busy, setBusy] = useState("");
   const [showAccountCreator, setShowAccountCreator] = useState(false);
   const [newAccount, setNewAccount] = useState({ email: "", password: "", name: "", business: "", business_type: "", expires_on: "" });
@@ -87,6 +92,18 @@ export default function OwnerConsole() {
         { name: "backups", request: ownerRequest("backups"), apply: (data) => setBackups(data.backups || []) },
       ];
       const results = await Promise.allSettled(sections.map((section) => section.request));
+      if (results.some((result) => result.status === "rejected" && result.reason?.code === "owner_mfa_required")) {
+        setMfaRequired(true);
+        setOverview(null);
+        setAccounts([]);
+        setQueue([]);
+        setHealth(null);
+        setAudit([]);
+        setFeatures({});
+        setBackups([]);
+        return;
+      }
+      setMfaRequired(false);
       const failed = [];
       results.forEach((result, index) => {
         if (result.status === "fulfilled") {
@@ -292,6 +309,16 @@ export default function OwnerConsole() {
         </button>
       </header>
 
+      {mfaRequired ? (
+        <section className="product-card" role="alert" style={{ marginTop: 18 }}>
+          <h2>Two-factor authentication required</h2>
+          <p className="product-card-copy">
+            Enable and verify an authenticator in Security settings before using the Owner Console.
+            If you already set one up, sign in again and complete the authenticator check.
+          </p>
+          <a className="product-button primary" href="/app?tab=security">Open Security settings</a>
+        </section>
+      ) : <>
       <div className="product-tabs" role="tablist" aria-label="Owner console">
         {tabs.map(([key, label, icon]) => (
           <button
@@ -565,6 +592,7 @@ export default function OwnerConsole() {
           </div>
         </section>
       )}
+      </>}
     </div>
   );
 }
