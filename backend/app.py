@@ -10609,4 +10609,6 @@ def _bootstrap_scheduler():
 # ----------------------------
 if __name__ == "__main__":
     port = int(os.getenv("PORT", "5000"))
-    app.run(host="0.0.0.0", port=port, debug=True)
+    # The Werkzeug debugger runs arbitrary code, so it is opt-in and local-only.
+    debug = os.getenv("FLASK_DEBUG") == "1"
+    app.run(host="127.0.0.1" if debug else os.getenv("HOST", "127.0.0.1"), port=port, debug=debug)
