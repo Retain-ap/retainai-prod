@@ -1,9 +1,9 @@
 # backend/app_wa_auto_appointments.py
-from flask import Blueprint, request, jsonify
+from flask import Blueprint, request, jsonify, session
 import os, re, json, uuid, datetime
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 from typing import Any, Dict, List, Optional
-from storage import DATA_ROOT
+from storage import DATA_ROOT, load_leads
 
 # =========================================================
 # Blueprint
@@ -505,6 +505,15 @@ def wa_auto_confirm():
 
     return jsonify({"ok": True, "appointment": appt})
 
+def _workspace_has_lead(lead_id: str) -> bool:
+    """True when the signed-in workspace owns a lead with this id (leads are stored per workspace)."""
+    target = str(lead_id or "").strip()
+    if not target:
+        return False
+    workspace = str(session.get("org_email") or session.get("user_email") or "").strip().lower()
+    leads = (load_leads() or {}).get(workspace, []) or []
+    return any(isinstance(lead, dict) and str(lead.get("id") or "").strip() == target for lead in leads)
+
 # ----- Calendar API (global appointments per user) -----
 # NOTE: namespaced under /api/wa-auto/... to avoid clashing with app.py
 @WA_AUTO_BP.route("/api/wa-auto/appointments/<path:user_email>", methods=["GET"])
@@ -522,6 +531,9 @@ def add_wa_auto_appointment(user_email):
     """
     user_email = (user_email or "").lower()
     b = request.get_json(force=True) or {}
+    # A lead is optional here, but a supplied one must belong to this workspace.
+    if b.get("lead_id") and not _workspace_has_lead(b.get("lead_id")):
+        return jsonify({"ok": False, "error": "lead_not_found"}), 404
 
     # 1) JSON extraction
     when = _extract_when_from_body(b)
@@ -634,6 +646,8 @@ def add_wa_auto_lead_appointment(user_email, lead_id):
     """
     user_email = (user_email or "").lower()
     lead_id = lead_id or ""
+    if not _workspace_has_lead(lead_id):
+        return jsonify({"ok": False, "error": "lead_not_found"}), 404
     b = request.get_json(force=True) or {}
 
     # 1) JSON extraction
