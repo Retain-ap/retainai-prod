@@ -13,7 +13,7 @@ import Settings from "./Settings";
 import logo from "../assets/logo.png";
 import Insights from "./Insights";
 import Invoices from "./Invoices";
-import { useNavigate, useLocation } from "react-router-dom";
+import { useNavigate, useLocation } from "react-router";
 import { useSettings } from "./SettingsContext";
 import Automations from "./Automations";
 import InviteTeamModal from "./InviteTeamModal";

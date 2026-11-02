@@ -1,5 +1,5 @@
 import React, { cloneElement, useEffect, useState } from "react";
-import { Navigate, useLocation } from "react-router-dom";
+import { Navigate, useLocation } from "react-router";
 import { apiUrl } from "../apiBase";
 
 export default function ProtectedRoute({ children }) {

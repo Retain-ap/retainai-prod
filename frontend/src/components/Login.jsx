@@ -1,6 +1,6 @@
 // src/components/Login.jsx
 import React, { useEffect, useState } from "react";
-import { useNavigate, Link } from "react-router-dom";
+import { useNavigate, Link } from "react-router";
 import { GoogleLogin } from "@react-oauth/google";
 import logo from "../assets/logo.png";
 import defaultAvatar from "../assets/default-avatar.svg";

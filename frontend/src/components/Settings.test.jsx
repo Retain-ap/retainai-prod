@@ -1,6 +1,6 @@
 import React from "react";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
-import { MemoryRouter } from "react-router-dom";
+import { MemoryRouter } from "react-router";
 import Settings from "./Settings";
 
 const user = {
@@ -33,7 +33,7 @@ test("keeps an unsaved profile draft editable when the backend rejects it", asyn
   });
 
   render(
-    <MemoryRouter future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
+    <MemoryRouter>
       <Settings user={user} refreshUser={jest.fn()} />
     </MemoryRouter>
   );
@@ -56,7 +56,7 @@ test("does not restart profile polling when the refresh callback identity change
   global.fetch = jest.fn().mockResolvedValue(response(user));
 
   const view = render(
-    <MemoryRouter future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
+    <MemoryRouter>
       <Settings user={user} refreshUser={jest.fn().mockResolvedValue(undefined)} />
     </MemoryRouter>
   );
@@ -66,7 +66,7 @@ test("does not restart profile polling when the refresh callback identity change
   const requestsAfterInitialLoad = global.fetch.mock.calls.length;
 
   view.rerender(
-    <MemoryRouter future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
+    <MemoryRouter>
       <Settings user={user} refreshUser={jest.fn().mockResolvedValue(undefined)} />
     </MemoryRouter>
   );
@@ -81,7 +81,7 @@ test("allows leaving the route-selected Import Contacts tab", async () => {
   global.fetch = jest.fn().mockResolvedValue(response(user));
 
   render(
-    <MemoryRouter future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
+    <MemoryRouter>
       <Settings
         user={user}
         initialTab="imports"

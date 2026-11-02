@@ -1,6 +1,6 @@
 import React from "react";
 import { act, fireEvent, render, screen } from "@testing-library/react";
-import { MemoryRouter, useLocation, useNavigate } from "react-router-dom";
+import { MemoryRouter, useLocation, useNavigate } from "react-router";
 import CrmDashboard from "./CrmDashboard";
 
 jest.mock("./SettingsContext", () => {
@@ -35,7 +35,7 @@ function HistoryControls() {
 }
 
 async function mount(initial = "/app", user = member) {
-  render(<MemoryRouter initialEntries={[initial]} future={{ v7_startTransition: true, v7_relativeSplatPath: true }}><HistoryControls /><CrmDashboard authenticatedUser={user} /></MemoryRouter>);
+  render(<MemoryRouter initialEntries={[initial]}><HistoryControls /><CrmDashboard authenticatedUser={user} /></MemoryRouter>);
   await act(async () => { await Promise.resolve(); });
 }
 
