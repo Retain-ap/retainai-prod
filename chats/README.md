@@ -6,6 +6,7 @@ links) and what is still open. Add a file at the end of each session.
 
 | Date | Session | Summary |
 | --- | --- | --- |
+| 2026-10-27 to 11-02 | [Local cleanup, rate limits and Skimlinks](2026-11-02-local-cleanup.md) | Shared rate limits, SendGrid footer tool, Closet Muse lint and Skimlinks links, Cloudflare move declined |
 | 2026-11-02 | [Google review preparation](2026-11-02-google-review-preparation.md) | Contacts and Calendar OAuth passed; cleaned videos await approval; verified-session routing fix for Owner Console |
 | 2026-11-02 | [Launch checks](2026-11-02-launch-checks.md) | Stripe portal pinned, Stripe Connect callback fixed, real signups tested, ready to market |
 | 2026-10-31 | [iPad and phone fixes](2026-10-31-device-fixes.md) | Contact drawer and dialogs hidden under the header, broken calendar grid on iPad, setup panel covering pages |
