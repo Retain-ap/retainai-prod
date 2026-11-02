@@ -8,6 +8,7 @@ import ProtectedRoute from "./components/ProtectedRoute";
 import PrivacyPolicy from "./pages/PrivacyPolicy";
 import TermsOfService from "./pages/TermsOfService";
 import RefundPolicy from "./pages/RefundPolicy";
+import Partners from "./pages/Partners";
 import AcceptInvite from "./pages/AcceptInvite"; // ← added
 import { SettingsProvider } from "./components/SettingsContext";
 import { API_BASE } from "./apiBase";
@@ -84,6 +85,10 @@ function OAuthPopupBridge() {
 }
 
 const ROUTE_META = {
+  "/partners": {
+    title: "Partner with RetainAI — Help Your Clients Keep Customers",
+    description: "Explore a RetainAI referral partnership for agencies, business coaches and advisors who help local businesses follow up and build customer relationships.",
+  },
   "/": {
     title: "RetainAI — Keep More Customers and Miss Fewer Follow-Ups",
     description:
@@ -163,6 +168,7 @@ function App() {
         <OAuthPopupBridge />
         <Routes>
           <Route path="/" element={<LandingPage />} />
+          <Route path="/partners" element={<Partners />} />
           <Route path="/login" element={<Login />} />
           <Route path="/signup" element={<Signup />} />
           <Route
