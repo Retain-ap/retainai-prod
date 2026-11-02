@@ -19,7 +19,7 @@ export default function Partners() {
         <section className="rp-hero" aria-labelledby="partner-title">
           <div>
             <p className="rp-eyebrow">The RetainAI partner pilot</p>
-            <h1 id="partner-title">You help clients win customers.<br/><em>Help them keep them.</em></h1>
+            <h1 id="partner-title">Help your clients<br/><em>keep more customers.</em></h1>
             <p className="rp-intro">Bring customer follow-up into the services you already offer. Introduce RetainAI to local businesses that need a clearer way to manage relationships, rebooking and the next conversation.</p>
             <div className="rp-actions"><a className="lp-primary-button" href="#partner-contact">Discuss a partnership <FaArrowRight aria-hidden="true" /></a><a className="rp-text-link" href="/#product">Explore the product <FaArrowRight aria-hidden="true" /></a></div>
             <p className="rp-caption">For agencies, business coaches and trusted advisors.</p>
@@ -33,7 +33,6 @@ export default function Partners() {
               <li><span>02</span><div><h3>Make the message personal.</h3><p>Review and edit an AI-assisted draft before sending.</p></div></li>
               <li><span>03</span><div><h3>Keep the next step visible.</h3><p>Track the reply, appointment or follow-up in one workspace.</p></div></li>
             </ol>
-            <p className="rp-example-note">A practical workflow to demonstrate—not a promise of bookings or revenue.</p>
           </aside>
         </section>
 

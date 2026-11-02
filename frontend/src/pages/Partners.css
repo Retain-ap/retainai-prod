@@ -20,7 +20,6 @@
 .rp-example li>span { color: var(--lp-gold); font: 13px ui-monospace, monospace; line-height: 1.8; }
 .rp-example h3 { margin: 0 0 5px; font-size: 15px; line-height: 1.5; }
 .rp-example li p { margin: 0; font-size: 13px; }
-.rp-example .rp-example-note { margin: 0; font-size: 11px; }
 .rp-section { width: min(1160px, calc(100% - 48px)); margin: auto; padding: 72px 0; border-top: 1px solid var(--lp-line); scroll-margin-top: 96px; }
 .rp-section h2,.rp-contact h2 { margin: 0; font-size: clamp(32px, 3.8vw, 48px); line-height: 1.12; letter-spacing: -.04em; }
 .rp-cards { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 18px; margin-top: 40px; }
