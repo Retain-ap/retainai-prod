@@ -47,11 +47,17 @@ before owner operations. Do not bypass this security requirement.
 
 ## Remaining
 
-- Owner completes authenticator setup in the open Security tab. Credential
-  creation and recovery codes remain with the owner.
+- The owner explicitly deferred reviewer-account creation and authenticator
+  setup for later. Do not resume this handoff without the owner's instruction.
 - Create a separate complimentary Google reviewer workspace. The owner must
   enter its new password directly; never share platform-owner credentials.
-- Upload the already-approved actual recordings once file URL access is enabled.
+- Upload remains blocked: the file chooser still reported missing file-URL
+  permission after the owner enabled it. Browser security policy rejected
+  opening edge://extensions for inspection; no workaround was used.
+- Google's submission form explicitly requires the unverified-app warning.
+  Added the actual original 5.327-second warning capture to a separate final
+  Closet Muse file. Original approved edit preserved; final addition needs
+  owner review before upload. No additional account connection is needed.
 - Finish the Google reviewer reply with tested credentials, video URLs,
   navigation, and accurate AI-provider details. RetainAI's existing verification
   request remains under review; do not cancel or restart it.
