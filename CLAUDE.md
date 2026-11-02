@@ -40,10 +40,12 @@ or the diff becomes the whole file.
 
 - `.github/workflows/uptime.yml` checks RetainAI and Closet Muse every 15 minutes;
   a failure emails the owner.
-- Open, owner-only steps:
-  - Render: add or verify `retainai.ca` (no www) under the frontend static site's
-    Custom Domains. Until then it fails TLS and the uptime check warns.
-  - SendGrid: add `{{unsubscribe_url}}` to the birthday and AI follow-up templates.
+- Launch checks done 2026-11-02: `retainai.ca` redirects to www; SendGrid
+  birthday and AI follow-up templates carry `{{unsubscribe_url}}`; real test
+  signups passed on both apps (renewals cancelled, Closet Muse CA$9.99 refunded).
+- Stripe Connect returns to `STRIPE_REDIRECT_URI=https://api.retainai.ca/api/stripe/oauth/callback`
+  (set on Render and registered in Stripe). The full Connect round trip has not
+  been completed yet; the onrender.com URI is also still registered.
 - Rate limits for login, reset and signup are shared across the 2 gunicorn
   workers through SQLite on the data disk (`backend/rate_limit.py`) and key on
   `CF-Connecting-IP`, which Render's Cloudflare edge sets.
