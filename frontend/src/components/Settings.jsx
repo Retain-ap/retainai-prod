@@ -271,6 +271,23 @@ export default function Settings({
     }
   }, [initialTab, tab, visibleTabKeys]);
 
+  // In-page tab changes go through the URL (the dashboard turns ?tab= back into
+  // initialTab) so reload and browser history match the visible tab. A tab this
+  // role cannot see falls back to Profile, as the effect above would.
+  const openTab = useCallback(
+    (nextTab) => {
+      const target = visibleTabKeys.includes(nextTab) ? nextTab : "profile";
+      setTab(target);
+      setEditMode(false);
+      formDirtyRef.current = false;
+      setInfo("");
+      if (new URLSearchParams(search).get("tab") !== target) {
+        navigate(`/app?tab=${encodeURIComponent(target)}`);
+      }
+    },
+    [navigate, search, visibleTabKeys]
+  );
+
   useEffect(() => {
     if (!capabilities.canEditBusiness && editMode) {
       setEditMode(false);
@@ -785,12 +802,7 @@ export default function Settings({
             aria-label={t.label}
             aria-current={tab === t.key ? "page" : undefined}
             title={t.label}
-            onClick={() => {
-              setTab(t.key);
-              setEditMode(false);
-              formDirtyRef.current = false;
-              setInfo("");
-            }}
+            onClick={() => openTab(t.key)}
           >
             <span className="settings-icon">{t.icon}</span>
             <span className="settings-label">{t.label}</span>
@@ -1364,7 +1376,7 @@ export default function Settings({
                 <button
                   type="button"
                   className="help-topic-card"
-                  onClick={() => setTab("team")}
+                  onClick={() => openTab("team")}
                 >
                   <span className="help-topic-icon">
                     <FaUsers aria-hidden="true" />
@@ -1379,7 +1391,7 @@ export default function Settings({
                 <button
                   type="button"
                   className="help-topic-card"
-                  onClick={() => setTab("integrations")}
+                  onClick={() => openTab("integrations")}
                 >
                   <span className="help-topic-icon">
                     <FaPlug aria-hidden="true" />
