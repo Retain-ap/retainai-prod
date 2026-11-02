@@ -348,5 +348,68 @@ class WhatsAppAppointmentCompatibilityTests(unittest.TestCase):
         self.assertEqual(parsed.isoformat(), "2030-07-02T15:00:00-04:00")
 
 
+class WhatsAppAppointmentLeadValidationTests(unittest.TestCase):
+    """Appointments may only reference leads that belong to the signed-in workspace."""
+
+    LEADS = {
+        "owner@example.com": [{"id": "lead-own", "name": "Own Lead"}],
+        "other@example.com": [{"id": "lead-other", "name": "Other Lead"}],
+    }
+    BODY = {"appointment_time": "2030-07-02T15:00", "timezone": "America/Toronto"}
+
+    def setUp(self):
+        directory = tempfile.TemporaryDirectory()
+        self.addCleanup(directory.cleanup)
+        for name, value in {
+            "FILE_APPTS": os.path.join(directory.name, "appointments.json"),
+            "FILE_NOTIFS": os.path.join(directory.name, "notifications.json"),
+        }.items():
+            patcher = patch.object(wa_appointments, name, value)
+            patcher.start()
+            self.addCleanup(patcher.stop)
+        for target, name, value in (
+            (retainai, "load_users", _users()),
+            (wa_appointments, "load_leads", self.LEADS),
+        ):
+            patcher = patch.object(target, name, return_value=value)
+            patcher.start()
+            self.addCleanup(patcher.stop)
+        self.client = retainai.app.test_client()
+        with self.client.session_transaction() as signed_session:
+            signed_session["user_email"] = "owner@example.com"
+            signed_session["org_email"] = "owner@example.com"
+            signed_session["security_version"] = 0
+
+    def _stored(self):
+        return wa_appointments._get_appointments("owner@example.com")
+
+    def test_lead_route_rejects_unknown_and_other_workspace_leads(self):
+        for lead_id in ("probe1", "lead-other"):
+            response = self.client.post(
+                f"/api/wa-auto/leads/owner@example.com/{lead_id}/appointments", json=self.BODY
+            )
+            self.assertEqual(response.status_code, 404, lead_id)
+            self.assertEqual(response.get_json()["error"], "lead_not_found")
+        self.assertEqual(self._stored(), [])
+
+    def test_lead_route_books_a_workspace_lead(self):
+        response = self.client.post(
+            "/api/wa-auto/leads/owner@example.com/lead-own/appointments", json=self.BODY
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual([row["lead_id"] for row in self._stored()], ["lead-own"])
+
+    def test_global_route_validates_a_supplied_lead_but_allows_none(self):
+        rejected = self.client.post(
+            "/api/wa-auto/appointments/owner@example.com", json={**self.BODY, "lead_id": "lead-other"}
+        )
+        self.assertEqual(rejected.status_code, 404)
+        self.assertEqual(self._stored(), [])
+
+        without_lead = self.client.post("/api/wa-auto/appointments/owner@example.com", json=self.BODY)
+        self.assertEqual(without_lead.status_code, 200)
+        self.assertEqual([row["lead_id"] for row in self._stored()], [""])
+
+
 if __name__ == "__main__":
     unittest.main()
