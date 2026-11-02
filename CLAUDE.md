@@ -12,8 +12,9 @@ At the end of a session, add a file there and a row to `chats/README.md`.
   - Frontend `retainai-prod-1-frontend` (Create React App, `frontend/`) at `https://www.retainai.ca`
 - Work on a branch, open a pull request into `deploy`, merge when CI is green.
   Add `[skip render]` to commit messages that change only docs or workflows.
-- Other branches (`main`, `signup-fix`, `test-deployment`, `deploy'`, `codex/*`, `fix/*`)
-  are old. Do not deploy them. Check Render before deleting any of them.
+- `deploy` is also the GitHub default branch. The old branches (`main`,
+  `signup-fix`, `test-deployment`, `deploy'`, `codex/*`, `fix/*`) were deleted
+  on 2026-11-02; delete feature branches once merged.
 
 ## Checks before merging
 

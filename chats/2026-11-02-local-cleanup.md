@@ -29,6 +29,13 @@ affiliate network for Closet Muse in place of Awin.
   script, so the CSP stays closed. Privacy policy has a "Retailer links" section.
   Smoke 17/17 on the deployed commit.
 
+## Branch cleanup
+
+Deleted 8 old branches, each contained in or superseded by `deploy` (the default
+branch): `main`, `signup-fix`, `test-deployment`, `deploy'`,
+`claude/services-review-completion-xx8reo`, `codex/verified-launch-hardening-20260903`,
+`fix/final-launch-hardening-20260821`, `fix/pass-verified-session-to-dashboard`.
+
 ## Decided against
 
 - Moving `retainai.ca` and `closetmuse.ca` nameservers to Cloudflare: both
@@ -39,10 +46,6 @@ affiliate network for Closet Muse in place of Awin.
 ## Still open
 
 - Skimlinks site approval. If review asks for the script, add it to public pages only.
-- Delete the old RetainAI branches (all contained in or superseded by `deploy`;
-  the default branch is `deploy`). Claude's delete was blocked by a permission
-  check, so the owner runs it:
-  `git push origin --delete claude/services-review-completion-xx8reo codex/verified-launch-hardening-20260903 "deploy'" fix/final-launch-hardening-20260821 fix/pass-verified-session-to-dashboard main signup-fix test-deployment`
 - Stripe Connect round trip in RetainAI, then remove the onrender.com redirect URI in Stripe.
 - Closet Muse: backup key check, Google Calendar review video, member Apple
   sign-in, tax review, retailer feed.
