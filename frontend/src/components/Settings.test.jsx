@@ -1,6 +1,6 @@
 import React from "react";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
-import { MemoryRouter } from "react-router";
+import { MemoryRouter, useLocation, useNavigate } from "react-router";
 import Settings from "./Settings";
 
 const user = {
@@ -94,4 +94,66 @@ test("allows leaving the route-selected Import Contacts tab", async () => {
   fireEvent.click(screen.getByRole("button", { name: "Profile" }));
 
   expect(await screen.findByRole("button", { name: "Edit Profile" })).toBeInTheDocument();
+});
+
+// Mirrors CrmDashboard: the ?tab= query is what selects Settings' initialTab.
+function RoutedSettings({ profile = user }) {
+  const location = useLocation();
+  const navigate = useNavigate();
+  const initialTab = new URLSearchParams(location.search).get("tab");
+  return (
+    <>
+      <button onClick={() => navigate(-1)}>Browser back</button>
+      <button onClick={() => navigate(1)}>Browser forward</button>
+      <output data-testid="location">{location.pathname}{location.search}</output>
+      <Settings user={profile} initialTab={initialTab} refreshUser={jest.fn().mockResolvedValue(undefined)} />
+    </>
+  );
+}
+
+function renderRouted(path, profile) {
+  localStorage.setItem("user", JSON.stringify(profile || user));
+  global.fetch = jest.fn().mockResolvedValue(response(profile || user));
+  return render(
+    <MemoryRouter initialEntries={[path]}>
+      <RoutedSettings profile={profile} />
+    </MemoryRouter>
+  );
+}
+
+test("settings tabs and help shortcuts update the URL so reload and Back match the visible tab", async () => {
+  renderRouted("/app?tab=profile");
+  expect(await screen.findByRole("button", { name: "Edit Profile" })).toBeInTheDocument();
+
+  fireEvent.click(screen.getByRole("button", { name: "Integrations" }));
+  expect(await screen.findByText("Connected accounts")).toBeInTheDocument();
+  expect(screen.getByTestId("location")).toHaveTextContent("/app?tab=integrations");
+
+  fireEvent.click(screen.getByRole("button", { name: "Browser back" }));
+  expect(await screen.findByRole("button", { name: "Edit Profile" })).toBeInTheDocument();
+  expect(screen.getByTestId("location")).toHaveTextContent("/app?tab=profile");
+
+  fireEvent.click(screen.getByRole("button", { name: "Browser forward" }));
+  expect(await screen.findByText("Connected accounts")).toBeInTheDocument();
+
+  fireEvent.click(screen.getByRole("button", { name: "Help & Support" }));
+  expect(screen.getByTestId("location")).toHaveTextContent("/app?tab=help");
+  fireEvent.click(await screen.findByRole("button", { name: /^Integrations .+/ }));
+  expect(await screen.findByText("Connected accounts")).toBeInTheDocument();
+  expect(screen.getByTestId("location")).toHaveTextContent("/app?tab=integrations");
+});
+
+test("tab links respect role restrictions and never put a hidden tab in the URL", async () => {
+  const member = { ...user, role: "member", canInviteTeam: false, canEditBusiness: false, canManageBilling: false };
+  renderRouted("/app?tab=billing", member);
+
+  await waitFor(() => expect(screen.getByRole("button", { name: "Profile" })).toHaveAttribute("aria-current", "page"));
+  expect(screen.queryByRole("button", { name: "Billing" })).not.toBeInTheDocument();
+  expect(screen.queryByRole("button", { name: "Team" })).not.toBeInTheDocument();
+
+  fireEvent.click(screen.getByRole("button", { name: "Help & Support" }));
+  expect(screen.getByTestId("location")).toHaveTextContent("/app?tab=help");
+  fireEvent.click(await screen.findByRole("button", { name: /^Account & team/ }));
+  await waitFor(() => expect(screen.getByRole("button", { name: "Profile" })).toHaveAttribute("aria-current", "page"));
+  expect(screen.getByTestId("location")).toHaveTextContent("/app?tab=profile");
 });
