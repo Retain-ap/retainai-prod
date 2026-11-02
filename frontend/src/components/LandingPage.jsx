@@ -295,8 +295,8 @@ export default function LandingPage() {
               <small>RETAINAI STANDARD</small>
               <h3>One complete customer-retention workspace.</h3>
               <p>Contacts, conversations, appointments, insights, automations, invoices, team tools, and owner controls.</p>
-              <div className="lp-price"><strong>$30</strong><span>CAD<br />per month</span></div>
-              <p className="lp-launch-note">Launch pricing may be available during checkout.</p>
+              <div className="lp-price"><strong>$20</strong><span>CAD<br />per month</span></div>
+              <p className="lp-launch-note">Current launch price. Confirm your total at checkout.</p>
             </div>
             <div className="lp-price-actions">
               <ul>
