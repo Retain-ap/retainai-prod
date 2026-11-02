@@ -1,6 +1,6 @@
 import React from "react";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
-import { MemoryRouter, Route, Routes } from "react-router-dom";
+import { MemoryRouter, Route, Routes } from "react-router";
 import ProtectedRoute from "./ProtectedRoute";
 
 function renderRoute() {
@@ -9,10 +9,7 @@ function renderRoute() {
   }
 
   return render(
-    <MemoryRouter
-      initialEntries={["/app"]}
-      future={{ v7_startTransition: true, v7_relativeSplatPath: true }}
-    >
+    <MemoryRouter initialEntries={["/app"]}>
       <Routes>
         <Route path="/login" element={<div>Login screen</div>} />
         <Route

@@ -1,6 +1,6 @@
 // File: frontend/src/components/Settings.jsx
 import React, { useEffect, useMemo, useRef, useState, useCallback } from "react";
-import { useLocation, useNavigate } from "react-router-dom";
+import { useLocation, useNavigate } from "react-router";
 import GoogleCalendarEvents from "./GoogleCalendarEvents";
 import StripeConnectCard from "./StripeConnectCard";
 import WhatsAppHealthCard from "./WhatsAppHealthCard";
