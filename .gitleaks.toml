@@ -1,0 +1,15 @@
+title = "RetainAI secret scan"
+
+# Start from gitleaks' built-in rules and add what they miss.
+[extend]
+useDefault = true
+
+# The built-in facebook-page-access-token rule only matches tokens that start
+# EAAM or EAAC. Meta user and system-user tokens (what WhatsApp Cloud API uses)
+# can start with any EAA prefix, including the shape leaked in 2025.
+[[rules]]
+id = "meta-graph-access-token"
+description = "Meta Graph / WhatsApp Cloud API access token"
+regex = '''\b(EAA[A-Za-z0-9]{80,})\b'''
+entropy = 4
+keywords = ["eaa"]

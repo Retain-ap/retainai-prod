@@ -15,6 +15,33 @@ permissions:
   contents: read
 
 jobs:
+  secrets:
+    name: Secret scan of new commits and tracked files
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      GITLEAKS_VERSION: 8.30.1
+      # From gitleaks_8.30.1_checksums.txt on the official release.
+      GITLEAKS_SHA256: 551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Install pinned gitleaks
+        run: |
+          archive="$RUNNER_TEMP/gitleaks.tar.gz"
+          curl -sSfL -o "$archive" "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz"
+          echo "${GITLEAKS_SHA256}  $archive" | sha256sum -c -
+          tar -xzf "$archive" -C "$RUNNER_TEMP" gitleaks
+          echo "GITLEAKS_BIN=$RUNNER_TEMP/gitleaks" >> "$GITHUB_ENV"
+      - name: Prove the scanner catches synthetic secrets
+        run: python3 .github/secret-scan/scan.py selftest
+      - name: Scan commits added by this change
+        run: python3 .github/secret-scan/scan.py commits
+      - name: Scan files tracked at this commit
+        run: python3 .github/secret-scan/scan.py tree
+
   backend:
     name: Backend security and regression tests
     runs-on: ubuntu-latest
