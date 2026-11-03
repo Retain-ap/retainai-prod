@@ -1,0 +1,22 @@
+.partner-ledger { max-width: 1120px; margin: 24px auto; padding: clamp(16px, 3vw, 32px); color: inherit; overflow-wrap: anywhere; }
+.partner-ledger h2 { font-size: clamp(26px, 4vw, 38px); margin: 4px 0 12px; }
+.partner-ledger h3 { margin-top: 28px; }
+.partner-ledger p { line-height: 1.65; }
+.partner-ledger-heading { display: flex; justify-content: space-between; align-items: flex-start; gap: 24px; }
+.partner-ledger-eyebrow { font-size: 12px; letter-spacing: .14em; text-transform: uppercase; }
+.partner-ledger button { border: 1px solid currentColor; border-radius: 10px; background: transparent; color: inherit; padding: 11px 16px; cursor: pointer; font: inherit; margin: 8px 0; }
+.partner-ledger button:disabled { opacity: .5; cursor: default; }
+.partner-ledger a { color: inherit; text-decoration: underline; }
+.partner-ledger :focus-visible { outline: 3px solid #ba974e; outline-offset: 3px; }
+.partner-ledger-note, .partner-ledger-card { border: 1px solid #8886; border-radius: 14px; padding: 18px; margin: 16px 0; }
+.partner-ledger-cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 280px), 1fr)); gap: 16px; }
+.partner-ledger-cards .partner-ledger-card { margin: 0; min-width: 0; }
+.partner-ledger-form { display: grid; gap: 16px; margin-top: 20px; }
+.partner-ledger label { display: grid; gap: 6px; }
+.partner-ledger input:not([type=checkbox]) { box-sizing: border-box; width: 100%; padding: 10px; background: transparent; color: inherit; border: 1px solid #8889; border-radius: 8px; font: inherit; }
+.partner-ledger .partner-ledger-check { display: flex; align-items: flex-start; gap: 12px; }
+.partner-ledger-table { width: 100%; overflow-x: auto; }
+.partner-ledger table { border-collapse: collapse; width: 100%; font-size: 13px; text-align: left; }
+.partner-ledger td, .partner-ledger th { padding: 12px; border-bottom: 1px solid #8885; min-width: 110px; }
+.partner-ledger summary { cursor: pointer; font-weight: 600; }
+@media(max-width:620px) { .partner-ledger-heading { display: block; } }

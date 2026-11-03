@@ -12,6 +12,7 @@ import {
 } from "react-icons/fa";
 import { apiUrl } from "../apiBase";
 import "./product-system.css";
+import PartnerLedger from "./PartnerLedger";
 
 async function ownerRequest(path, options = {}) {
   const response = await fetch(apiUrl(`owner/${path}`), {
@@ -289,6 +290,7 @@ export default function OwnerConsole() {
   const tabs = [
     ["overview", "Overview", <FaChartPie />],
     ["accounts", "Customer Accounts", <FaUsers />],
+    ["partners", "Partners", <FaUsers />],
     ["success", "Success Queue", <FaClipboardList />],
     ["health", "System Health", <FaHeartbeat />],
     ["backups", "Backups", <FaDatabase />],
@@ -338,6 +340,7 @@ export default function OwnerConsole() {
 
       {error && <div className="product-card" style={{ marginTop: 18, color: "var(--ra-red)" }}>{error}</div>}
 
+      {tab === "partners" && <PartnerLedger endpoint={apiUrl("owner/partners")} linkBase="https://www.retainai.ca/r/" />}
       {tab === "overview" && overview && (
         <>
           <div className="metric-grid">

@@ -17,6 +17,8 @@ export default function PrivacyPolicy() {
           you agree to the practices described below.
         </p>
 
+        <h2 className="text-2xl font-bold text-yellow-300 mt-8 mb-2">Partner referrals</h2>
+        <p className="mb-6">Following an approved referral link sets a signed, first-party cookie for up to 60 days. If you create a new account in that browser, we record the partner code and reconcile membership invoices, refunds and commissions. Partners do not receive your contacts, messages or account email through this program. Referral accounting records use a hashed account identifier and Stripe references and may be retained after deletion for reconciliation and to prevent repeat referral claims. You can clear the cookie in your browser.</p>
         <h2 className="text-2xl font-bold text-yellow-300 mt-8 mb-2">1. Information We Collect</h2>
         <ul className="list-disc ml-6 mb-6 space-y-2">
           <li><b>Account & Profile Data:</b> name, email, password (hashed), business details (e.g., business name, logo).</li>

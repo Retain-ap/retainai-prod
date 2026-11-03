@@ -9,6 +9,7 @@ import PrivacyPolicy from "./pages/PrivacyPolicy";
 import TermsOfService from "./pages/TermsOfService";
 import RefundPolicy from "./pages/RefundPolicy";
 import Partners from "./pages/Partners";
+import ReferralRedirect from "./pages/ReferralRedirect";
 import AcceptInvite from "./pages/AcceptInvite"; // ← added
 import { SettingsProvider } from "./components/SettingsContext";
 import { API_BASE } from "./apiBase";
@@ -169,6 +170,7 @@ function App() {
         <Routes>
           <Route path="/" element={<LandingPage />} />
           <Route path="/partners" element={<Partners />} />
+          <Route path="/r/:code" element={<ReferralRedirect />} />
           <Route path="/login" element={<Login />} />
           <Route path="/signup" element={<Signup />} />
           <Route
