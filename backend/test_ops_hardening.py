@@ -67,6 +67,15 @@ class SchedulerExposureTests(unittest.TestCase):
         self.assertEqual(exposed, [])
 
 
+class DebugRouteExposureTests(unittest.TestCase):
+    def test_debug_ping_routes_are_not_served(self):
+        rules = {rule.rule for rule in retainai.app.url_map.iter_rules()}
+        self.assertNotIn("/test", rules)
+        self.assertNotIn("/api/test", rules)
+        self.assertNotIn("/api/test", retainai._PUBLIC_API_PATHS)
+        self.assertIn("/healthz", rules)
+
+
 class WhatsAppWebhookRetryTests(unittest.TestCase):
     secret = "test-meta-signing-secret"
 
