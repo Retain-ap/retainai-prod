@@ -190,7 +190,7 @@ class BillingCheckoutSafetyTests(unittest.TestCase):
 
     def test_repeated_checkout_reuses_open_session(self):
         email = "billing@example.com"
-        user = {"email": email, "status": "pending_payment"}
+        user = {"email": email, "status": "pending_payment", "partner_code": "approved-partner"}
         users = {email: user}
         created = self.StripeObject(id="cs_once", url="https://checkout.example/once")
         opened = self.StripeObject(
@@ -238,6 +238,8 @@ class BillingCheckoutSafetyTests(unittest.TestCase):
         self.assertEqual(first["state"], "new_checkout")
         self.assertEqual(second["state"], "open_checkout")
         create_session.assert_called_once()
+        self.assertEqual(create_session.call_args.kwargs["metadata"]["partner_code"], "approved-partner")
+        self.assertEqual(create_session.call_args.kwargs["subscription_data"]["metadata"]["partner_code"], "approved-partner")
         self.assertEqual(
             create_session.call_args.kwargs["subscription_data"]["trial_period_days"],
             14,

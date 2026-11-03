@@ -267,6 +267,8 @@ def require_authenticated_api_session():
         return None
     if request.path in _PUBLIC_API_PATHS:
         return None
+    if request.endpoint == "partners.referral_link":
+        return None
     if request.path.startswith("/api/team/invite/"):
         return None
 
@@ -4049,6 +4051,8 @@ def stripe_webhook():
     except Exception:
         return "", 400
 
+    from flask import g
+    g.partner_stripe_event = event
     event_type = str(event.get("type") or "")
     event_object = (event.get("data") or {}).get("object") or {}
     users = load_users() or {}
@@ -4592,6 +4596,7 @@ def signup():
             "instagram": instagram,
             "location": location,
             "referral": referral,
+            "partner_code": signup_partner(email),
             "status": "pending_payment",
             "billing_status": "checkout_required",
             "email_verified": False,
@@ -4848,6 +4853,9 @@ def _create_or_reuse_billing_checkout(
             }
         },
     }
+    if user.get("partner_code"):
+        checkout_args["metadata"]["partner_code"] = user["partner_code"]
+        checkout_args["subscription_data"]["metadata"]["partner_code"] = user["partner_code"]
     if user.get("stripe_customer_id"):
         checkout_args["customer"] = user["stripe_customer_id"]
     else:
@@ -10430,11 +10438,13 @@ from app_imports import imports_bp
 from app_team import team_bp
 from app_owner import owner_bp
 from app_account import account_bp
+from partner_commissions import partners_bp, signup_partner
 from app_wa_auto_appointments import WA_AUTO_BP
 
 app.register_blueprint(imports_bp)
 app.register_blueprint(team_bp)
 app.register_blueprint(owner_bp)
+app.register_blueprint(partners_bp)
 app.register_blueprint(account_bp)
 app.register_blueprint(WA_AUTO_BP)
 

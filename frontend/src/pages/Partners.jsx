@@ -18,11 +18,11 @@ export default function Partners() {
       <main id="partner-main" tabIndex={-1}>
         <section className="rp-hero" aria-labelledby="partner-title">
           <div>
-            <p className="rp-eyebrow">The RetainAI partner pilot</p>
+            <p className="rp-eyebrow">RetainAI referral partners · 30% commission</p>
             <h1 id="partner-title">Help your clients<br/><em>keep more customers.</em></h1>
             <p className="rp-intro">Bring customer follow-up into the services you already offer. Introduce RetainAI to local businesses that need a clearer way to manage relationships, rebooking and the next conversation.</p>
             <div className="rp-actions"><a className="lp-primary-button" href="#partner-contact">Discuss a partnership <FaArrowRight aria-hidden="true" /></a><a className="rp-text-link" href="/#product">Explore the product <FaArrowRight aria-hidden="true" /></a></div>
-            <p className="rp-caption">For agencies, business coaches and trusted advisors.</p>
+            <p className="rp-caption">Earn 30% for the first 12 months of each qualifying referral. For agencies, business coaches and trusted advisors.</p>
           </div>
           <aside className="rp-example" aria-label="Illustrative salon workflow">
             <div className="rp-example-heading"><span><FaHeart aria-hidden="true" /> A reason to return</span><small>Example workflow</small></div>
@@ -47,19 +47,21 @@ export default function Partners() {
         </section>
 
         <section className="rp-process rp-section" id="how-it-works" aria-labelledby="partner-process-title">
-          <div><p className="rp-eyebrow">Start with one good fit</p><h2 id="partner-process-title">A small pilot.<br/>A clear way forward.</h2><p>We’re exploring referral partnerships with people who understand the everyday needs of service businesses.</p><a className="rp-text-link" href="/#pricing">See current customer pricing <FaArrowRight aria-hidden="true" /></a></div>
+          <div><p className="rp-eyebrow">Start with one good fit</p><h2 id="partner-process-title">A small pilot.<br/>A clear way forward.</h2><p>We’re welcoming referral partners who understand the everyday needs of service businesses.</p><a className="rp-text-link" href="/#pricing">See current customer pricing <FaArrowRight aria-hidden="true" /></a></div>
           <ol>
             <li><h3>Tell us who you help.</h3><p>Share your business, public website and the types of clients you work with. No client list is needed.</p></li>
             <li><h3>Find a useful introduction.</h3><p>Discuss a real use case and how you would show RetainAI to a suitable business.</p></li>
-            <li><h3>Agree the offer, then promote.</h3><p>For accepted partners, referral attribution, any commission, payout timing and refund rules are confirmed in writing before promotion begins.</p></li>
+            <li><h3>Agree the offer, then promote.</h3><p>Accepted partners receive a tracked link and written terms: 30% of qualifying membership payments for 12 months, with clear attribution and refund rules.</p></li>
           </ol>
         </section>
 
         <section className="rp-section rp-faq" aria-labelledby="partner-faq-title">
           <div><p className="rp-eyebrow">Before you join</p><h2 id="partner-faq-title">Know what you’re recommending.</h2></div>
           <div>
-            <details><summary>Is this a paid affiliate program?</summary><p>This is an invitation to discuss a referral partnership. Sending an enquiry does not enrol you, activate a referral link or create a commission agreement. Any paid arrangement is agreed separately with an accepted partner.</p></details>
-            <details><summary>What could I earn?</summary><p>There is no standard commission rate advertised yet. We’ll agree the rate, qualifying payments, attribution window and payout conditions in writing before you start promoting.</p></details>
+            <details><summary>Is this a paid affiliate program?</summary><p>Yes. Approved partners earn 30% of qualifying membership payments for the first 12 months. Apply below; we confirm the partnership and activate your personal link after written acceptance. An enquiry alone does not enrol you.</p></details>
+            <details><summary>What could I earn?</summary><p>Earn 30% of qualifying base membership payments for 12 months from a referred customer’s first successful payment. Commission is calculated after discounts, before tax; add-ons, free trials and unpaid invoices do not earn commission. Refunds reduce commission and disputes put it on hold. At the current CA$20 monthly base price, a full-price payment earns CA$6 before any later refund adjustment.</p></details>
+            <details><summary>How are referrals tracked?</summary><p>Your approved link credits the first valid referral for a new account created within 60 days on the same browser. Existing accounts, self-referrals and duplicate accounts are excluded. Clearing cookies or changing browsers can prevent attribution. The 12-month window does not restart after cancellation or rejoining.</p></details>
+            <details><summary>When are commissions paid?</summary><p>Commissions have a 30-day hold and are reviewed monthly. We reconcile payments and refunds before paying; later refunds are deducted from future balances. Accepted partners confirm payment details in writing. No purchase is needed to apply, and earnings are not guaranteed.</p></details>
             <details><summary>What should I show a potential customer?</summary><p>Start with one follow-up they struggle to keep track of. Show how customer history, an editable message draft and a visible next action fit that workflow. Use demo data or information the business has agreed to share. <a href="/#product">See the product overview.</a></p></details>
             <details><summary>Can I explore it before recommending it?</summary><p>Yes. Review the <a href="/#product">product overview</a> and <a href="/#pricing">current pricing and trial terms</a>, or email us about your use case before signing up. A paid account is not required to enquire about a partnership.</p></details>
             <details><summary>How should I explain the partnership?</summary><p>Clearly disclose any payment, free access or other benefit alongside your recommendation. Use your honest experience and avoid guarantees about revenue, bookings or customer results.</p></details>

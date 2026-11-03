@@ -6,6 +6,7 @@ links) and what is still open. Add a file at the end of each session.
 
 | Date | Session | Summary |
 | --- | --- | --- |
+| 2026-11-02 | [Partner commissions](2026-11-02-partner-commissions.md) | Approved 30% / 12 months for both apps; signed referral attribution, owner ledger, refund reconciliation and controlled external-payment records |
 | 2026-11-02 | [Partner invitations](2026-11-02-partner-pages.md) | Closet Muse partner page shipped; RetainAI referral-partner pitch, footer link and enquiry page; commercial terms remain proposals |
 | 2026-11-02 | [Urgent follow-up](2026-11-02-urgent-followup.md) | Historical token confirmed expired and different from production; secret scanner and mandatory release checks enabled; advertised price matched to live checkout |
 | 2026-11-02 | [Joint release audit](2026-11-02-joint-release-audit.md) | Joint fixes shipped: dependencies, navigation, owner MFA guidance, appointment validation, response headers and Closet Muse launch gates; remaining owner/provider work recorded |

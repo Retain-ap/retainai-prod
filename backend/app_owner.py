@@ -81,7 +81,7 @@ def _backup_files():
     staged_db = ""
     files = []
     try:
-        if USE_SQLITE and os.path.isfile(SQLITE_PATH):
+        if os.path.isfile(SQLITE_PATH):
             staged_db = os.path.join(BACKUP_ROOT, f".snapshot-{uuid4().hex}.db")
             source = sqlite3.connect(SQLITE_PATH)
             destination = sqlite3.connect(staged_db)
