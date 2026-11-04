@@ -208,7 +208,6 @@ app.config.update(
 _PUBLIC_API_PATHS = {
     "/api/health",
     "/api/readiness",
-    "/api/test",
     "/api/login",
     "/api/logout",
     "/api/session",
@@ -793,14 +792,6 @@ def api_readiness():
     if storage_error:
         payload["storage_error"] = storage_error
     return jsonify(payload), 200 if ready else 503
-
-@app.route("/test", methods=["GET"])
-def test_root():
-    return jsonify(ok=True, route="/test"), 200
-
-@app.route("/api/test", methods=["GET"])
-def test_api():
-    return jsonify(ok=True, route="/api/test"), 200
 
 
 # ----------------------------
