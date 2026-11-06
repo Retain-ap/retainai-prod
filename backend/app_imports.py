@@ -1,10 +1,9 @@
 # backend/app_imports.py
 from flask import Blueprint, request, jsonify, redirect, Response, session
-import os, time, json, requests, hashlib, csv, io, re, fcntl
-from contextlib import contextmanager
+import os, time, json, requests, hashlib, csv, io, re
 from urllib.parse import urlencode, urlparse
 from uuid import uuid4
-from storage import DATA_ROOT, load_leads, save_user_leads
+from storage import DATA_ROOT, leads_lock, load_leads, save_user_leads
 import contact_import
 from oauth_state import issue_oauth_state, consume_oauth_state, safe_same_origin_redirect
 from secret_store import encrypt_secret, decrypt_secret
@@ -491,23 +490,9 @@ REASON_TEXT = {
     "already_in_crm": "Already in RetainAI",
     "identity_conflict": "Email and phone belong to different contacts",
 }
-IMPORT_LOCK_FILE = os.path.join(DATA_ROOT, ".contact_import.lock")
-
-
-@contextmanager
-def _import_lock():
-    """Serialize import commits and undos across threads and gunicorn workers.
-
-    Each holds the lock from reading the contact list until the list and the
-    import history are written, so two of them can't overwrite each other.
-    """
-    os.makedirs(os.path.dirname(os.path.abspath(IMPORT_LOCK_FILE)), exist_ok=True)
-    with open(IMPORT_LOCK_FILE, "a") as handle:
-        fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
-        try:
-            yield
-        finally:
-            fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+# Imports share the contact-list lock with /api/leads saves and every other
+# contact writer, so an import and a save can never overwrite each other.
+_import_lock = leads_lock
 
 
 def _identity_keys(lead):

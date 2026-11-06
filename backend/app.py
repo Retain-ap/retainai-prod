@@ -1,6 +1,7 @@
 # app.py (CONSOLIDATED + PROD-SAFE) - PART 1/2
 import os
 import time
+import functools
 import re
 import json
 import base64
@@ -40,7 +41,8 @@ from oauth_state import issue_oauth_state, consume_oauth_state
 from storage import (
     load_users, save_users, get_user, create_user,
     load_leads, save_leads, save_user_leads, migrate_json_to_sqlite_if_needed,
-    DATA_ROOT, USE_SQLITE, SQLITE_PATH
+    DATA_ROOT, USE_SQLITE, SQLITE_PATH,
+    leads_lock, leads_revision, load_user_leads,
 )
 
 # ----------------------------
@@ -2546,41 +2548,48 @@ def api_get_leads():
         return jsonify({"ok": False, "error": "missing_user_email"}), 400
 
     try:
-        all_leads = load_leads() or {}
-        if not isinstance(all_leads, dict):
-            all_leads = {}
+        with leads_lock():
+            leads = load_user_leads(email)
+            normalized = []
+            changed = False
 
-        leads = all_leads.get(email, [])
-        if not isinstance(leads, list):
-            leads = []
+            for lead in leads:
+                if not isinstance(lead, dict):
+                    continue
 
-        normalized = []
-        changed = False
+                item = dict(lead)
+                computed_status = _lead_status_from_dates(item)
 
-        for lead in leads:
-            if not isinstance(lead, dict):
-                continue
+                if item.get("status") != computed_status:
+                    item["status"] = computed_status
+                    changed = True
 
-            item = dict(lead)
-            computed_status = _lead_status_from_dates(item)
+                normalized.append(item)
 
-            if item.get("status") != computed_status:
-                item["status"] = computed_status
-                changed = True
-
-            normalized.append(item)
-
-        if changed:
-            save_user_leads(email, normalized)
+            if changed:
+                save_user_leads(email, normalized)
+                leads = load_user_leads(email)
+            # The revision of what is stored: a later save must send it back.
+            revision = leads_revision(leads)
 
         return jsonify({
             "ok": True,
             "email": email,
-            "leads": normalized
+            "leads": normalized,
+            "revision": revision,
         }), 200
 
     except Exception as e:
         return jsonify({"ok": False, "error": str(e)[:300]}), 500
+
+
+def _holds_leads_lock(view):
+    """Run a short contact read-change-write route under the contact lock."""
+    @functools.wraps(view)
+    def wrapper(*args, **kwargs):
+        with leads_lock():
+            return view(*args, **kwargs)
+    return wrapper
 
 
 _EMAIL_CONSENT_FIELDS = (
@@ -2645,22 +2654,43 @@ def api_save_leads():
     if not email:
         return jsonify({"ok": False, "error": "missing_user_email"}), 400
 
-    payload = request.get_json(silent=True) or {}
-    leads = payload.get("leads", None)
+    payload = request.get_json(silent=True)
+    leads = payload.get("leads", None) if isinstance(payload, dict) else None
 
     if not isinstance(leads, list):
         return jsonify({"ok": False, "error": "body_must_include_leads_array"}), 400
 
-    try:
-        _preserve_customer_unsubscribes(email, leads)
-        save_user_leads(email, leads)
+    base_revision = payload.get("base_revision")
+    if base_revision is not None and not isinstance(base_revision, str):
+        return jsonify({"ok": False, "error": "invalid_base_revision"}), 400
 
-        return jsonify({"ok": True, "email": email, "count": len(leads)}), 200
+    try:
+        with leads_lock():
+            current = load_user_leads(email)
+            current_revision = leads_revision(current)
+            # This is a whole-list replacement. If the list changed since the
+            # client loaded it (an import, another tab, a webhook), refuse
+            # instead of silently overwriting; the client re-applies its own
+            # change onto the current list and retries.
+            if base_revision is not None and base_revision != current_revision:
+                return jsonify({
+                    "ok": False,
+                    "error": "leads_changed",
+                    "message": "Contacts changed since this page loaded them.",
+                    "revision": current_revision,
+                    "leads": current,
+                }), 409
+            _preserve_customer_unsubscribes(email, leads)
+            save_user_leads(email, leads)
+            revision = leads_revision(load_user_leads(email))
+
+        return jsonify({"ok": True, "email": email, "count": len(leads), "revision": revision}), 200
     except Exception as e:
         return jsonify({"ok": False, "error": str(e)[:300]}), 500
 
 
 @app.post("/api/leads/contacted")
+@_holds_leads_lock
 def api_mark_lead_contacted():
     email = _req_user_email()
     payload = request.get_json(silent=True) or {}
@@ -2821,6 +2851,7 @@ def _unsubscribe_page(title: str, message: str, token: str = "", status: int = 2
 
 
 @app.route("/api/email/unsubscribe", methods=["GET", "POST"])
+@_holds_leads_lock
 def email_unsubscribe():
     token = str(
         request.args.get("token")
@@ -2976,14 +3007,15 @@ def inbound_email_webhook():
         # Notifications handle email activity separately.
 
         try:
-            leads_by_user = load_leads() or {}
-            arr = (leads_by_user.get(owner_email, []) or [])
-            for i, ld in enumerate(arr):
-                if str(ld.get("id") or "") == lead_id:
-                    arr[i]["last_inbound_at"] = datetime.datetime.utcnow().isoformat()
-                    arr[i]["last_activity_at"] = datetime.datetime.utcnow().isoformat()
-                    break
-            save_user_leads(owner_email, arr)
+            with leads_lock():
+                leads_by_user = load_leads() or {}
+                arr = (leads_by_user.get(owner_email, []) or [])
+                for i, ld in enumerate(arr):
+                    if str(ld.get("id") or "") == lead_id:
+                        arr[i]["last_inbound_at"] = datetime.datetime.utcnow().isoformat()
+                        arr[i]["last_activity_at"] = datetime.datetime.utcnow().isoformat()
+                        break
+                save_user_leads(owner_email, arr)
         except Exception:
             pass
 
@@ -6297,20 +6329,21 @@ def _wa_append_inbound(user_email: str, lead_id: str, lead: dict, sender_waid: s
     # Update lead activity even on a retry of an already-persisted message. If
     # this write fails, the webhook returns 503 and the retry repairs metadata
     # without duplicating the chat row.
-    leads_by_user = load_leads() or {}
-    owner_leads = leads_by_user.get(user_email, []) or []
-    for item in owner_leads:
-        if str(item.get("id") or "") == str(lead_id):
-            item["last_reply_at"] = row.get("time") or received_at
-            item["last_inbound_at"] = row.get("time") or received_at
-            item["last_contact"] = row.get("time") or received_at
-            item["last_message"] = row["text"]
-            item["last_message_direction"] = "inbound"
-            item["wa_last_inbound_id"] = row["id"]
-            if "wa_opt_out" in lead:
-                item["wa_opt_out"] = bool(lead.get("wa_opt_out"))
-            break
-    save_user_leads(user_email, owner_leads)
+    with leads_lock():
+        leads_by_user = load_leads() or {}
+        owner_leads = leads_by_user.get(user_email, []) or []
+        for item in owner_leads:
+            if str(item.get("id") or "") == str(lead_id):
+                item["last_reply_at"] = row.get("time") or received_at
+                item["last_inbound_at"] = row.get("time") or received_at
+                item["last_contact"] = row.get("time") or received_at
+                item["last_message"] = row["text"]
+                item["last_message_direction"] = "inbound"
+                item["wa_last_inbound_id"] = row["id"]
+                if "wa_opt_out" in lead:
+                    item["wa_opt_out"] = bool(lead.get("wa_opt_out"))
+                break
+        save_user_leads(user_email, owner_leads)
 
     return thread, inserted
 
@@ -7159,6 +7192,7 @@ def get_whatsapp_conversations():
 
 
 @app.route("/api/whatsapp/reconcile", methods=["POST"])
+@_holds_leads_lock
 def reconcile_whatsapp_replies():
     """Safely attach quarantined replies to a selected contact by exact phone match."""
     data = request.get_json(silent=True) or {}
@@ -7238,6 +7272,7 @@ def get_message_status():
 
 
 @app.post("/api/whatsapp/optout")
+@_holds_leads_lock
 def set_optout():
     data = request.get_json(force=True) or {}
     user_email = _session_org_email()
@@ -9203,13 +9238,14 @@ def execute_step(flow: Dict[str, Any], step: Dict[str, Any], lead: Dict[str, Any
             lead["tags"] = sorted(list(tags))
             owner = (lead.get("owner") or flow.get("owner") or "").lower()
             if owner:
-                leads_by_user = load_leads()
-                arr = leads_by_user.get(owner, []) or []
-                for i, ld in enumerate(arr):
-                    if (ld.get("id") == lead.get("id")) or (ld.get("email") == lead.get("email")):
-                        arr[i] = lead
-                        break
-                save_user_leads(owner, arr)
+                with leads_lock():
+                    leads_by_user = load_leads()
+                    arr = leads_by_user.get(owner, []) or []
+                    for i, ld in enumerate(arr):
+                        if (ld.get("id") == lead.get("id")) or (ld.get("email") == lead.get("email")):
+                            arr[i] = lead
+                            break
+                    save_user_leads(owner, arr)
             _record_automation_action(run, "add_tag", "completed", {"tag": tag})
         else:
             _record_automation_action(run, "add_tag", "skipped", {"reason": "No tag was selected."})
