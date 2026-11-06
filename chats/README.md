@@ -6,6 +6,7 @@ links) and what is still open. Add a file at the end of each session.
 
 | Date | Session | Summary |
 | --- | --- | --- |
+| 2026-11-06 | [Joint launch completion](2026-11-06-joint-launch-completion.md) | RetainAI API-origin and signup fixes reviewed and deployed; fresh Closet Muse gates and Apple preparation verified; actual owner/provider/recovery requirements recorded |
 | 2026-11-02 | [Partner commissions](2026-11-02-partner-commissions.md) | Approved 30% / 12 months for both apps; signed referral attribution, owner ledger, refund reconciliation and controlled external-payment records |
 | 2026-11-02 | [Partner invitations](2026-11-02-partner-pages.md) | Closet Muse partner page shipped; RetainAI referral-partner pitch, footer link and enquiry page; commercial terms remain proposals |
 | 2026-11-02 | [Urgent follow-up](2026-11-02-urgent-followup.md) | Historical token confirmed expired and different from production; secret scanner and mandatory release checks enabled; advertised price matched to live checkout |
