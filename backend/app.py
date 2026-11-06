@@ -2661,7 +2661,16 @@ def api_save_leads():
         return jsonify({"ok": False, "error": "body_must_include_leads_array"}), 400
 
     base_revision = payload.get("base_revision")
-    if base_revision is not None and not isinstance(base_revision, str):
+    if base_revision is None or base_revision == "":
+        # A whole-list replacement without the revision it was built from
+        # could erase an import or another tab's edits. Pages loaded before
+        # revisions existed must reload first.
+        return jsonify({
+            "ok": False,
+            "code": "revision_required",
+            "error": "This page is out of date. Reload it, then make your change again.",
+        }), 428
+    if not isinstance(base_revision, str):
         return jsonify({"ok": False, "error": "invalid_base_revision"}), 400
 
     try:
@@ -2672,7 +2681,7 @@ def api_save_leads():
             # client loaded it (an import, another tab, a webhook), refuse
             # instead of silently overwriting; the client re-applies its own
             # change onto the current list and retries.
-            if base_revision is not None and base_revision != current_revision:
+            if base_revision != current_revision:
                 return jsonify({
                     "ok": False,
                     "error": "leads_changed",
@@ -2682,9 +2691,14 @@ def api_save_leads():
                 }), 409
             _preserve_customer_unsubscribes(email, leads)
             save_user_leads(email, leads)
-            revision = leads_revision(load_user_leads(email))
+            # Return exactly what was stored (customer unsubscribes may have
+            # been kept) together with its revision.
+            saved = load_user_leads(email)
+            revision = leads_revision(saved)
 
-        return jsonify({"ok": True, "email": email, "count": len(leads), "revision": revision}), 200
+        return jsonify({
+            "ok": True, "email": email, "count": len(leads), "revision": revision, "leads": saved,
+        }), 200
     except Exception as e:
         return jsonify({"ok": False, "error": str(e)[:300]}), 500
 
@@ -9238,14 +9252,22 @@ def execute_step(flow: Dict[str, Any], step: Dict[str, Any], lead: Dict[str, Any
             lead["tags"] = sorted(list(tags))
             owner = (lead.get("owner") or flow.get("owner") or "").lower()
             if owner:
+                lead_id = str(lead.get("id") or "")
+                lead_email = str(lead.get("email") or "").strip().lower()
                 with leads_lock():
-                    leads_by_user = load_leads()
-                    arr = leads_by_user.get(owner, []) or []
-                    for i, ld in enumerate(arr):
-                        if (ld.get("id") == lead.get("id")) or (ld.get("email") == lead.get("email")):
-                            arr[i] = lead
+                    # Add only the tag to the freshly loaded contact; the run's
+                    # copy may be older than edits, imports or deletions.
+                    arr = load_user_leads(owner)
+                    for ld in arr:
+                        if not isinstance(ld, dict):
+                            continue
+                        same = (str(ld.get("id") or "") == lead_id) if lead_id else (
+                            bool(lead_email) and str(ld.get("email") or "").strip().lower() == lead_email
+                        )
+                        if same:
+                            ld["tags"] = sorted(set(ld.get("tags") or []) | {tag})
+                            save_user_leads(owner, arr)
                             break
-                    save_user_leads(owner, arr)
             _record_automation_action(run, "add_tag", "completed", {"tag": tag})
         else:
             _record_automation_action(run, "add_tag", "skipped", {"reason": "No tag was selected."})

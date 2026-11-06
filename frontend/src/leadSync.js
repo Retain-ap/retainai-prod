@@ -82,37 +82,72 @@ export function applyLeadChanges(server = [], changes = { upserts: [], deletes: 
   return { leads: leads.filter((_, index) => !removed.has(index)), conflicts };
 }
 
+/** Apply several change sets in order (unsaved earlier edits first). */
+export function applyAllChanges(server = [], changeSets = []) {
+  let leads = server;
+  const conflicts = [];
+  changeSets.filter(hasChanges).forEach((changes) => {
+    const result = applyLeadChanges(leads, changes);
+    leads = result.leads;
+    conflicts.push(...result.conflicts);
+  });
+  return { leads, conflicts };
+}
+
 /**
- * Save `changes` against the last list the server confirmed.
+ * Save `changeSets` against the last list the server confirmed.
  *
  * `server` is { revision, leads } as last returned by the backend and is
- * updated in place. Without a confirmed list (the first load failed) the
- * caller's full list is sent the old way, with no revision.
+ * updated in place with exactly what the server stored. Without a confirmed
+ * list, `load()` fetches one first: a whole-list save is never sent without
+ * the revision it was built from.
  */
-export async function saveLeadChanges({ send, server, changes, fallbackLeads, maxAttempts = 3 }) {
-  const conflicts = [];
-  let body = server.revision ? applyLeadChanges(server.leads, changes) : { leads: fallbackLeads, conflicts: [] };
+export async function saveLeadChanges({ send, load, server, changeSets, maxAttempts = 3 }) {
+  const refresh = async () => {
+    const fresh = await load();
+    if (!fresh?.revision || !Array.isArray(fresh.leads)) throw new Error("Could not load the latest contacts.");
+    server.revision = fresh.revision;
+    server.leads = fresh.leads;
+  };
+  if (!server.revision) await refresh();
+  let body = applyAllChanges(server.leads, changeSets);
   for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
-    conflicts.push(...body.conflicts);
-    const payload = server.revision ? { leads: body.leads, base_revision: server.revision } : { leads: body.leads };
-    const { status, data } = await send(payload);
+    const { status, data } = await send({ leads: body.leads, base_revision: server.revision });
     if (status === 409 && data?.error === "leads_changed" && Array.isArray(data.leads) && data.revision) {
       server.revision = data.revision;
       server.leads = data.leads;
-      body = applyLeadChanges(data.leads, changes);
-      conflicts.length = 0;
+      body = applyAllChanges(data.leads, changeSets);
+      continue;
+    }
+    if (status === 428) {
+      await refresh();
+      body = applyAllChanges(server.leads, changeSets);
       continue;
     }
     if (status >= 200 && status < 300 && data?.ok === true && Number(data?.count) === body.leads.length) {
-      if (data.revision) {
-        server.revision = data.revision;
-        server.leads = body.leads;
-      }
-      return { leads: body.leads, conflicts };
+      // Keep the list exactly as stored (the server may have kept a customer's
+      // unsubscribe) paired with its revision, as the base for the next save.
+      server.revision = data.revision || "";
+      server.leads = Array.isArray(data.leads) ? data.leads : body.leads;
+      return { leads: server.leads, conflicts: body.conflicts };
     }
-    throw new Error(data?.error === "leads_changed" ? "Contacts changed while saving. Reload and try again." : (data?.error || `Could not save customer changes (${status})`));
+    throw new Error(data?.error || `Could not save customer changes (${status})`);
   }
   throw new Error("Contacts kept changing while saving. Reload the page and try again.");
+}
+
+/**
+ * What to show after reloading the list while edits are still unsaved.
+ *
+ * Returns the list to display and the new base for the pending (debounced)
+ * edits, so that diffing the display against that base later yields exactly
+ * the pending edits: nothing imported or changed elsewhere is reverted.
+ */
+export function rebaseOnReload({ serverLeads, unsaved = [], pendingBase = null, shown = [] }) {
+  const withUnsaved = applyAllChanges(serverLeads, unsaved).leads;
+  if (!pendingBase) return { shown: withUnsaved, pendingBase: null };
+  const pending = diffLeads(pendingBase, shown);
+  return { shown: applyLeadChanges(withUnsaved, pending).leads, pendingBase: withUnsaved };
 }
 
 export function conflictMessage(conflicts = []) {

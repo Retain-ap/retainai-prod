@@ -127,14 +127,17 @@ class EmailConsentTests(unittest.TestCase):
         with patch.object(
             retainai, "load_users", return_value={self.owner: self._active_user(self.owner)}
         ), patch.object(retainai, "load_leads", return_value={self.owner: [stored]}), patch.object(
+            retainai, "load_user_leads", return_value=[stored]
+        ), patch.object(
             retainai, "save_user_leads"
         ) as save:
-            client.post("/api/leads", json={"leads": [stale]})
+            revision = retainai.leads_revision([stored])
+            client.post("/api/leads", json={"leads": [stale], "base_revision": revision})
             saved = save.call_args.args[1][0]
             self.assertTrue(saved["email_opt_out"])
             self.assertEqual(saved["email_consent_source"], "customer_unsubscribe_link")
 
-            client.post("/api/leads", json={"leads": [reconsented]})
+            client.post("/api/leads", json={"leads": [reconsented], "base_revision": revision})
             saved = save.call_args.args[1][0]
             self.assertFalse(saved["email_opt_out"])
             self.assertEqual(saved["email_consent_status"], "confirmed")
