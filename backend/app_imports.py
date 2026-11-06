@@ -4,6 +4,7 @@ import os, time, json, requests, hashlib, csv, io, re
 from urllib.parse import urlencode, urlparse
 from uuid import uuid4
 from storage import DATA_ROOT, load_leads, save_user_leads
+import contact_import
 from oauth_state import issue_oauth_state, consume_oauth_state, safe_same_origin_redirect
 from secret_store import encrypt_secret, decrypt_secret
 
@@ -116,17 +117,18 @@ def _lead_identity(row):
     phone = re.sub(r"\D", "", str(row.get("phone") or ""))
     return email, phone
 
-def _remember_import(user_email, before, after, summary, label):
+def _remember_import(user_email, import_id, undo, summary, label):
     history = _load_json_file(IMPORT_HISTORY_FILE, {})
     rows = history.setdefault(user_email, [])
-    entry = {
-        "id": str(uuid4()), "created_at": int(time.time()), "label": label,
-        "before": before, "after_count": len(after), "summary": summary,
-    }
+    entry = {"id": import_id, "created_at": int(time.time()), "label": label, "undo": undo, "summary": summary}
     rows.insert(0, entry)
     history[user_email] = rows[:10]
     _save_json_file(IMPORT_HISTORY_FILE, history)
-    return {k: v for k, v in entry.items() if k != "before"}
+    return _public_history(entry)
+
+
+def _public_history(entry):
+    return {k: v for k, v in entry.items() if k not in ("before", "undo")}
 
 # ---------- Token helpers ----------
 def _set_token(user_email, token_payload):
@@ -395,6 +397,7 @@ def _upsert_leads_google(user_email, mapped):
                 "birthday": row.get("birthday"),
                 "tags": ["Imported"],
                 "source": "google",
+                "imported_at": now_iso,
                 "external_id": ext,
                 "createdAt": now_iso,
                 "last_contacted": now_iso,
@@ -473,114 +476,172 @@ def google_disconnect():
     return jsonify({"ok": True, "google_connected": False}), 200
 
 
+IMPORT_SOURCES = {"csv", "vcard", "google"}
+DUPLICATE_MODES = {"skip", "update", "merge"}
+REASON_TEXT = {
+    "not_selected": "Not selected",
+    "missing_email_or_phone": "No valid email or phone",
+    "invalid_email": "Email is not valid",
+    "invalid_phone": "Phone number is not valid",
+    "duplicate_in_file": "Repeated earlier in this file",
+    "already_in_crm": "Already in RetainAI",
+}
+
+
+def _existing_index(existing):
+    by_email, by_phone = {}, {}
+    for lead in existing:
+        email, phone = _lead_identity(lead)
+        if email:
+            by_email.setdefault(email, lead)
+        if phone:
+            by_phone.setdefault(phone, lead)
+    return by_email, by_phone
+
+
+def _outcome_contact(contact):
+    """The cleaned values a reviewer needs to recognise a row."""
+    return {key: contact.get(key, "") for key in ("name", "email", "phone", "company")}
+
+
+def _plan_import(user_email, rows, mapping, *, country_code, mode, tag, now_iso, import_id, source):
+    """Validate every row and return (leads_after, outcomes, summary, undo)."""
+    existing = _load_leads_bucket(user_email)
+    by_email, by_phone = _existing_index(existing)
+    seen = set()
+    outcomes = []
+    created_ids, previous = [], {}
+    counts = {"imported": 0, "updated": 0, "merged": 0, "skipped": 0, "invalid": 0, "warnings": 0}
+
+    for index, item in enumerate(rows[: contact_import.MAX_ROWS]):
+        item = item if isinstance(item, dict) else {}
+        if item.get("selected") is False:
+            counts["skipped"] += 1
+            outcomes.append({"index": index, "status": "skipped", "reason": "not_selected"})
+            continue
+        raw = item.get("raw") if isinstance(item.get("raw"), dict) else {}
+        contact, problem = contact_import.build_contact(raw, mapping, country_code)
+        if contact is None:
+            counts["invalid"] += 1
+            outcomes.append({"index": index, "status": "invalid", "reason": problem})
+            continue
+        if problem:
+            counts["warnings"] += 1
+        email, phone = _lead_identity(contact)
+        keys = {f"e:{email}" if email else "", f"p:{phone}" if phone else ""} - {""}
+        if keys & seen:
+            counts["skipped"] += 1
+            outcomes.append({"index": index, "status": "skipped", "reason": "duplicate_in_file", "contact": _outcome_contact(contact)})
+            continue
+        seen |= keys
+        match = (by_email.get(email) if email else None) or (by_phone.get(phone) if phone else None)
+        if match is not None:
+            if mode == "skip":
+                counts["skipped"] += 1
+                outcomes.append({"index": index, "status": "skipped", "reason": "already_in_crm", "contact": _outcome_contact(contact)})
+                continue
+            if match.get("id") and match["id"] not in previous and match["id"] not in created_ids:
+                previous[match["id"]] = json.loads(json.dumps(match))
+            for key, value in contact.items():
+                if value and (mode == "update" or not match.get(key)):
+                    match[key] = value
+            if tag:
+                match["tags"] = sorted(set((match.get("tags") or []) + [tag]))
+            match["updated_at"] = now_iso
+            counts["updated" if mode == "update" else "merged"] += 1
+            outcomes.append({"index": index, "status": "updated" if mode == "update" else "merged", "reason": problem, "contact": _outcome_contact(contact)})
+            continue
+        lead = {
+            "id": str(uuid4()), **contact, "owner": user_email, "source": source,
+            "tags": [tag] if tag else [], "createdAt": now_iso, "updated_at": now_iso,
+            # Imported contacts are not new inquiries: automations keyed on new
+            # leads skip them, and no email consent is implied.
+            "imported_at": now_iso, "import_id": import_id,
+        }
+        existing.append(lead)
+        created_ids.append(lead["id"])
+        if email:
+            by_email[email] = lead
+        if phone:
+            by_phone[phone] = lead
+        counts["imported"] += 1
+        outcomes.append({"index": index, "status": "imported", "reason": problem, "contact": _outcome_contact(contact)})
+
+    summary = {**counts, "total_after": len(existing)}
+    return existing, outcomes, summary, {"created_ids": created_ids, "previous": previous}
+
+
+def _import_options(body):
+    mapping = body.get("mapping") if isinstance(body.get("mapping"), dict) else {}
+    mapping = {field: str(mapping.get(field) or "")[:200] for field in contact_import.FIELDS}
+    mode = str(body.get("duplicate_mode") or "skip").lower()
+    country_code = re.sub(r"[^0-9+]", "", str(body.get("country_code") or "+1"))[:5] or "+1"
+    tag = str(body.get("tag") if body.get("tag") is not None else "Imported").strip()[:80]
+    source = str(body.get("source") or "csv").lower()
+    return mapping, mode, country_code, tag, source if source in {"csv", "vcard"} else "csv"
+
+
+@imports_bp.post("/api/import/file/preview")
 @imports_bp.post("/api/import/csv/preview")
-def csv_preview():
+def import_file_preview():
     user_email = _request_user_email()
     if not user_email:
         return jsonify({"error": "Sign in again before importing contacts."}), 401
     upload = request.files.get("file")
-    if not upload or not upload.filename.lower().endswith(".csv"):
-        return jsonify({"error": "Choose a CSV file."}), 400
-    raw = upload.read()
-    if len(raw) > 5 * 1024 * 1024:
-        return jsonify({"error": "CSV files must be 5 MB or smaller."}), 413
+    if not upload:
+        return jsonify({"error": "Choose a CSV (.csv) or vCard (.vcf) contact file."}), 400
+    raw = upload.read(contact_import.MAX_FILE_BYTES + 1)
     try:
-        text = raw.decode("utf-8-sig")
-    except UnicodeDecodeError:
-        text = raw.decode("latin-1")
-    reader = csv.DictReader(io.StringIO(text))
-    headers = [str(value or "").strip() for value in (reader.fieldnames or [])]
-    aliases = {
-        "name": ["name", "full name", "customer", "contact"],
-        "first_name": ["first name", "firstname", "given name"],
-        "last_name": ["last name", "lastname", "surname", "family name"],
-        "email": ["email", "email address", "e-mail"],
-        "phone": ["phone", "phone number", "mobile", "whatsapp"],
-        "company": ["company", "business", "organization"],
-        "title": ["title", "job title", "role"],
-        "notes": ["notes", "note", "description"],
-    }
-    lower = {header.lower(): header for header in headers}
-    suggested = {key: next((lower[item] for item in values if item in lower), "") for key, values in aliases.items()}
-    existing = _load_leads_bucket(user_email)
-    existing_email = {str(item.get("email") or "").lower() for item in existing if item.get("email")}
-    existing_phone = {re.sub(r"\D", "", str(item.get("phone") or "")) for item in existing if item.get("phone")}
-    rows = []
-    for index, row in enumerate(reader):
-        if index >= 5000:
-            break
-        normalized = {str(key or "").strip(): str(value or "").strip() for key, value in row.items()}
-        email = normalized.get(suggested["email"], "").lower()
-        phone = _clean_phone(normalized.get(suggested["phone"], ""))
-        rows.append({
-            "raw": normalized, "selected": True,
-            "name": normalized.get(suggested["name"], ""), "email": email, "phone": phone,
-            "duplicate": bool((email and email in existing_email) or (phone and re.sub(r"\D", "", phone) in existing_phone)),
-        })
-    if not rows:
-        return jsonify({"error": "The CSV did not contain any contact rows."}), 400
-    return jsonify({"headers": headers, "mapping": suggested, "rows": rows, "total_rows": len(rows), "preview_count": len(rows)}), 200
+        parsed = contact_import.parse_file(upload.filename, raw)
+    except contact_import.ContactImportError as exc:
+        status = 413 if len(raw) > contact_import.MAX_FILE_BYTES else 400
+        return jsonify({"error": str(exc)}), status
+    rows = [{"raw": row, "selected": True} for row in parsed["rows"]]
+    _, outcomes, summary, _ = _plan_import(
+        user_email, rows, parsed["mapping"], country_code="+1", mode="skip", tag="",
+        now_iso="", import_id="", source=parsed["format"],
+    )
+    return jsonify({
+        "format": parsed["format"], "preset": parsed["preset"], "headers": parsed["headers"],
+        "mapping": parsed["mapping"], "rows": rows, "outcomes": outcomes, "summary": summary,
+        "total_rows": len(rows), "truncated": parsed["truncated"], "max_rows": contact_import.MAX_ROWS,
+        "reasons": REASON_TEXT,
+    }), 200
 
 
+@imports_bp.post("/api/import/file/commit")
 @imports_bp.post("/api/import/csv/commit")
-def csv_commit():
+def import_file_commit():
     user_email = _request_user_email()
     if not user_email:
         return jsonify({"error": "Sign in again before importing contacts."}), 401
     body = request.get_json(silent=True) or {}
-    rows = body.get("rows") or []
-    mapping = body.get("mapping") or {}
-    mode = str(body.get("duplicate_mode") or "skip").lower()
-    if mode not in {"skip", "update", "merge"}:
+    rows = body.get("rows")
+    if not isinstance(rows, list) or not rows:
+        return jsonify({"error": "There are no contacts to import."}), 400
+    if len(rows) > contact_import.MAX_ROWS:
+        return jsonify({"error": f"Import up to {contact_import.MAX_ROWS} contacts at a time."}), 413
+    mapping, mode, country_code, tag, source = _import_options(body)
+    if mode not in DUPLICATE_MODES:
         return jsonify({"error": "Choose skip, update, or merge for duplicates."}), 400
-    country_code = str(body.get("country_code") or "+1")
-    tag = str(body.get("tag") or "CSV import").strip()[:80]
-    existing = _load_leads_bucket(user_email)
-    before = json.loads(json.dumps(existing))
-    imported = merged = updated = skipped = invalid = 0
+    if not (mapping.get("email") or mapping.get("phone")):
+        return jsonify({"error": "Map an email or phone column so contacts can be matched and reached."}), 400
+    dry_run = body.get("dry_run") is True
     now_iso = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
-
-    def value(raw, key):
-        return str((raw or {}).get(mapping.get(key) or key) or "").strip()
-
-    for item in rows[:5000]:
-        if item.get("selected") is False:
-            skipped += 1
-            continue
-        raw = item.get("raw") or item
-        first, last = value(raw, "first_name"), value(raw, "last_name")
-        name = value(raw, "name") or f"{first} {last}".strip()
-        email = value(raw, "email").lower()
-        phone = _clean_phone(value(raw, "phone"), country_code)
-        if not (name or email or phone):
-            invalid += 1
-            continue
-        incoming = {
-            "name": name or email or phone, "email": email, "phone": phone,
-            "company": value(raw, "company"), "title": value(raw, "title"), "notes": value(raw, "notes"),
-        }
-        match = next((lead for lead in existing if (email and str(lead.get("email") or "").lower() == email) or (phone and re.sub(r"\D", "", str(lead.get("phone") or "")) == re.sub(r"\D", "", phone))), None)
-        if match:
-            if mode == "skip":
-                skipped += 1
-                continue
-            for key, val in incoming.items():
-                if val and (mode == "update" or not match.get(key)):
-                    match[key] = val
-            match["tags"] = sorted(set((match.get("tags") or []) + ([tag] if tag else [])))
-            match["updated_at"] = now_iso
-            updated += mode == "update"
-            merged += mode == "merge"
-            continue
-        existing.append({
-            "id": str(uuid4()), **incoming, "owner": user_email, "source": "csv",
-            "tags": [tag] if tag else [], "createdAt": now_iso, "updated_at": now_iso,
-        })
-        imported += 1
-    _save_leads_bucket(user_email, existing)
-    summary = {"imported": imported, "merged": merged, "updated": updated, "skipped": skipped, "invalid": invalid, "total_after": len(existing)}
-    entry = _remember_import(user_email, before, existing, summary, body.get("file_name") or "CSV import")
-    return jsonify({"ok": True, "summary": summary, "import": entry}), 200
+    import_id = str(uuid4())
+    leads, outcomes, summary, undo = _plan_import(
+        user_email, rows, mapping, country_code=country_code, mode=mode, tag=tag,
+        now_iso=now_iso, import_id=import_id, source=source,
+    )
+    if dry_run:
+        return jsonify({"ok": True, "dry_run": True, "summary": summary, "outcomes": outcomes}), 200
+    if summary["imported"] or summary["updated"] or summary["merged"]:
+        _save_leads_bucket(user_email, leads)
+        label = str(body.get("file_name") or "Contact import").strip()[:120]
+        entry = _remember_import(user_email, import_id, undo, summary, label)
+    else:
+        entry = None
+    return jsonify({"ok": True, "summary": summary, "outcomes": outcomes, "import": entry}), 200
 
 
 @imports_bp.get("/api/import/history")
@@ -589,7 +650,7 @@ def import_history():
     if not user_email:
         return jsonify({"error": "Sign in again."}), 401
     history = _load_json_file(IMPORT_HISTORY_FILE, {}).get(user_email, [])
-    return jsonify({"imports": [{k: v for k, v in row.items() if k != "before"} for row in history]}), 200
+    return jsonify({"imports": [_public_history(row) for row in history]}), 200
 
 
 @imports_bp.post("/api/import/<import_id>/undo")
@@ -600,12 +661,24 @@ def undo_import(import_id):
     history = _load_json_file(IMPORT_HISTORY_FILE, {})
     rows = history.get(user_email, [])
     entry = next((row for row in rows if row.get("id") == import_id), None)
-    if not entry or not isinstance(entry.get("before"), list):
+    if not entry:
         return jsonify({"error": "That import can no longer be undone."}), 404
-    _save_leads_bucket(user_email, entry["before"])
+    leads = _load_leads_bucket(user_email)
+    if isinstance(entry.get("undo"), dict):
+        created = set(entry["undo"].get("created_ids") or [])
+        previous = entry["undo"].get("previous") or {}
+        # Remove only what this import added and restore only what it changed;
+        # contacts added or edited elsewhere since then are kept.
+        restored = [previous.get(str(lead.get("id")), lead) for lead in leads if str(lead.get("id")) not in created]
+        removed = len(leads) - len(restored)
+    elif isinstance(entry.get("before"), list):
+        restored, removed = entry["before"], None  # entries written before per-contact undo
+    else:
+        return jsonify({"error": "That import can no longer be undone."}), 404
+    _save_leads_bucket(user_email, restored)
     history[user_email] = [row for row in rows if row.get("id") != import_id]
     _save_json_file(IMPORT_HISTORY_FILE, history)
-    return jsonify({"ok": True, "restored_contacts": len(entry["before"])}), 200
+    return jsonify({"ok": True, "removed_contacts": removed, "restored_contacts": len(restored)}), 200
 
 
 @imports_bp.route("/api/google/status")

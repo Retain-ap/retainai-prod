@@ -2322,7 +2322,10 @@ def send_birthday_greetings():
             bday = (lead.get("birthday") or "").strip()
             if bday and len(bday.split("-")) >= 3:
                 mmdd = "-".join(bday.split("-")[1:3])
-                if mmdd == today and lead.get("email") and not bool(lead.get("email_opt_out")):
+                if (
+                    mmdd == today and lead.get("email") and not bool(lead.get("email_opt_out"))
+                    and not imported_without_consent(lead)
+                ):
                     sent = send_birthday_email(
                         lead.get("email", ""),
                         lead.get("name", ""),
@@ -8551,7 +8554,18 @@ def in_quiet_hours(now: datetime.datetime, profile: Dict[str, Any]) -> bool:
 
 _td = datetime.timedelta
 
+def imported_without_consent(lead: Dict[str, Any]) -> bool:
+    """An imported contact nobody has confirmed email permission for.
+
+    Importing a list never implies consent, so automated emails to these
+    contacts wait until a workspace user records consent on the contact.
+    """
+    imported = lead.get("imported_at") or str(lead.get("source") or "").lower() in ("csv", "vcard", "google")
+    return bool(imported) and str(lead.get("email_consent_status") or "").lower() != "confirmed"
+
 def trig_no_reply(lead: Dict[str, Any], days: int) -> bool:
+    if imported_without_consent(lead):
+        return False
     last_inbound = dt_parse(lead.get("last_inbound_at"))
     last_outbound = dt_parse(lead.get("last_outbound_at"))
     last_any = dt_parse(lead.get("last_activity_at")) or last_inbound or last_outbound
@@ -8563,6 +8577,10 @@ def trig_no_reply(lead: Dict[str, Any], days: int) -> bool:
     return now_utc() - last_any >= _td(days=days)
 
 def trig_new_lead(lead: Dict[str, Any], within_hours: int = 24) -> bool:
+    # Contacts brought in by an import are existing relationships, not new
+    # inquiries: never start "new lead" automations (and their sends) for them.
+    if lead.get("imported_at") or str(lead.get("source") or "").lower() in ("csv", "vcard", "google"):
+        return False
     created = dt_parse(lead.get("createdAt")) or dt_parse(lead.get("created_at"))
     return bool(created and (now_utc() - created <= _td(hours=within_hours)))
 
