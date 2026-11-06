@@ -76,3 +76,29 @@ test("hides owner data when one response requires MFA even if other requests suc
   expect(screen.queryByText("999")).not.toBeInTheDocument();
   expect(screen.queryByRole("tab", { name: "Customer Accounts" })).not.toBeInTheDocument();
 });
+
+test("verifies a stored backup on request and says plainly that archives are not encrypted on the disk", async () => {
+  const backup = { name: "retainai-backup-20261106T032000Z.zip", bytes: 1048576, created_at: "2026-11-06T03:20:03Z", sha256: "a".repeat(64) };
+  global.fetch = jest.fn().mockImplementation((url, options = {}) => {
+    const value = String(url);
+    if (value.includes("/verify") && options.method === "POST") {
+      return Promise.resolve(response({ ok: true, files: 15, checksum_file_matched: true, sqlite_integrity: "ok" }));
+    }
+    if (value.includes("owner/backups")) return Promise.resolve(response({ backups: [backup] }));
+    if (value.includes("owner/overview")) return Promise.resolve(response({ recorded_mrr: {}, integrations: {} }));
+    if (value.includes("owner/accounts")) return Promise.resolve(response({ accounts: [] }));
+    if (value.includes("owner/support-queue")) return Promise.resolve(response({ queue: [] }));
+    if (value.includes("owner/health")) return Promise.resolve(response({ checks: {} }));
+    if (value.includes("owner/features")) return Promise.resolve(response({ features: {} }));
+    return Promise.resolve(response({ audit: [] }));
+  });
+
+  render(<OwnerConsole />);
+  fireEvent.click(await screen.findByRole("tab", { name: /Backups/ }));
+  expect(screen.getByText(/Archives are not encrypted on the disk/)).toBeInTheDocument();
+  fireEvent.click(await screen.findByRole("button", { name: "Verify" }));
+  expect(await screen.findByText("Verified: 15 files match the manifest and stored checksum; database ok.")).toBeInTheDocument();
+  const [url, options] = global.fetch.mock.calls.find(([, call]) => call?.method === "POST");
+  expect(String(url)).toContain(`owner/backups/${backup.name}/verify`);
+  expect(options.credentials).toBe("include");
+});
