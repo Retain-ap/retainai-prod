@@ -68,7 +68,8 @@ SETTLEMENT_TEXT = {
     "outside_stripe": "Marked as paid outside Stripe by the business",
     "no_charge": "Stripe shows paid with no charge (credit balance, minimum amount or other settlement)",
     "charge_unreadable": "Stripe's charge for this invoice could not be read",
-    "charge_incomplete": "The charge does not prove the full paid amount",
+    "charge_incomplete": "The charge does not prove the full paid amount was collected (not captured, partly captured, or different)",
+    "disputed": "The customer disputed this charge",
     "manual": "Recorded by the owner",
 }
 
@@ -364,9 +365,9 @@ def _int(value):
 def stripe_invoice_record(invoice, account_id):
     """Evidence from one paid invoice, read with API version 2023-10-16.
 
-    Provider-verified only when the expanded ``charge`` proves the payment:
-    paid, succeeded, live like the invoice, same currency and exactly the
-    amount Stripe reports as paid. Anything else is kept as unconfirmed, or
+    Provider-verified only when the expanded ``charge`` proves collected
+    money: paid, succeeded, captured for exactly the amount Stripe reports as
+    paid, not disputed, live like the invoice and in the same currency. Anything else is kept as unconfirmed, or
     as owner-recorded when the business marked it paid outside Stripe.
     Returns None for anything that is not a paid invoice with a valid time.
     """
@@ -388,9 +389,16 @@ def stripe_invoice_record(invoice, account_id):
         verification, settlement = UNCONFIRMED, "no_charge"
     elif isinstance(charge, str):
         verification, settlement = UNCONFIRMED, "charge_unreadable"
+    elif _field(charge, "disputed") is True:
+        # Money under dispute may be reversed: never call it collected revenue.
+        verification, settlement = UNCONFIRMED, "disputed"
     elif (
         _field(charge, "paid") is True
         and str(_field(charge, "status") or "") == "succeeded"
+        # paid/succeeded can be an uncaptured authorization: require the
+        # charge to be captured for exactly the amount the invoice says paid.
+        and _field(charge, "captured") is True
+        and _int(_field(charge, "amount_captured")) == amount_paid
         and str(_field(charge, "currency") or "").lower() == currency
         and bool(_field(charge, "livemode")) == livemode
         and _int(_field(charge, "amount")) == amount_paid

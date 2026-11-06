@@ -35,8 +35,8 @@ def invoice(invoice_id="in_1", *, email="ana@example.com", amount=12000, currenc
         "id": invoice_id, "status": status, "currency": currency, "amount_paid": amount, "livemode": livemode,
         "customer_email": email, "customer_name": "Ana", "number": f"N-{invoice_id}", "created": ts(created),
         "status_transitions": {"paid_at": ts(paid), "finalized_at": ts(created)},
-        "charge": {"id": "ch_1", "paid": True, "status": "succeeded", "currency": currency, "amount": amount,
-                   "livemode": livemode, "amount_refunded": refunded},
+        "charge": {"id": "ch_1", "paid": True, "status": "succeeded", "captured": True, "amount_captured": amount,
+                   "disputed": False, "currency": currency, "amount": amount, "livemode": livemode, "amount_refunded": refunded},
         "post_payment_credit_notes_amount": credit_notes,
         "paid_out_of_band": out_of_band,
     }
@@ -80,6 +80,10 @@ class EvidenceRuleTests(unittest.TestCase):
             "currency mismatch": ({"charge": {**invoice()["charge"], "currency": "usd"}}, vr.UNCONFIRMED, "charge_incomplete"),
             "test charge on live invoice": ({"charge": {**invoice()["charge"], "livemode": False}}, vr.UNCONFIRMED, "charge_incomplete"),
             "marked paid outside Stripe": ({"paid_out_of_band": True, "charge": None}, vr.OWNER, "outside_stripe"),
+            "authorized, not captured": ({"charge": {**invoice()["charge"], "captured": False, "amount_captured": 0}}, vr.UNCONFIRMED, "charge_incomplete"),
+            "captured flag missing": ({"charge": {k: v for k, v in invoice()["charge"].items() if k != "captured"}}, vr.UNCONFIRMED, "charge_incomplete"),
+            "partly captured": ({"charge": {**invoice()["charge"], "amount_captured": 6000}}, vr.UNCONFIRMED, "charge_incomplete"),
+            "disputed": ({"charge": {**invoice()["charge"], "disputed": True}}, vr.UNCONFIRMED, "disputed"),
         }
         for label, (change, verification, settlement) in cases.items():
             with self.subTest(label):
