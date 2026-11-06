@@ -1582,6 +1582,7 @@ def api_get_user(email):
         "businessName": base.get("business", ""),
         "businessType": base.get("businessType", ""),
         "lineOfBusiness": base.get("businessType", ""),
+        "setup_preset": _setup_preset(base),
         "location": base.get("location", ""),
         "people": base.get("people") or base.get("teamSize", ""),
         "teamSize": base.get("teamSize") or base.get("people", ""),
@@ -1651,6 +1652,7 @@ def api_profile():
             "businessName": base.get("business", ""),
             "businessType": base.get("businessType", ""),
             "lineOfBusiness": base.get("businessType", ""),
+            "setup_preset": _setup_preset(base),
             "location": base.get("location", ""),
             "people": base.get("people") or base.get("teamSize", ""),
             "teamSize": base.get("teamSize") or base.get("people", ""),
@@ -1731,6 +1733,12 @@ def api_profile():
                 return jsonify({"error": "Business type must be 120 characters or fewer."}), 400
             target["businessType"] = business_type_value
 
+        if "setup_preset" in data:
+            preset_value = str(data.get("setup_preset") or "general").strip().lower()
+            if preset_value not in SETUP_PRESETS:
+                return jsonify({"error": "Choose the general setup or the salon and barber preset."}), 400
+            target["setup_preset"] = preset_value
+
         if "location" in data:
             location_value = str(data.get("location") or "").strip()
             if len(location_value) > 200:
@@ -1757,6 +1765,7 @@ def api_profile():
             "businessName": target.get("business", ""),
             "businessType": target.get("businessType", ""),
             "lineOfBusiness": target.get("businessType", ""),
+            "setup_preset": _setup_preset(target),
             "location": target.get("location", ""),
             "people": target.get("people") or target.get("teamSize", ""),
             "teamSize": target.get("teamSize") or target.get("people", ""),
@@ -2496,6 +2505,16 @@ def _platform_owner_emails() -> set:
 
 def _is_platform_owner(email: str) -> bool:
     return _norm_email(email) in _platform_owner_emails()
+
+# Optional setup presets. "general" is the default for every workspace; the
+# salon/barber preset only changes suggested playbooks, checklist and defaults.
+SETUP_PRESETS = {"general", "salon_barber"}
+
+
+def _setup_preset(record) -> str:
+    value = str((record or {}).get("setup_preset") or "general").strip().lower()
+    return value if value in SETUP_PRESETS else "general"
+
 
 def _req_user_email() -> str:
     return _norm_email(_session_org_email())
@@ -4351,6 +4370,7 @@ def _user_payload(email: str, user: dict) -> dict:
         "logo": logo,
 
         "businessType": base.get("businessType", ""),
+        "setup_preset": _setup_preset(base),
         "business": base.get("business", ""),
         "people": base.get("people") or base.get("teamSize", ""),
         "location": base.get("location", ""),

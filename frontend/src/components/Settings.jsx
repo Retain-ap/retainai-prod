@@ -188,6 +188,7 @@ export default function Settings({
     type: profile?.businessType || profile?.lineOfBusiness || "",
     location: profile?.location || "",
     teamSize: String(profile?.people ?? profile?.teamSize ?? ""),
+    preset: profile?.setup_preset || "general",
   }));
 
   const [editMode, setEditMode] = useState(false);
@@ -313,6 +314,7 @@ export default function Settings({
         prev.logo !== next.logo ||
         prev.business !== next.business ||
         prev.businessType !== next.businessType ||
+        prev.setup_preset !== next.setup_preset ||
         prev.location !== next.location ||
         String(prev.people ?? "") !== String(next.people ?? "") ||
         Boolean(prev.stripe_connected) !== Boolean(next.stripe_connected) ||
@@ -333,6 +335,7 @@ export default function Settings({
         type: next.businessType || next.lineOfBusiness || "",
         location: next.location || "",
         teamSize: String(next.people ?? next.teamSize ?? ""),
+        preset: next.setup_preset || "general",
       });
     }
 
@@ -382,6 +385,7 @@ export default function Settings({
           type: fromBackend.businessType || fromBackend.lineOfBusiness || "",
           location: fromBackend.location || "",
           teamSize: String(fromBackend.people ?? fromBackend.teamSize ?? ""),
+          preset: fromBackend.setup_preset || "general",
         });
       }
 
@@ -414,6 +418,7 @@ export default function Settings({
             type: fromBackend.businessType || fromBackend.lineOfBusiness || "",
             location: fromBackend.location || "",
             teamSize: String(fromBackend.people ?? fromBackend.teamSize ?? ""),
+            preset: fromBackend.setup_preset || "general",
           });
         }
 
@@ -541,6 +546,7 @@ export default function Settings({
       location: form.location,
       people: form.teamSize,
       teamSize: form.teamSize,
+      setup_preset: form.preset || "general",
       stripe_connected: profile?.stripe_connected || false,
       stripe_account_id: profile?.stripe_account_id || "",
     };
@@ -872,6 +878,26 @@ export default function Settings({
                   </div>
                 ))}
 
+                <div className="field-row">
+                  <label className="field-label" htmlFor="setup-preset">Setup preset</label>
+                  {editMode ? (
+                    <select
+                      id="setup-preset"
+                      className="field-input"
+                      value={form.preset || "general"}
+                      onChange={(e) => {
+                        formDirtyRef.current = true;
+                        setForm((f) => ({ ...f, preset: e.target.value }));
+                      }}
+                    >
+                      <option value="general">General (any business)</option>
+                      <option value="salon_barber">Salon and barber</option>
+                    </select>
+                  ) : (
+                    <div className="field-value">{form.preset === "salon_barber" ? "Salon and barber" : "General"}</div>
+                  )}
+                </div>
+
                 <div className="profile-actions">
                   {capabilities.canEditBusiness && editMode ? (
                     <>
@@ -893,6 +919,7 @@ export default function Settings({
                             teamSize: String(
                               profile.people ?? profile.teamSize ?? ""
                             ),
+                            preset: profile.setup_preset || "general",
                           });
                           setInfo("");
                         }}

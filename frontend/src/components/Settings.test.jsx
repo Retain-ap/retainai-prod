@@ -157,3 +157,26 @@ test("tab links respect role restrictions and never put a hidden tab in the URL"
   await waitFor(() => expect(screen.getByRole("button", { name: "Profile" })).toHaveAttribute("aria-current", "page"));
   expect(screen.getByTestId("location")).toHaveTextContent("/app?tab=profile");
 });
+
+test("the owner can choose the optional salon and barber preset; general is the default", async () => {
+  localStorage.setItem("user", JSON.stringify(user));
+  global.fetch = jest.fn().mockImplementation((_url, options = {}) => {
+    if (options.method === "POST") return Promise.resolve(response({ ok: true, ...user, setup_preset: "salon_barber" }));
+    return Promise.resolve(response(user));
+  });
+
+  render(
+    <MemoryRouter>
+      <Settings user={user} refreshUser={jest.fn()} />
+    </MemoryRouter>
+  );
+
+  expect(await screen.findByText("General")).toBeInTheDocument();
+  fireEvent.click(await screen.findByRole("button", { name: "Edit Profile" }));
+  fireEvent.change(screen.getByLabelText("Setup preset"), { target: { value: "salon_barber" } });
+  fireEvent.click(screen.getByRole("button", { name: "Save" }));
+
+  await waitFor(() => expect(global.fetch.mock.calls.some(([, options]) => options?.method === "POST")).toBe(true));
+  const [, options] = global.fetch.mock.calls.find(([, call]) => call?.method === "POST");
+  expect(JSON.parse(options.body)).toMatchObject({ setup_preset: "salon_barber", businessType: "Salon" });
+});

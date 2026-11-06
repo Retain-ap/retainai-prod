@@ -1247,6 +1247,7 @@ function CrmDashboard({ authenticatedUser }) {
             appointments={crmAppointments}
             user={user}
             onUpdateLead={handleUpdateLead}
+            onOpenImports={openImports}
             onOpenMessages={() => openSection("messages")}
             onOpenAutomations={(playbook) => {
               try {

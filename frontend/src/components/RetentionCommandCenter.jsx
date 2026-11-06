@@ -19,6 +19,7 @@ import {
   parseAppointmentDateTime,
 } from "./appointmentDateTime";
 import ValueReceipt from "./ValueReceipt";
+import SalonSetupPanel, { SALON_PLAYBOOKS } from "./SalonSetupPanel";
 import { dueForRebooking, rebookingSuggestions } from "../rebooking";
 import "./product-system.css";
 
@@ -80,7 +81,7 @@ function HealthPill({ health }) {
   return <span className={`health-pill ${health.kind}`}>{health.label} · {health.score}</span>;
 }
 
-export default function RetentionCommandCenter({ leads = [], appointments = [], user, onOpenAutomations, onOpenMessages, onUpdateLead }) {
+export default function RetentionCommandCenter({ leads = [], appointments = [], user, onOpenAutomations, onOpenMessages, onUpdateLead, onOpenImports }) {
   const [tab, setTab] = useState("briefing");
   const [timelineLead, setTimelineLead] = useState(null);
 
@@ -96,6 +97,10 @@ export default function RetentionCommandCenter({ leads = [], appointments = [], 
     () => rebookingSuggestions({ leads, appointments, user, today: dayKeyNow(workspaceTimeZone) }),
     [leads, appointments, user, workspaceTimeZone]
   );
+  const salonPreset = user?.setup_preset === "salon_barber";
+  const playbooks = salonPreset
+    ? SALON_PLAYBOOKS.map((playbook) => ({ ...playbook, icon: PLAYBOOKS.find((item) => item.key === playbook.key)?.icon }))
+    : PLAYBOOKS;
   const estimateFor = (lead) => Number(lead.next_value || lead.average_sale || lead.value || 75);
   const healthByLead = new Map(enriched.map((item) => [item.lead, item.health]));
   const withVisits = new Set(rebooking.map((item) => item.lead));
@@ -187,6 +192,16 @@ export default function RetentionCommandCenter({ leads = [], appointments = [], 
 
       {tab === "briefing" && (
         <div className="product-grid">
+          {salonPreset && (
+            <SalonSetupPanel
+              leads={leads}
+              appointments={appointments}
+              rebooking={rebooking}
+              today={dayKeyNow(workspaceTimeZone)}
+              onOpenPlaybooks={() => setTab("playbooks")}
+              onOpenImports={onOpenImports}
+            />
+          )}
           <section className="product-card">
             <div className="product-card-header"><div><h2>Today’s priorities</h2><p className="product-card-copy">The highest-impact actions to take now.</p></div></div>
             <div className="insight-list">
@@ -282,12 +297,13 @@ export default function RetentionCommandCenter({ leads = [], appointments = [], 
 
       {tab === "playbooks" && (
         <div className="product-grid">
-          {PLAYBOOKS.map((playbook) => (
+          {playbooks.map((playbook) => (
             <section className="product-card" key={playbook.key}>
               <div className="product-eyebrow">{playbook.icon} Ready-made playbook</div>
               <h3 style={{ marginTop: 12 }}>{playbook.name}</h3>
               <p style={{ color: "var(--ra-muted)", lineHeight: 1.6 }}>{playbook.copy}</p>
-              <button className="product-button primary" onClick={() => onOpenAutomations?.(playbook.key)}>Use this playbook</button>
+              <button className="product-button primary" onClick={() => onOpenAutomations?.(playbook.key)}>Review this playbook</button>
+              <small className="product-card-copy" style={{ display: "block", marginTop: 8 }}>Opens it for review. Nothing is sent until you activate it.</small>
             </section>
           ))}
         </div>

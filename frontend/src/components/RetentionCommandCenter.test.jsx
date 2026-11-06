@@ -1,5 +1,5 @@
 import React from "react";
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import RetentionCommandCenter from "./RetentionCommandCenter";
 
 function daysAgo(days) {
@@ -57,4 +57,41 @@ test("the Value Receipt keeps estimates separate and makes no protected-value cl
   expect(screen.queryByText(/protecting relationships worth/)).not.toBeInTheDocument();
   expect(screen.queryByText(/admin time saved/i)).not.toBeInTheDocument();
   await waitFor(() => expect(screen.getByRole("alert")).toHaveTextContent("Only the workspace owner can see revenue."));
+});
+
+test("general mode keeps the general playbooks and shows no salon setup", () => {
+  render(<RetentionCommandCenter leads={[ana]} appointments={appointments} user={{ timezone: "UTC" }} />);
+  expect(screen.queryByRole("region", { name: "Salon and barber setup" })).not.toBeInTheDocument();
+  fireEvent.click(screen.getByRole("tab", { name: "Playbooks" }));
+  expect(screen.getByText("Recover unpaid invoices")).toBeInTheDocument();
+  expect(screen.queryByText("Day-before appointment reminder")).not.toBeInTheDocument();
+});
+
+test("the salon preset adds a checklist, count-only metrics and review-only playbooks", () => {
+  const onOpenAutomations = jest.fn();
+  const imported = { id: "i", name: "Imported Iris", email: "iris@example.com", imported_at: "2026-11-01T00:00:00Z" };
+  const noShow = { lead: ana, date: daysAgo(5), time: "10:00", status: "no-show", _backend: {} };
+  render(
+    <RetentionCommandCenter
+      leads={[ana, imported]}
+      appointments={[...appointments, noShow]}
+      user={{ timezone: "UTC", setup_preset: "salon_barber" }}
+      onOpenAutomations={onOpenAutomations}
+    />
+  );
+  const panel = screen.getByRole("region", { name: "Salon and barber setup" });
+  expect(within(panel).getByText("Confirm email consent for 1 imported client")).toBeInTheDocument();
+  expect(within(panel).getByText("A client has a personal rebooking rhythm")).toBeInTheDocument();
+  const metrics = within(panel).getByTestId("salon-metrics");
+  expect(within(metrics).getByTestId("salon-metric-withRhythm")).toHaveTextContent(/^1Clients with a rebooking rhythm$/);
+  expect(within(metrics).getByTestId("salon-metric-dueNow")).toHaveTextContent(/^1Due to rebook this week$/);
+  expect(within(metrics).getByTestId("salon-metric-noShowRate30")).toHaveTextContent(/^100%No-show rate/);
+  expect(panel).not.toHaveTextContent("Ana Rivera"); // counts only, no names
+  expect(panel).toHaveTextContent(/none connected yet/);
+
+  fireEvent.click(within(panel).getByRole("button", { name: "Review" }));
+  expect(screen.getByText("Day-before appointment reminder")).toBeInTheDocument();
+  fireEvent.click(screen.getAllByRole("button", { name: "Review this playbook" })[0]);
+  expect(onOpenAutomations).toHaveBeenCalledWith("rebook");
+  expect(screen.getAllByText(/Nothing is sent until you activate it/).length).toBeGreaterThan(0);
 });
