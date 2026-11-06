@@ -18,7 +18,7 @@ import { useSettings } from "./SettingsContext";
 import Automations from "./Automations";
 import InviteTeamModal from "./InviteTeamModal";
 import { apiUrl } from "../apiBase";
-import { conflictMessage, diffLeads, hasChanges, rebaseOnReload, sameValue, saveLeadChanges } from "../leadSync";
+import { conflictMessage, createLeadsApi, diffLeads, hasChanges, rebaseOnReload, sameValue, saveLeadChanges } from "../leadSync";
 import { FaBars } from "react-icons/fa";
 import RetentionCommandCenter from "./RetentionCommandCenter";
 import OwnerConsole from "./OwnerConsole";
@@ -382,7 +382,8 @@ function CrmDashboard({ authenticatedUser }) {
   // ---- Lead persistence strategy (fixes your issue) ----
   // 1) Load local cache immediately (fast UI)
   // 2) Fetch authoritative from backend: GET /api/leads with X-User-Email
-  // 3) Save to backend: POST /api/leads with X-User-Email + {leads:[...]} (debounced)
+  // 3) Save to backend: POST /api/leads with the confirmed list's base_revision
+  //    plus the user's own changes (see leadSync.js); stale saves get 409.
   const saveTimerRef = useRef(null);
   const leadSaveQueueRef = useRef(Promise.resolve());
   const lastSavedJsonRef = useRef("");
@@ -433,19 +434,7 @@ function CrmDashboard({ authenticatedUser }) {
     setTags(extractTags(lsLeads, lsTags));
   }, [effectiveEmail]);
 
-  const fetchServerLeads = useCallback(async (email) => {
-    const res = await fetch(apiUrl("leads"), {
-      method: "GET",
-      credentials: "include",
-      headers: {
-        Accept: "application/json",
-        "X-User-Email": email,
-      },
-    });
-    const data = await res.json().catch(() => ({}));
-    if (!res.ok || !Array.isArray(data?.leads)) throw new Error(`Could not load contacts (${res.status})`);
-    return { revision: data?.revision || "", leads: data.leads };
-  }, []);
+  const fetchServerLeads = useCallback((email) => createLeadsApi(email).load(), []);
 
   // Fetch leads from backend (authoritative); again after an import.
   useEffect(() => {
@@ -510,20 +499,7 @@ function CrmDashboard({ authenticatedUser }) {
           server: serverLeadsRef.current,
           changeSets: [...earlier, ...changeSets],
           load: () => fetchServerLeads(email),
-          send: async (payload) => {
-            const res = await fetch(apiUrl("leads"), {
-              method: "POST",
-              credentials: "include",
-              headers: {
-                "Content-Type": "application/json",
-                Accept: "application/json",
-                "X-User-Email": email,
-              },
-              body: JSON.stringify(payload),
-            });
-            const data = await res.json().catch(() => ({}));
-            return { status: res.status, data };
-          },
+          send: createLeadsApi(email).send,
         });
         unsavedChangesRef.current = [];
         setHasUnsavedLeads(false);
@@ -662,6 +638,30 @@ function CrmDashboard({ authenticatedUser }) {
     },
     // eslint-disable-next-line
     [effectiveEmail, userTags, postLeadChanges, showSavedLeads]
+  );
+
+  // For other screens (appointments): show `next` at once, save only its
+  // changes through the shared path, and roll back if the save fails.
+  const saveLeadList = useCallback(
+    async (next, previous = leadsRef.current) => {
+      leadsRef.current = next;
+      setLeads(next);
+      try {
+        const result = await persistLeadsImmediately(next, previous);
+        setLeadPersistenceError(conflictMessage(result?.conflicts));
+        return result;
+      } catch (error) {
+        if (leadsRef.current === next) {
+          leadsRef.current = previous;
+          setLeads(previous);
+          try {
+            localStorage.setItem(leadsKey(effectiveEmail), JSON.stringify(previous));
+          } catch {}
+        }
+        throw error;
+      }
+    },
+    [effectiveEmail, persistLeadsImmediately]
   );
 
   const handleUpdateLead = useCallback(
@@ -1441,6 +1441,7 @@ function CrmDashboard({ authenticatedUser }) {
                 user={user}
                 leads={leads}
                 setLeads={setLeads}
+                saveLeads={saveLeadList}
                 events={crmAppointments}
                 googleEvents={googleEvents}
               />

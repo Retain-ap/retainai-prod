@@ -154,3 +154,27 @@ test("gives up with a clear error if the list keeps changing", async () => {
   await expect(saveLeadChanges({ send, load: async () => ({ revision: "r1", leads: [ana] }), server: { revision: "r1", leads: [ana] }, changeSets: [diffLeads([ana], [ben])] }))
     .rejects.toThrow(/kept changing/);
 });
+
+test("createLeadsApi + saveFreshLeadChanges: loads first, patches one contact, sends the revision", async () => {
+  const { createLeadsApi, leadPatchChanges, saveFreshLeadChanges } = jest.requireActual("./leadSync");
+  const requests = [];
+  const fetchImpl = jest.fn(async (url, options) => {
+    requests.push({ url, method: options.method, body: options.body ? JSON.parse(options.body) : null, headers: options.headers });
+    if (options.method === "GET") return { ok: true, status: 200, json: async () => ({ leads: [{ ...ana, name: "Newer" }, cara], revision: "r7" }) };
+    const body = JSON.parse(options.body);
+    return { ok: true, status: 200, json: async () => ({ ok: true, count: body.leads.length, revision: "r8", leads: body.leads }) };
+  });
+  const result = await saveFreshLeadChanges(createLeadsApi("owner@example.com", fetchImpl), [leadPatchChanges(ana, { notes: "Hi" })]);
+  expect(requests.map((request) => request.method)).toEqual(["GET", "POST"]);
+  expect(requests[1].url).toMatch(/\/api\/leads$/);
+  expect(requests[1].headers["X-User-Email"]).toBe("owner@example.com");
+  expect(requests[1].body).toEqual({ leads: [{ ...ana, name: "Newer", notes: "Hi" }, cara], base_revision: "r7" });
+  expect(result.leads).toEqual(requests[1].body.leads);
+});
+
+test("a field patch never recreates a contact deleted elsewhere", () => {
+  const { leadPatchChanges } = jest.requireActual("./leadSync");
+  const { leads, conflicts } = applyLeadChanges([cara], leadPatchChanges(ana, { notes: "Hi" }));
+  expect(leads).toEqual([cara]);
+  expect(conflicts).toEqual([{ key: "a", name: "Ana", reason: "missing" }]);
+});

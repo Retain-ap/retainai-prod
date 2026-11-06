@@ -6,6 +6,8 @@
 // answers 409 with the current list instead of overwriting it. The client then
 // re-applies only the change the user made and tries again.
 
+import { apiUrl } from "./apiBase";
+
 export const leadKey = (lead) => String(lead?.id ?? lead?.email ?? "");
 
 function stable(value) {
@@ -50,8 +52,12 @@ export function applyLeadChanges(server = [], changes = { upserts: [], deletes: 
   const conflicts = [];
   const label = (lead) => lead?.name || lead?.email || "a contact";
 
-  changes.upserts.forEach(({ key, base, next }) => {
+  changes.upserts.forEach(({ key, base, next, patchOnly }) => {
     const index = position.get(key);
+    if (index === undefined && patchOnly) {
+      conflicts.push({ key, name: label(next), reason: "missing" });
+      return;
+    }
     if (index === undefined) {
       if (base) conflicts.push({ key, name: label(next), reason: "restored" });
       position.set(key, leads.length);
@@ -134,6 +140,42 @@ export async function saveLeadChanges({ send, load, server, changeSets, maxAttem
     throw new Error(data?.error || `Could not save customer changes (${status})`);
   }
   throw new Error("Contacts kept changing while saving. Reload the page and try again.");
+}
+
+/** GET/POST /api/leads for one workspace, in the shape saveLeadChanges expects. */
+export function createLeadsApi(email, fetchImpl = (...args) => fetch(...args)) {
+  const headers = { Accept: "application/json", ...(email ? { "X-User-Email": email } : {}) };
+  return {
+    async load() {
+      const res = await fetchImpl(apiUrl("leads"), { method: "GET", credentials: "include", headers });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok || !Array.isArray(data?.leads)) throw new Error(data?.error || `Could not load contacts (${res.status})`);
+      return { revision: data?.revision || "", leads: data.leads };
+    },
+    async send(payload) {
+      const res = await fetchImpl(apiUrl("leads"), {
+        method: "POST",
+        credentials: "include",
+        headers: { ...headers, "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+      const data = await res.json().catch(() => ({}));
+      return { status: res.status, data };
+    },
+  };
+}
+
+/**
+ * For screens without the dashboard's confirmed list: load the latest list,
+ * apply only these changes and save it with that list's revision.
+ */
+export function saveFreshLeadChanges(api, changeSets) {
+  return saveLeadChanges({ send: api.send, load: api.load, server: { revision: "", leads: [] }, changeSets });
+}
+
+/** A change set that writes only `patch`'s fields onto one existing contact. */
+export function leadPatchChanges(lead, patch) {
+  return { upserts: [{ key: leadKey(lead), base: lead, next: { ...lead, ...patch }, patchOnly: true }], deletes: [] };
 }
 
 /**
