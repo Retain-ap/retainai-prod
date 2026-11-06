@@ -600,3 +600,5 @@ body:has(.onboarding-guide-pill) .crm-main-content { padding-bottom: 88px !impor
 .onboarding-guide > button svg:first-child { color: rgba(255, 255, 255, 0.22); }
 .onboarding-guide > button.done { color: var(--ra-muted); text-decoration: line-through; }
 .onboarding-guide > button.done svg:first-child { color: #57d38c; }
+.rebook-reasons { margin: 6px 0 0; padding-left: 18px; color: var(--ra-muted); font-size: 12px; line-height: 1.5; }
+.rebook-actions { display: flex; flex-wrap: wrap; gap: 8px; justify-content: flex-end; }

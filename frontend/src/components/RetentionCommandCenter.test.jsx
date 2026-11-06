@@ -1,0 +1,60 @@
+import React from "react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import RetentionCommandCenter from "./RetentionCommandCenter";
+
+function daysAgo(days) {
+  const date = new Date();
+  date.setDate(date.getDate() - days);
+  const pad = (value) => String(value).padStart(2, "0");
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`;
+}
+
+const ana = { id: "a", name: "Ana Rivera", email: "ana@example.com", last_contacted: new Date().toISOString() };
+const ben = { id: "b", name: "Ben Old", email: "ben@example.com", last_contacted: "2025-01-01T00:00:00Z" };
+const completed = (lead, days) => ({ lead, date: daysAgo(days), time: "10:00", status: "completed", _backend: {} });
+// Ana visits every 30 days; her last visit was 40 days ago, so she is 10 days overdue.
+const appointments = [completed(ana, 100), completed(ana, 70), completed(ana, 40)];
+
+beforeEach(() => {
+  global.fetch = jest.fn(async () => ({ ok: false, status: 403, json: async () => ({ error: "owner_required" }) }));
+});
+afterEach(() => { delete global.fetch; });
+
+test("rebooking opportunities use each customer's visit rhythm and save an owner interval", async () => {
+  const onUpdateLead = jest.fn().mockResolvedValue(undefined);
+  const prompt = jest.spyOn(window, "prompt").mockReturnValue("21");
+  render(<RetentionCommandCenter leads={[ana, ben]} appointments={appointments} user={{ timezone: "UTC" }} onUpdateLead={onUpdateLead} />);
+  fireEvent.click(screen.getByRole("tab", { name: "Revenue Opportunities" }));
+
+  expect(screen.getByText(/Rebooking overdue by 10 days · every 30 days/)).toBeInTheDocument();
+  expect(screen.getByText(/median of 2 gaps between 3 completed visits/)).toBeInTheDocument();
+  expect(screen.getByText(/Win-back: no completed visit recorded/)).toBeInTheDocument();
+  expect(screen.getByText(/Values are estimates, not revenue/)).toBeInTheDocument();
+
+  fireEvent.click(screen.getByRole("button", { name: "Set interval" }));
+  expect(onUpdateLead).toHaveBeenCalledWith({ ...ana, rebook_interval_days: 21 });
+  prompt.mockRestore();
+});
+
+test("rejects an invalid interval without saving", () => {
+  const onUpdateLead = jest.fn();
+  const prompt = jest.spyOn(window, "prompt").mockReturnValue("3");
+  const alert = jest.spyOn(window, "alert").mockImplementation(() => {});
+  render(<RetentionCommandCenter leads={[ana]} appointments={appointments} user={{ timezone: "UTC" }} onUpdateLead={onUpdateLead} />);
+  fireEvent.click(screen.getByRole("tab", { name: "Revenue Opportunities" }));
+  fireEvent.click(screen.getByRole("button", { name: "Set interval" }));
+  expect(onUpdateLead).not.toHaveBeenCalled();
+  expect(alert).toHaveBeenCalled();
+  prompt.mockRestore();
+  alert.mockRestore();
+});
+
+test("the Value Receipt keeps estimates separate and makes no protected-value claim", async () => {
+  render(<RetentionCommandCenter leads={[ana, ben]} appointments={appointments} user={{ timezone: "UTC" }} />);
+  fireEvent.click(screen.getByRole("tab", { name: "Value Receipt" }));
+  expect(screen.getByText("Estimates · not revenue")).toBeInTheDocument();
+  expect(screen.getByText(/never included in verified revenue/)).toBeInTheDocument();
+  expect(screen.queryByText(/protecting relationships worth/)).not.toBeInTheDocument();
+  expect(screen.queryByText(/admin time saved/i)).not.toBeInTheDocument();
+  await waitFor(() => expect(screen.getByRole("alert")).toHaveTextContent("Only the workspace owner can see revenue."));
+});

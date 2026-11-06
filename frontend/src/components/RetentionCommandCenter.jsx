@@ -19,6 +19,7 @@ import {
   parseAppointmentDateTime,
 } from "./appointmentDateTime";
 import ValueReceipt from "./ValueReceipt";
+import { dueForRebooking, rebookingSuggestions } from "../rebooking";
 import "./product-system.css";
 
 const DAY = 24 * 60 * 60 * 1000;
@@ -79,7 +80,7 @@ function HealthPill({ health }) {
   return <span className={`health-pill ${health.kind}`}>{health.label} · {health.score}</span>;
 }
 
-export default function RetentionCommandCenter({ leads = [], appointments = [], user, onOpenAutomations, onOpenMessages }) {
+export default function RetentionCommandCenter({ leads = [], appointments = [], user, onOpenAutomations, onOpenMessages, onUpdateLead }) {
   const [tab, setTab] = useState("briefing");
   const [timelineLead, setTimelineLead] = useState(null);
 
@@ -90,13 +91,28 @@ export default function RetentionCommandCenter({ leads = [], appointments = [], 
   const atRisk = enriched.filter((item) => ["risk", "inactive"].includes(item.health.kind));
   const needsAttention = enriched.filter((item) => item.health.kind === "attention");
   const healthy = enriched.filter((item) => ["healthy", "vip"].includes(item.health.kind));
-  const opportunities = enriched
-    .filter((item) => item.health.days >= 21)
-    .map((item) => ({
-      ...item,
-      reason: item.health.days > 90 ? "Win-back opportunity" : "Likely ready to rebook",
-      value: Number(item.lead.next_value || item.lead.average_sale || item.lead.value || 75),
-    }));
+  const workspaceTimeZone = user?.timezone || getBrowserTimeZone();
+  const rebooking = useMemo(
+    () => rebookingSuggestions({ leads, appointments, user, today: dayKeyNow(workspaceTimeZone) }),
+    [leads, appointments, user, workspaceTimeZone]
+  );
+  const estimateFor = (lead) => Number(lead.next_value || lead.average_sale || lead.value || 75);
+  const healthByLead = new Map(enriched.map((item) => [item.lead, item.health]));
+  const withVisits = new Set(rebooking.map((item) => item.lead));
+  const opportunities = [
+    // Due or overdue against each customer's own completed-visit rhythm.
+    ...dueForRebooking(rebooking).map((item) => ({
+      lead: item.lead,
+      health: healthByLead.get(item.lead) || healthFor(item.lead),
+      rebook: item,
+      reason: item.daysUntilDue < 0 ? `Rebooking overdue by ${-item.daysUntilDue} days` : item.daysUntilDue === 0 ? "Rebooking due today" : `Rebooking due in ${item.daysUntilDue} days`,
+      value: estimateFor(item.lead),
+    })),
+    // No completed visit on record: only long inactivity suggests a win-back.
+    ...enriched
+      .filter((item) => !withVisits.has(item.lead) && item.health.days > 90)
+      .map((item) => ({ ...item, reason: "Win-back: no completed visit recorded and inactive for 90+ days", value: estimateFor(item.lead) })),
+  ];
   const opportunityValue = opportunities.reduce((sum, item) => sum + item.value, 0);
   const pulse = leads.length
     ? Math.round(enriched.reduce((sum, item) => sum + item.health.score, 0) / enriched.length)
@@ -209,15 +225,42 @@ export default function RetentionCommandCenter({ leads = [], appointments = [], 
 
       {tab === "opportunities" && (
         <section className="product-card" style={{ marginTop: 18 }}>
-          <div className="product-card-header"><div><h2>Revenue Opportunities</h2><p className="product-card-copy">Customers most likely to benefit from a timely follow-up.</p></div><strong>{money(opportunityValue)}</strong></div>
+          <div className="product-card-header"><div><h2>Revenue Opportunities</h2><p className="product-card-copy">Rebooking dates come from each customer's completed visits. Values are estimates, not revenue.</p></div><strong title="Estimate">{money(opportunityValue)}</strong></div>
           <div className="insight-list">
-            {opportunities.slice(0, 30).map(({ lead, health, reason, value }) => (
-              <div className="insight-row" key={lead.id || lead.email}>
-                <div className="insight-row-main"><strong>{leadName(lead)}</strong><small>{reason} · {health.days} days since activity</small></div>
-                <strong>{money(value)}</strong>
-                <button className="product-button" onClick={() => setTimelineLead({ lead, health })}>View relationship</button>
+            {opportunities.slice(0, 30).map(({ lead, health, reason, value, rebook }) => (
+              <div className="insight-row rebook-row" key={lead.id || lead.email}>
+                <div className="insight-row-main">
+                  <strong>{leadName(lead)}</strong>
+                  <small>{reason}{rebook ? ` · every ${rebook.intervalDays} days` : ` · ${health.days} days since activity`}</small>
+                  {rebook && <ul className="rebook-reasons">{rebook.reasons.map((text) => <li key={text}>{text}</li>)}</ul>}
+                </div>
+                <strong title="Estimate">{money(value)}</strong>
+                <div className="rebook-actions">
+                  {rebook && onUpdateLead && (
+                    <button
+                      className="product-button"
+                      onClick={() => {
+                        const answer = window.prompt(`Rebook ${leadName(lead)} every how many days? (7 to 365)`, String(rebook.intervalDays));
+                        const days = Number(answer);
+                        if (answer === null) return;
+                        if (!Number.isInteger(days) || days < 7 || days > 365) {
+                          window.alert("Enter a whole number of days from 7 to 365.");
+                          return;
+                        }
+                        Promise.resolve(onUpdateLead({ ...lead, rebook_interval_days: days })).catch((error) => window.alert(error?.message || "The interval could not be saved."));
+                      }}
+                    >
+                      Set interval
+                    </button>
+                  )}
+                  {rebook?.basis === "override" && onUpdateLead && (
+                    <button className="product-button" onClick={() => Promise.resolve(onUpdateLead({ ...lead, rebook_interval_days: null })).catch((error) => window.alert(error?.message || "The change could not be saved."))}>Use visit history</button>
+                  )}
+                  <button className="product-button" onClick={() => setTimelineLead({ lead, health })}>View relationship</button>
+                </div>
               </div>
             ))}
+            {!opportunities.length && <div className="insight-row"><div className="insight-row-main"><strong>No one is due right now</strong><small>Customers appear here when their usual time between completed visits has nearly passed.</small></div></div>}
           </div>
         </section>
       )}
