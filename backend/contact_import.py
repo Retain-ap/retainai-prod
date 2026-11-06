@@ -262,12 +262,19 @@ def parse_file(filename, raw):
         raise ContactImportError("Contact files must be 5 MB or smaller.")
     text = _decode(raw)
     kind = detect_format(filename, text)
-    if kind == "vcard":
-        headers, rows, truncated = parse_vcard(text)
-        preset = {"key": "vcard", "label": "vCard (Apple, iCloud, Outlook, Android, WhatsApp)"}
-    else:
-        headers, rows, truncated = parse_csv(text)
-        preset = detect_preset(headers)
+    try:
+        if kind == "vcard":
+            headers, rows, truncated = parse_vcard(text)
+            preset = {"key": "vcard", "label": "vCard (Apple, iCloud, Outlook, Android, WhatsApp)"}
+        else:
+            headers, rows, truncated = parse_csv(text)
+            preset = detect_preset(headers)
+    except (csv.Error, UnicodeError, ValueError) as exc:
+        if isinstance(exc, ContactImportError):
+            raise
+        raise ContactImportError(
+            "This file could not be read. Save it again as CSV (one row of column names) or vCard and retry."
+        ) from None
     if not rows:
         raise ContactImportError("The file did not contain any contacts.")
     return {"format": kind, "preset": preset, "headers": headers, "rows": rows,

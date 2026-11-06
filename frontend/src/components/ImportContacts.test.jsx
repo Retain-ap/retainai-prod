@@ -118,3 +118,33 @@ test("shows the server's reason when a file is rejected", async () => {
   expect(await screen.findByRole("alert")).toHaveTextContent("Choose a CSV (.csv) or vCard (.vcf) contact file.");
   expect(screen.queryByRole("region", { name: "Review import" })).not.toBeInTheDocument();
 });
+
+test("explains consent before importing and that existing contacts keep theirs", async () => {
+  mockApi();
+  const review = await upload();
+  const notice = within(review).getByTestId("import-consent");
+  expect(notice).toHaveTextContent(/not marked as agreeing to email/);
+  expect(notice).toHaveTextContent(/no automated emails .* until you confirm consent/);
+  expect(notice).toHaveTextContent(/Existing contacts this import updates keep their current consent/);
+});
+
+test("reports contacts kept by undo and hides undo for older imports", async () => {
+  const history = [
+    { id: "new1", label: "Contacts.vcf", created_at: 1793950000, summary: { imported: 2 }, undo_available: true },
+    { id: "old1", label: "old.csv", created_at: 1793900000, summary: { imported: 5 }, undo_available: false },
+  ];
+  mockApi({
+    "import/history": () => json({ imports: history }),
+    "import/new1/undo": () => json({ ok: true, removed_contacts: 1, restored_contacts: 0, kept_contacts: 1, conflicts: [{ id: "x", name: "Pat Edited", reason: "edited_since_import" }] }),
+  });
+  window.confirm = jest.fn(() => true);
+  render(<ImportContacts user={user} />);
+  expect(await screen.findByText(/Undo isn't available for imports made before safe undo/)).toBeInTheDocument();
+  const undoButtons = screen.getAllByRole("button", { name: /Undo/ });
+  expect(undoButtons).toHaveLength(1);
+  fireEvent.click(undoButtons[0]);
+  expect(await screen.findByText(/Import undone\./)).toBeInTheDocument();
+  expect(screen.getByText(/1 contact was changed after the import and kept as it is/)).toBeInTheDocument();
+  expect(screen.getByText("Pat Edited")).toBeInTheDocument();
+  expect(calls.some((call) => call.path === "import/old1/undo")).toBe(false);
+});

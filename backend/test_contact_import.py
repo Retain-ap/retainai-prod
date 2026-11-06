@@ -3,6 +3,8 @@
 import io
 import os
 import tempfile
+import threading
+import time
 import unittest
 import uuid
 from datetime import datetime, timezone
@@ -248,6 +250,129 @@ class ImportApiTests(unittest.TestCase):
     def test_rejects_unsupported_and_oversized_files(self):
         self.assertEqual(self._preview("contacts.xlsx", b"PK\x03\x04").status_code, 400)
         self.assertEqual(self._preview("big.csv", b"Email\n" + b"a" * ci.MAX_FILE_BYTES).status_code, 413)
+
+    def _undo(self, import_id):
+        return self.client.post(f"/api/import/{import_id}/undo", headers={"Origin": "http://localhost:3000"})
+
+    def _by_email(self):
+        return {lead["email"]: lead for lead in self._leads()}
+
+    def test_undo_keeps_contacts_edited_after_the_import_and_reports_conflicts(self):
+        self._commit(self._preview("a.csv", _csv(["Name", "Email"], ["Sam", "sam@example.com"], ["Kim", "kim@example.com"])).get_json())
+        second = self._preview("b.csv", _csv(["Name", "Email"], ["Samuel", "sam@example.com"], ["Kimberly", "kim@example.com"],
+                                             ["Pat", "pat@example.com"], ["Lee", "lee@example.com"])).get_json()
+        import_id = self._commit(second, duplicate_mode="update").get_json()["import"]["id"]
+        leads = self._leads()
+        for lead in leads:
+            if lead["email"] == "sam@example.com":
+                lead["notes"] = "Called after the import"  # updated by the import, then edited
+            if lead["email"] == "pat@example.com":
+                lead["phone"] = "+14165550199"  # created by the import, then edited
+        retainai.save_user_leads(self.owner, leads)
+
+        undone = self._undo(import_id)
+        self.assertEqual(undone.status_code, 200)
+        body = undone.get_json()
+        self.assertEqual((body["removed_contacts"], body["restored_contacts"], body["kept_contacts"]), (1, 1, 2))
+        self.assertEqual({c["reason"] for c in body["conflicts"]}, {"edited_since_import"})
+        after = self._by_email()
+        self.assertNotIn("lee@example.com", after)  # untouched new contact removed
+        self.assertEqual(after["kim@example.com"]["name"], "Kim")  # untouched update reverted
+        self.assertEqual((after["sam@example.com"]["name"], after["sam@example.com"]["notes"]), ("Samuel", "Called after the import"))
+        self.assertEqual(after["pat@example.com"]["phone"], "+14165550199")
+        self.assertEqual(self._undo(import_id).status_code, 404)  # one undo per import
+
+    def test_legacy_full_list_undo_is_refused_without_touching_contacts(self):
+        retainai.save_user_leads(self.owner, [{"id": "kept", "name": "Added after", "email": "after@example.com"}])
+        history = app_imports._load_json_file(app_imports.IMPORT_HISTORY_FILE, {})
+        history[self.owner] = [{"id": "legacy1", "created_at": 1, "label": "old.csv", "before": [], "summary": {}}]
+        app_imports._save_json_file(app_imports.IMPORT_HISTORY_FILE, history)
+        listed = self.client.get("/api/import/history").get_json()["imports"][0]
+        self.assertFalse(listed["undo_available"])
+        self.assertNotIn("before", listed)
+        self.assertEqual(self._undo("legacy1").status_code, 409)
+        self.assertEqual([lead["id"] for lead in self._leads()], ["kept"])
+
+    def test_row_matching_two_different_contacts_is_skipped_as_identity_conflict(self):
+        retainai.save_user_leads(self.owner, [
+            {"id": "a", "name": "A", "email": "a@example.com", "phone": "+14165550111"},
+            {"id": "b", "name": "B", "email": "b@example.com", "phone": "+14165550222"},
+        ])
+        before = self._leads()
+        preview = self._preview("x.csv", _csv(["Name", "Email", "Phone"], ["Mixed", "a@example.com", "4165550222"])).get_json()
+        self.assertEqual((preview["outcomes"][0]["status"], preview["outcomes"][0]["reason"]), ("skipped", "identity_conflict"))
+        result = self._commit(preview, duplicate_mode="update").get_json()
+        self.assertEqual((result["summary"]["updated"], result["summary"]["skipped"]), (0, 1))
+        self.assertIsNone(result["import"])
+        self.assertEqual(self._leads(), before)
+
+    def test_updated_contacts_are_reindexed_so_old_identities_do_not_match(self):
+        retainai.save_user_leads(self.owner, [{"id": "a", "name": "A", "email": "old@example.com", "phone": "+14165550111"}])
+        preview = self._preview("x.csv", _csv(["Name", "Email", "Phone"],
+                                              ["A moved", "new@example.com", "4165550111"],
+                                              ["Someone else", "old@example.com", "4165550333"])).get_json()
+        result = self._commit(preview, duplicate_mode="update").get_json()
+        self.assertEqual([o["status"] for o in result["outcomes"]], ["updated", "imported"])
+        after = self._by_email()
+        self.assertEqual(after["new@example.com"]["id"], "a")
+        self.assertEqual(after["old@example.com"]["name"], "Someone else")
+
+    def test_malformed_requests_and_files_return_400(self):
+        post = lambda body: self.client.post("/api/import/file/commit", json=body, headers={"Origin": "http://localhost:3000"})
+        for body in ([{"raw": {"Email": "a@b.co"}}], "rows", 7, None):
+            with self.subTest(body=body):
+                self.assertEqual(post(body).status_code, 400)
+        for rows in ([["a@b.co"]], ["a@b.co"], [{"raw": ["a@b.co"]}], [{"raw": {"Email": {"x": 1}}}]):
+            with self.subTest(rows=rows):
+                self.assertEqual(post({"rows": rows, "mapping": {"email": "Email"}}).status_code, 400)
+        self.assertEqual(post({"rows": [{"raw": {"Email": "a@b.co"}}], "mapping": ["email"]}).status_code, 400)
+        huge_field = b'Name,Email\n"' + b"a" * 200000 + b'",x@example.com\n'
+        response = self._preview("big-field.csv", huge_field)
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("could not be read", response.get_json()["error"])
+        self.assertEqual(self._leads(), [])
+
+    def test_merging_into_an_existing_contact_keeps_its_consent_and_automations(self):
+        old = "2020-01-01T00:00:00Z"
+        confirmed = {"id": "c", "name": "Client", "email": "client@example.com", "createdAt": old,
+                     "email_consent_status": "confirmed", "email_consent_source": "workspace_user"}
+        legacy_import = {"id": "l", "name": "Legacy", "email": "legacy@example.com", "createdAt": old, "source": "csv"}
+        retainai.save_user_leads(self.owner, [confirmed, legacy_import])
+        preview = self._preview("x.csv", _csv(["Name", "Email", "Company"], ["Client", "client@example.com", "Acme"])).get_json()
+        self._commit(preview, duplicate_mode="merge")
+        after = self._by_email()["client@example.com"]
+        self.assertEqual((after["company"], after["email_consent_status"]), ("Acme", "confirmed"))
+        self.assertNotIn("imported_at", after)
+        self.assertTrue(retainai.trig_no_reply(after, 3))
+        # Contacts imported before imports were marked keep their existing behaviour.
+        self.assertTrue(retainai.trig_no_reply(legacy_import, 3))
+
+    def test_simultaneous_commits_and_undo_do_not_overwrite_each_other(self):
+        real_load = app_imports._load_leads_bucket
+
+        def slow_load(user_email):
+            leads = real_load(user_email)
+            time.sleep(0.15)  # widen the read-modify-write window
+            return leads
+
+        first = self._preview("a.csv", _csv(["Email"], ["one@example.com"])).get_json()
+        second = self._preview("b.csv", _csv(["Email"], ["two@example.com"])).get_json()
+        seed = self._commit(self._preview("c.csv", _csv(["Email"], ["three@example.com"])).get_json()).get_json()["import"]["id"]
+        results = []
+        with patch.object(app_imports, "_load_leads_bucket", side_effect=slow_load):
+            jobs = [
+                threading.Thread(target=lambda: results.append(self._commit(first, client=self._client(self.owner)).status_code)),
+                threading.Thread(target=lambda: results.append(self._commit(second, client=self._client(self.owner)).status_code)),
+                threading.Thread(target=lambda: results.append(self._client(self.owner).post(
+                    f"/api/import/{seed}/undo", headers={"Origin": "http://localhost:3000"}).status_code)),
+            ]
+            for job in jobs:
+                job.start()
+            for job in jobs:
+                job.join()
+        self.assertEqual(sorted(results), [200, 200, 200])
+        self.assertEqual(sorted(self._by_email()), ["one@example.com", "two@example.com"])
+        self.assertEqual(len(app_imports._load_json_file(app_imports.IMPORT_HISTORY_FILE, {})[self.owner]), 2)
 
 
 if __name__ == "__main__":

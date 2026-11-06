@@ -30,7 +30,7 @@ const STATUS = {
 const FILTERS = [["all", "All"], ["ready", "Will import"], ["skipped", "Skipped"], ["invalid", "Needs fixing"]];
 const REASONS = {
   not_selected: "Not selected", duplicate_in_file: "Appears earlier in this file",
-  already_in_crm: "Already in RetainAI", missing_email_or_phone: "No valid email or phone",
+  already_in_crm: "Already in RetainAI", identity_conflict: "Email and phone belong to different contacts", missing_email_or_phone: "No valid email or phone",
   invalid_email: "Email is not valid", invalid_phone: "Phone number is not valid",
 };
 const ROW_LIMIT = 200;
@@ -76,6 +76,7 @@ export default function ImportContacts({ user, focusGoogle = false }) {
   const [filter, setFilter] = useState("all");
   const [result, setResult] = useState(null);
   const [googleResult, setGoogleResult] = useState(null);
+  const [undoResult, setUndoResult] = useState(null);
   const [history, setHistory] = useState([]);
   const [google, setGoogle] = useState(null);
   const [busy, setBusy] = useState("");
@@ -176,10 +177,11 @@ export default function ImportContacts({ user, focusGoogle = false }) {
   }
 
   async function undo(id) {
-    if (!window.confirm("Undo this import? Contacts it added are removed and contacts it changed go back to how they were. Other contacts are not touched.")) return;
-    setBusy(`undo:${id}`); setError("");
+    if (!window.confirm("Undo this import? Contacts it added are removed and contacts it changed go back to how they were. Contacts edited since the import are kept as they are.")) return;
+    setBusy(`undo:${id}`); setError(""); setUndoResult(null);
     try {
-      await request(`import/${encodeURIComponent(id)}/undo`, { method: "POST" }, userEmail);
+      const data = await request(`import/${encodeURIComponent(id)}/undo`, { method: "POST" }, userEmail);
+      setUndoResult(data);
       await refresh(); window.dispatchEvent(new Event("leads:changed"));
     } catch (err) { setError(err.message); } finally { setBusy(""); }
   }
@@ -225,6 +227,11 @@ export default function ImportContacts({ user, focusGoogle = false }) {
     <div className="product-page import-workspace">
       <header className="product-hero"><div><div className="product-eyebrow">Customer data</div><h1>Import contacts</h1><p>Bring contacts from your phone, email or another CRM. You review every row before anything is saved, and nothing is sent to the people you import.</p></div></header>
       {error && <div className="product-alert danger" role="alert">{error}</div>}
+      {undoResult && <div className="product-alert success import-result" role="status">
+        <div><strong>Import undone.</strong> Removed {undoResult.removed_contacts || 0}, restored {undoResult.restored_contacts || 0}.{undoResult.kept_contacts ? ` ${undoResult.kept_contacts} contact${undoResult.kept_contacts === 1 ? " was" : "s were"} changed after the import and kept as ${undoResult.kept_contacts === 1 ? "it is" : "they are"}.` : ""}</div>
+        {undoResult.conflicts?.length > 0 && <details><summary>Kept contacts ({undoResult.conflicts.length})</summary><ul>{undoResult.conflicts.map((item) => <li key={item.id}>{item.name || "Unnamed contact"}</li>)}</ul></details>}
+        <button type="button" className="product-button" onClick={() => setUndoResult(null)}>Dismiss</button>
+      </div>}
       {googleResult && <div className="product-alert success" role="status"><strong>Google import complete.</strong> Added {googleResult.imported || 0}, updated {googleResult.merged || 0}, skipped {googleResult.skipped || 0}.</div>}
       {result && <ImportResult result={result} onClose={() => setResult(null)} />}
 
@@ -265,7 +272,10 @@ export default function ImportContacts({ user, focusGoogle = false }) {
           <label>If a contact already exists<select className="product-input" value={duplicateMode} onChange={(event) => edited(setDuplicateMode)(event.target.value)}><option value="skip">Skip it</option><option value="merge">Fill in its blank fields</option><option value="update">Replace with file values</option></select></label>
           <label>Tag imported contacts<input className="product-input" value={tag} maxLength={80} onChange={(event) => setTag(event.target.value)} /></label>
         </div>
-        <p className="import-note">Imported contacts are not marked as agreeing to email. Automated emails (follow-ups and birthday greetings) start for an imported contact only after you confirm consent on their profile.</p>
+        <div className="product-alert import-consent" role="note" data-testid="import-consent">
+          <strong>Email consent</strong>
+          <p>New contacts from this file are not marked as agreeing to email. RetainAI sends them no automated emails (follow-ups or birthday greetings) until you confirm consent on their profile. Existing contacts this import updates keep their current consent and automations. Nothing is sent when you import.</p>
+        </div>
 
         <div className="import-filters" role="group" aria-label="Filter rows">
           {FILTERS.map(([key, label]) => <button key={key} type="button" className={`import-source ${filter === key ? "active" : ""}`} aria-pressed={filter === key} onClick={() => setFilter(key)}>{label}</button>)}
@@ -305,8 +315,8 @@ export default function ImportContacts({ user, focusGoogle = false }) {
       </section>
 
       <section className="product-card">
-        <div className="product-card-header"><div><h2>Recent imports</h2><p className="product-card-copy">Undo removes the contacts a file import added and restores the ones it changed. Other contacts are not touched.</p></div><FaHistory aria-hidden="true" /></div>
-        <div className="insight-list">{history.map((item) => <div className="insight-row" key={item.id}><div className="insight-row-main"><strong>{item.label}</strong><small>{new Date(item.created_at * 1000).toLocaleString()} · {item.summary?.imported || 0} added · {(item.summary?.updated || 0) + (item.summary?.merged || 0)} updated</small></div><button type="button" className="product-button" onClick={() => undo(item.id)} disabled={Boolean(busy)}><FaUndo aria-hidden="true" /> Undo</button></div>)}{!history.length && <div className="owner-empty-state"><strong>No imports yet</strong><small>Your import report and undo option will appear here.</small></div>}</div>
+        <div className="product-card-header"><div><h2>Recent imports</h2><p className="product-card-copy">Undo removes the contacts a file import added and restores the ones it changed. Contacts edited since then are kept.</p></div><FaHistory aria-hidden="true" /></div>
+        <div className="insight-list">{history.map((item) => <div className="insight-row" key={item.id}><div className="insight-row-main"><strong>{item.label}</strong><small>{new Date(item.created_at * 1000).toLocaleString()} · {item.summary?.imported || 0} added · {(item.summary?.updated || 0) + (item.summary?.merged || 0)} updated</small></div>{item.undo_available === false ? <small className="import-reason">Undo isn't available for imports made before safe undo</small> : <button type="button" className="product-button" onClick={() => undo(item.id)} disabled={Boolean(busy)}><FaUndo aria-hidden="true" /> Undo</button>}</div>)}{!history.length && <div className="owner-empty-state"><strong>No imports yet</strong><small>Your import report and undo option will appear here.</small></div>}</div>
       </section>
     </div>
   );

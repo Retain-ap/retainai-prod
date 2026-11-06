@@ -8557,11 +8557,13 @@ _td = datetime.timedelta
 def imported_without_consent(lead: Dict[str, Any]) -> bool:
     """An imported contact nobody has confirmed email permission for.
 
-    Importing a list never implies consent, so automated emails to these
-    contacts wait until a workspace user records consent on the contact.
+    Importing a list never implies consent, so automated emails to contacts
+    an import created wait until a workspace user records consent on the
+    contact. Only contacts marked by an import are affected: existing
+    contacts an import merged into, and contacts from before imports were
+    marked, keep their current behaviour and recorded consent.
     """
-    imported = lead.get("imported_at") or str(lead.get("source") or "").lower() in ("csv", "vcard", "google")
-    return bool(imported) and str(lead.get("email_consent_status") or "").lower() != "confirmed"
+    return bool(lead.get("imported_at")) and str(lead.get("email_consent_status") or "").lower() != "confirmed"
 
 def trig_no_reply(lead: Dict[str, Any], days: int) -> bool:
     if imported_without_consent(lead):
