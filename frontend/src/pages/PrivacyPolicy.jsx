@@ -8,7 +8,7 @@ export default function PrivacyPolicy() {
         <h1 className="text-3xl md:text-4xl font-bold text-yellow-400 mb-7">Privacy Policy</h1>
 
         <p className="text-sm text-gray-400 mb-8">
-          Effective August 21, 2026
+          Effective August 21, 2026 · Updated November 6, 2026 (AI processing details)
         </p>
 
         <p className="mb-6">
@@ -34,7 +34,7 @@ export default function PrivacyPolicy() {
           <li>Improve features, performance, and user experience.</li>
           <li>Communicate with you about updates, security alerts, and support.</li>
           <li>Process payments and invoicing if you subscribe.</li>
-          <li>Generate AI-assisted drafts, recommendations, relationship summaries, and workflow suggestions that you review before use.</li>
+          <li>Generate AI-assisted drafts, recommendations, relationship summaries, and workflow suggestions that you review before use, or that automations you turn on send for you.</li>
           <li>Detect fraud, abuse, security incidents, failed automations, and service errors.</li>
           <li>Comply with legal obligations and enforce our terms.</li>
         </ul>
@@ -54,6 +54,10 @@ export default function PrivacyPolicy() {
           <li><b>Email:</b> SendGrid (transactional and notification emails).</li>
           <li><b>Calendars:</b> Google Calendar (optional user-connected feature).</li>
           <li><b>Messaging:</b> Meta/WhatsApp Cloud API (optional messaging feature).</li>
+          <li>
+            <b>AI drafting:</b> OpenRouter, which forwards each AI request to a model provider it selects automatically.
+            The provider can differ from one request to the next. See “AI Features” below.
+          </li>
           <li><b>Infrastructure/Analytics:</b> hosting, error logging, usage analytics (if enabled).</li>
         </ul>
         <p className="mb-6">
@@ -61,11 +65,45 @@ export default function PrivacyPolicy() {
           We may disclose information if required by law or to protect rights, safety, and security.
         </p>
 
+        <h2 className="text-2xl font-bold text-yellow-300 mt-8 mb-2">AI Features</h2>
+        <p className="mb-3">
+          RetainAI&apos;s AI drafts and suggestions are produced by sending a request to{" "}
+          <a href="https://openrouter.ai/privacy" className="text-yellow-300 underline" target="_blank" rel="noreferrer">OpenRouter</a>.
+          RetainAI uses OpenRouter&apos;s automatic routing, so OpenRouter chooses the model and the company that processes each
+          request, and may use a different one if the first is unavailable. That provider receives the request and processes it
+          under OpenRouter&apos;s and its own policies.
+        </p>
+        <p className="mb-3">Depending on the feature, a request can include:</p>
+        <ul className="list-disc ml-6 mb-3 space-y-2">
+          <li>
+            When you ask for a message draft: the customer&apos;s name, tags and notes (up to 800 characters, or up to 1,600
+            characters for AI Studio playbooks), up to eight recent conversation messages (up to 500 characters each),
+            relationship status, the last contact date, birthday timing, and anything you type as extra context.
+          </li>
+          <li>
+            When you turn on an automation that uses AI drafting: the customer&apos;s first name, your business name, your booking
+            link and the reason the automation ran. These requests run without a separate click each time.
+          </li>
+        </ul>
+        <p className="mb-3">
+          This information can include data you imported from Google Contacts, such as a contact&apos;s name and notes. Where a
+          contact has no name, their email address is used as the name. Notes and other free text can contain whatever was
+          written in them, including contact details.
+        </p>
+        <p className="mb-6">
+          RetainAI asks OpenRouter to use only providers that do not collect request data for training, and the training and
+          data-sharing options on RetainAI&apos;s OpenRouter account are turned off. Zero-data-retention routing is not currently
+          enabled, so the provider that handles a request may keep it for a limited time under its own policy. RetainAI does not
+          use your data or Google user data to train AI models. You review AI drafts before you send them, except for messages
+          sent by automations you turn on.
+        </p>
+
         <h2 className="text-2xl font-bold text-yellow-300 mt-8 mb-2">5. Google User Data</h2>
         <p className="mb-3">
           If you connect Google, RetainAI requests read-only access to the Google data needed for the feature you choose:
           your calendar list and calendar events for the calendar view, and your contacts for contact import. We use this data
-          only to provide and improve those user-facing RetainAI features. RetainAI does not use Google user data for advertising,
+          only to provide and improve those user-facing RetainAI features, including AI drafting when you use it, as described
+          in “AI Features” above. RetainAI does not use Google user data for advertising,
           sell it, or allow people to read it except when needed to provide support or security with your permission, to comply
           with law, or through service providers acting under our instructions.
         </p>

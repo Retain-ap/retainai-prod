@@ -124,7 +124,7 @@ so rebooking intervals gain less than with Square.
 
 ## Recommendation
 
-Wait for the owner's choice. If it is Square, build a **read-only, seller-level**
-integration first, test it with a Square sandbox seller, and only then offer it
-to customers. Do not describe any booking platform as connected until a real
-OAuth round trip and webhook delivery have passed in production.
+Square first, as Codex told the owner. Register the Square application and
+complete a sandbox OAuth round trip and sync before offering it to customers.
+Do not describe Square, or any booking platform, as connected until a real
+production OAuth round trip and sync have passed.
