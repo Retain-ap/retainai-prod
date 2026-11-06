@@ -114,8 +114,59 @@ class BackupToolTests(unittest.TestCase):
         result = bt.restore_drill(sealed, os.path.join(self.tmp.name, "drill"), PASSPHRASE)
         self.assertEqual((result["users"], result["workspaces_with_contacts"], result["contacts"]), (2, 1, 3))
         self.assertEqual(result["storage_mode"], "json")
-        with self.assertRaisesRegex(bt.BackupError, "empty folder"):
+        with self.assertRaisesRegex(bt.BackupError, "new folder"):
             bt.restore_drill(sealed, os.path.join(self.tmp.name, "drill"), PASSPHRASE)
+        drill = os.path.join(self.tmp.name, "drill")
+        self.assertEqual(os.stat(drill).st_mode & 0o777, 0o700)
+        for name in os.listdir(drill):
+            self.assertEqual(os.stat(os.path.join(drill, name)).st_mode & 0o777, 0o600, name)
+
+    def test_rejects_duplicate_link_and_bomb_entries_before_reading(self):
+        path = make_archive(self.tmp.name)
+        duplicate = os.path.join(self.tmp.name, "dup.zip")
+        with zipfile.ZipFile(path) as source, zipfile.ZipFile(duplicate, "w") as target:
+            for item in source.infolist():
+                target.writestr(item, source.read(item.filename))
+            import warnings
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore")
+                target.writestr("json/users.json", "{}")
+        with self.assertRaisesRegex(bt.BackupError, "Duplicate entry"):
+            bt.verify_archive(duplicate)
+        link = os.path.join(self.tmp.name, "link.zip")
+        with zipfile.ZipFile(link, "w") as target:
+            info = zipfile.ZipInfo("json/users.json")
+            info.external_attr = (0o120777 << 16)
+            target.writestr(info, "/etc/passwd")
+        with self.assertRaisesRegex(bt.BackupError, "non-file entry"):
+            bt.verify_archive(link)
+        bomb = os.path.join(self.tmp.name, "bomb.zip")
+        with zipfile.ZipFile(bomb, "w", zipfile.ZIP_DEFLATED) as target:
+            target.writestr("json/users.json", b"0" * (64 * 1024 * 1024))
+        with self.assertRaisesRegex(bt.BackupError, "expands suspiciously"):
+            bt.verify_archive(bomb)
+        with patch.object(bt, "MAX_TOTAL_BYTES", 10):
+            with self.assertRaisesRegex(bt.BackupError, "too large when uncompressed"):
+                bt.verify_archive(path)
+
+    def test_outputs_are_owner_only_new_files_and_never_follow_links(self):
+        path = make_archive(self.tmp.name)
+        sealed = os.path.join(self.tmp.name, "copy.rbk")
+        bt.seal(path, sealed, PASSPHRASE)
+        self.assertEqual(os.stat(sealed).st_mode & 0o777, 0o600)
+        target = os.path.join(self.tmp.name, "elsewhere.zip")
+        trap = os.path.join(self.tmp.name, "trap.zip")
+        os.symlink(target, trap)
+        with self.assertRaisesRegex(bt.BackupError, "already exists"):
+            bt.unseal(sealed, trap, PASSPHRASE)
+        self.assertFalse(os.path.exists(target))
+        restored = os.path.join(self.tmp.name, "restored.zip")
+        bt.unseal(sealed, restored, PASSPHRASE)
+        self.assertEqual(os.stat(restored).st_mode & 0o777, 0o600)
+        linked_dir = os.path.join(self.tmp.name, "linked-dir")
+        os.symlink(self.tmp.name, linked_dir)
+        with self.assertRaisesRegex(bt.BackupError, "new folder"):
+            bt.restore_drill(sealed, linked_dir, PASSPHRASE)
 
     def test_cli_never_takes_a_passphrase_argument_and_enforces_length(self):
         path = make_archive(self.tmp.name)

@@ -24,8 +24,8 @@ import getpass
 import hashlib
 import json
 import os
-import shutil
 import sqlite3
+import stat
 import subprocess
 import sys
 import tempfile
@@ -39,6 +39,11 @@ MAGIC = b"RAIBK1\n"
 SALT_BYTES, NONCE_BYTES = 16, 12
 SCRYPT_N, SCRYPT_R, SCRYPT_P = 2 ** 15, 8, 1
 MAX_ARCHIVE_BYTES = 2 * 1024 ** 3
+MAX_ENTRY_BYTES = 2 * 1024 ** 3        # uncompressed, per file
+MAX_TOTAL_BYTES = 4 * 1024 ** 3        # uncompressed, whole archive
+MAX_JSON_BYTES = 256 * 1024 ** 2
+MAX_RATIO = 200                        # compression ratio above this is treated as a zip bomb
+MAX_ENTRIES = 200
 MIN_PASSPHRASE = 12
 
 
@@ -67,6 +72,68 @@ def _safe_member(name: str) -> bool:
     )
 
 
+def _check_entries(infos):
+    """Reject zip bombs, duplicates, links and directories before reading."""
+    if len(infos) > MAX_ENTRIES:
+        raise BackupError("The archive has too many entries.")
+    seen, total = set(), 0
+    for info in infos:
+        name = info.filename
+        if name in seen:
+            raise BackupError(f"Duplicate entry in archive: {name}")
+        seen.add(name)
+        mode = (info.external_attr >> 16) & 0o170000
+        if info.is_dir() or mode in (stat.S_IFLNK, stat.S_IFDIR) or (mode and mode != stat.S_IFREG):
+            raise BackupError(f"Unexpected non-file entry in archive: {name}")
+        if info.file_size > MAX_ENTRY_BYTES:
+            raise BackupError(f"{name} is too large when uncompressed.")
+        if info.compress_size and info.file_size > 10 * 1024 ** 2 and info.file_size / info.compress_size > MAX_RATIO:
+            raise BackupError(f"{name} expands suspiciously far; refusing to read it.")
+        total += info.file_size
+        if total > MAX_TOTAL_BYTES:
+            raise BackupError("The archive is too large when uncompressed.")
+
+
+def _stream_digest(archive, name):
+    digest, size = hashlib.sha256(), 0
+    with archive.open(name) as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            size += len(chunk)
+            if size > MAX_ENTRY_BYTES:
+                raise BackupError(f"{name} is larger than its header says.")
+            digest.update(chunk)
+    return size, digest.hexdigest()
+
+
+def _read_bounded(archive, name, limit):
+    with archive.open(name) as handle:
+        data = handle.read(limit + 1)
+    if len(data) > limit:
+        raise BackupError(f"{name} is too large to inspect.")
+    return data
+
+
+def _new_private_file(path):
+    """Create a new owner-only file; never follow or replace an existing path."""
+    if os.path.lexists(path):
+        raise BackupError("The output file already exists; choose a new name.")
+    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0)
+    try:
+        return os.fdopen(os.open(path, flags, 0o600), "wb")
+    except FileExistsError:
+        raise BackupError("The output file already exists; choose a new name.") from None
+
+
+def _extract_private(archive, name, target):
+    with archive.open(name) as src, _new_private_file(target) as dst:
+        written = 0
+        for chunk in iter(lambda: src.read(1024 * 1024), b""):
+            written += len(chunk)
+            if written > MAX_ENTRY_BYTES:
+                raise BackupError(f"{name} is larger than its header says.")
+            dst.write(chunk)
+
+
 def verify_archive(path: str, expected_sha256: str = "") -> dict:
     """Check structure, manifest digests, SQLite integrity and JSON parsing."""
     if not os.path.isfile(path):
@@ -82,37 +149,38 @@ def verify_archive(path: str, expected_sha256: str = "") -> dict:
     except zipfile.BadZipFile:
         raise BackupError("Not a valid zip archive.") from None
     with archive:
+        infos = archive.infolist()
+        _check_entries(infos)
         bad = archive.testzip()
         if bad:
             raise BackupError(f"Corrupted entry in archive: {bad}")
-        names = archive.namelist()
+        names = [info.filename for info in infos]
         unsafe = [name for name in names if not _safe_member(name)]
         if unsafe:
             raise BackupError(f"Unexpected entries in archive: {', '.join(sorted(unsafe)[:5])}")
         if "manifest.json" not in names:
             raise BackupError("manifest.json is missing.")
-        manifest = json.loads(archive.read("manifest.json"))
+        manifest = json.loads(_read_bounded(archive, "manifest.json", MAX_JSON_BYTES))
         listed = {row["name"]: row for row in manifest.get("files") or []}
         missing = sorted(set(listed) - set(names))
         extra = sorted(set(names) - set(listed) - {"manifest.json"})
         if missing or extra:
             raise BackupError(f"Manifest mismatch. Missing: {missing[:5]} Extra: {extra[:5]}")
         for name, row in sorted(listed.items()):
-            data = archive.read(name)
-            if len(data) != int(row.get("bytes", -1)) or _sha256_bytes(data) != row.get("sha256"):
+            size, digest = _stream_digest(archive, name)
+            if size != int(row.get("bytes", -1)) or digest != row.get("sha256"):
                 raise BackupError(f"Digest mismatch for {name}.")
-            report["files"].append({"name": name, "bytes": len(data), "sha256": row["sha256"]})
+            report["files"].append({"name": name, "bytes": size, "sha256": row["sha256"]})
             if name.endswith(".json"):
                 try:
-                    value = json.loads(data)
+                    value = json.loads(_read_bounded(archive, name, MAX_JSON_BYTES))
                 except ValueError:
                     raise BackupError(f"{name} is not valid JSON.") from None
                 report["json_records"][name] = len(value) if isinstance(value, (dict, list)) else 1
             if name == "retainai.db":
                 with tempfile.TemporaryDirectory() as scratch:
                     db_path = os.path.join(scratch, "check.db")
-                    with open(db_path, "wb") as handle:
-                        handle.write(data)
+                    _extract_private(archive, name, db_path)
                     connection = sqlite3.connect(db_path)
                     try:
                         result = connection.execute("PRAGMA integrity_check").fetchone()[0]
@@ -153,9 +221,7 @@ def seal(archive_path: str, out_path: str, passphrase: str) -> str:
     salt, nonce = os.urandom(SALT_BYTES), os.urandom(NONCE_BYTES)
     header = MAGIC + salt + nonce
     ciphertext = AESGCM(_key(passphrase, salt)).encrypt(nonce, plaintext, header)
-    if os.path.exists(out_path):
-        raise BackupError("The output file already exists; choose a new name.")
-    with open(out_path, "wb") as handle:
+    with _new_private_file(out_path) as handle:
         handle.write(header + ciphertext)
     return report["archive_sha256"]
 
@@ -172,9 +238,7 @@ def unseal(sealed_path: str, out_path: str, passphrase: str) -> str:
         plaintext = AESGCM(_key(passphrase, salt)).decrypt(nonce, blob[len(header):], header)
     except InvalidTag:
         raise BackupError("Wrong passphrase, or the file was changed or damaged.") from None
-    if os.path.exists(out_path):
-        raise BackupError("The output file already exists; choose a new name.")
-    with open(out_path, "wb") as handle:
+    with _new_private_file(out_path) as handle:
         handle.write(plaintext)
     return _sha256_bytes(plaintext)
 
@@ -185,9 +249,9 @@ def restore_drill(source: str, into: str, passphrase: str | None = None) -> dict
     Never touches production. Proves the backup can be read back by RetainAI's
     own code, reporting only counts.
     """
-    if os.path.exists(into) and os.listdir(into):
-        raise BackupError("Restore into a new, empty folder.")
-    os.makedirs(into, exist_ok=True)
+    if os.path.lexists(into):
+        raise BackupError("Restore into a new folder that does not exist yet.")
+    os.makedirs(into, mode=0o700)
     with tempfile.TemporaryDirectory() as scratch:
         archive = source
         if not zipfile.is_zipfile(source):
@@ -196,9 +260,7 @@ def restore_drill(source: str, into: str, passphrase: str | None = None) -> dict
         report = verify_archive(archive)
         with zipfile.ZipFile(archive) as opened:
             for row in report["files"]:
-                target = os.path.join(into, row["name"].split("/", 1)[-1])
-                with opened.open(row["name"]) as src, open(target, "wb") as dst:
-                    shutil.copyfileobj(src, dst)
+                _extract_private(opened, row["name"], os.path.join(into, row["name"].split("/", 1)[-1]))
     use_sqlite = os.path.isfile(os.path.join(into, "retainai.db"))
     probe = (
         "import storage, json;"
@@ -206,8 +268,11 @@ def restore_drill(source: str, into: str, passphrase: str | None = None) -> dict
         "print(json.dumps({'users': len(users), 'workspaces_with_contacts': len(leads),"
         " 'contacts': sum(len(v) for v in leads.values() if isinstance(v, list))}))"
     )
+    # A minimal environment: no provider keys, no scheduler, so the drill can't
+    # send messages, refresh tokens or reach any service with restored data.
     env = {
-        **os.environ,
+        "PATH": os.environ.get("PATH", ""),
+        "RUN_SCHEDULER": "0",
         "DATA_ROOT": into,
         "USE_SQLITE": "true" if use_sqlite else "false",
         "SQLITE_PATH": os.path.join(into, "retainai.db"),
