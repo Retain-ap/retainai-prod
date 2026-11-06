@@ -1,5 +1,6 @@
 // src/components/Calendar.jsx
 import React, { useEffect, useMemo, useState } from "react";
+import { API_BASE } from "../apiBase";
 import {
   FaChevronLeft,
   FaChevronRight,
@@ -35,10 +36,6 @@ const BLUE = "#5b8def";
 const CAKE = "#d19a66";
 
 /* ===== API ===== */
-const API_BASE =
-  (process.env.REACT_APP_API_BASE && process.env.REACT_APP_API_BASE.trim()) ||
-  (process.env.REACT_APP_API_URL && process.env.REACT_APP_API_URL.trim()) ||
-  window.location.origin.replace(/\/$/, "");
 
 /* ===== HELPERS ===== */
 function normEmail(v) {

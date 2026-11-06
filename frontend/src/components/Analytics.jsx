@@ -1,5 +1,6 @@
 // src/components/Analytics.jsx
 import React, { useEffect, useMemo, useState } from "react";
+import { API_BASE } from "../apiBase";
 import {
   FunnelChart,
   Funnel,
@@ -52,10 +53,6 @@ const N2 = "#8b949e";
 const N3 = "#495056";
 
 /* ===== API ===== */
-const API_BASE =
-  (process.env.REACT_APP_API_BASE && process.env.REACT_APP_API_BASE.trim()) ||
-  (process.env.REACT_APP_API_URL && process.env.REACT_APP_API_URL.trim()) ||
-  window.location.origin.replace(/\/$/, "");
 
 /* ===== HELPERS ===== */
 function normEmail(v) {
