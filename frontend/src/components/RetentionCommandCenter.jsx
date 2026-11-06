@@ -18,6 +18,7 @@ import {
   getBrowserTimeZone,
   parseAppointmentDateTime,
 } from "./appointmentDateTime";
+import ValueReceipt from "./ValueReceipt";
 import "./product-system.css";
 
 const DAY = 24 * 60 * 60 * 1000;
@@ -97,14 +98,6 @@ export default function RetentionCommandCenter({ leads = [], appointments = [], 
       value: Number(item.lead.next_value || item.lead.average_sale || item.lead.value || 75),
     }));
   const opportunityValue = opportunities.reduce((sum, item) => sum + item.value, 0);
-  const protectedValue = atRisk.reduce(
-    (sum, item) => sum + Number(item.lead.value || item.lead.average_sale || 75),
-    0
-  );
-  const estimatedHoursSaved = Math.max(
-    1,
-    Math.round((leads.length * 4 + appointments.length * 6) / 60)
-  );
   const pulse = leads.length
     ? Math.round(enriched.reduce((sum, item) => sum + item.health.score, 0) / enriched.length)
     : 0;
@@ -279,32 +272,28 @@ export default function RetentionCommandCenter({ leads = [], appointments = [], 
 
       {tab === "value" && (
         <div className="product-grid">
-          <section className="product-card" style={{ gridColumn: "1 / -1" }}>
-            <div className="product-eyebrow">Your RetainAI value receipt</div>
-            <h2 style={{ marginTop: 10 }}>
-              RetainAI is protecting relationships worth {money(protectedValue)}.
-            </h2>
-            <p className="product-card-copy">
-              A transparent estimate based on your current customer records,
-              follow-up opportunities, and upcoming bookings.
-            </p>
-          </section>
+          <ValueReceipt leads={leads} />
           <section className="product-card">
+            <div className="product-eyebrow">Estimates · not revenue</div>
+            <h3 style={{ marginTop: 10 }}>Open rebooking opportunities</h3>
+            <p className="product-card-copy">
+              Estimated from each customer's recorded value, or {money(75)} when none is recorded.
+              This is not money received and is never included in verified revenue.
+            </p>
             <div className="insight-list">
-              <div className="insight-row"><span>Revenue opportunities identified</span><strong>{money(opportunityValue)}</strong></div>
-              <div className="insight-row"><span>Relationships being monitored</span><strong>{leads.length}</strong></div>
-              <div className="insight-row"><span>Priority actions surfaced</span><strong>{atRisk.length + needsAttention.length}</strong></div>
-              <div className="insight-row"><span>Estimated admin time saved</span><strong>{estimatedHoursSaved}h</strong></div>
+              <div className="insight-row"><span>Estimated value of open opportunities</span><strong>{money(opportunityValue)}</strong></div>
+              <div className="insight-row"><span>Customers with an opportunity</span><strong>{opportunities.length}</strong></div>
+              <div className="insight-row"><span>Relationships monitored</span><strong>{leads.length}</strong></div>
             </div>
           </section>
           <section className="product-card">
-            <h3>Recommended next win</h3>
+            <h3>Recommended next step</h3>
             <p className="product-card-copy">
               {opportunities.length
-                ? `Contact your top ${Math.min(3, opportunities.length)} rebooking opportunities. Their estimated combined value is ${money(opportunities.slice(0, 3).reduce((sum, item) => sum + item.value, 0))}.`
-                : `Your ${user?.businessType || "business"} relationships look current. Activate review requests to build referral momentum.`}
+                ? `Review your top ${Math.min(3, opportunities.length)} rebooking opportunities and decide who to contact.`
+                : `Your ${user?.businessType || "business"} relationships look current.`}
             </p>
-            <button className="product-button primary" onClick={() => setTab("opportunities")}>Open next opportunities</button>
+            <button className="product-button primary" onClick={() => setTab("opportunities")}>Open opportunities</button>
           </section>
         </div>
       )}

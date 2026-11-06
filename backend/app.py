@@ -4091,6 +4091,13 @@ def stripe_webhook():
     except Exception:
         return "", 400
 
+    # Events from a merchant's connected account carry a top-level "account".
+    # Their invoices are the merchant's own revenue (metadata.user_email is the
+    # merchant's workspace), never RetainAI membership billing: they must not
+    # change billing status or partner commissions.
+    if event.get("account"):
+        return "", 200
+
     from flask import g
     g.partner_stripe_event = event
     event_type = str(event.get("type") or "")
@@ -8376,6 +8383,7 @@ def send_ai_message():
         }), 502
 
     if owner_email:
+        record_followup(owner_email, lead_email=to_email, channel="email", source="ai_email")
         add_notification(
             user_email=owner_email,
             subject="AI email sent",
@@ -9210,6 +9218,13 @@ def execute_step(flow: Dict[str, Any], step: Dict[str, Any], lead: Dict[str, Any
         )
         if ok:
             mark_sent(run, CHANNEL_EMAIL)
+            record_followup(
+                (lead.get("owner") or flow.get("owner") or "").lower(),
+                lead_id=str(lead.get("id") or ""),
+                lead_email=email,
+                channel="email",
+                source="automation_email",
+            )
             add_notification(
                 user_email=(lead.get("owner") or flow.get("owner") or "").lower(),
                 subject="Automation email sent",
@@ -10509,6 +10524,7 @@ from app_owner import owner_bp
 from app_account import account_bp
 from partner_commissions import partners_bp, signup_partner
 from app_wa_auto_appointments import WA_AUTO_BP
+from app_value import value_bp, record_followup
 
 app.register_blueprint(imports_bp)
 app.register_blueprint(team_bp)
@@ -10516,6 +10532,7 @@ app.register_blueprint(owner_bp)
 app.register_blueprint(partners_bp)
 app.register_blueprint(account_bp)
 app.register_blueprint(WA_AUTO_BP)
+app.register_blueprint(value_bp)
 
 
 # ----------------------------
