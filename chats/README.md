@@ -6,7 +6,7 @@ links) and what is still open. Add a file at the end of each session.
 
 | Date | Session | Summary |
 | --- | --- | --- |
-| 2026-11-06 | [Contact import and save safety](2026-11-06-contact-import-and-save-safety.md) | Unified CSV/vCard import (#33) and revision-checked contact saves (#34) merged; legacy appointment fix (#35) open; no public App Review submission |
+| 2026-11-06 | [Contact import and save safety](2026-11-06-contact-import-and-save-safety.md) | Import, safe contact saves and legacy appointment fixes (#33–35) merged; Closet Muse community live and TestFlight build 2 ready; public App Review unsubmitted |
 | 2026-11-06 | [Joint launch completion](2026-11-06-joint-launch-completion.md) | RetainAI API-origin and signup fixes reviewed and deployed; fresh Closet Muse gates and Apple preparation verified; actual owner/provider/recovery requirements recorded |
 | 2026-11-02 | [Partner commissions](2026-11-02-partner-commissions.md) | Approved 30% / 12 months for both apps; signed referral attribution, owner ledger, refund reconciliation and controlled external-payment records |
 | 2026-11-02 | [Partner invitations](2026-11-02-partner-pages.md) | Closet Muse partner page shipped; RetainAI referral-partner pitch, footer link and enquiry page; commercial terms remain proposals |
