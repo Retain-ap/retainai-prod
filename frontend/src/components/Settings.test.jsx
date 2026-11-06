@@ -90,7 +90,7 @@ test("allows leaving the route-selected Import Contacts tab", async () => {
     </MemoryRouter>
   );
 
-  expect(await screen.findByText("Bring your customers with you")).toBeInTheDocument();
+  expect(await screen.findByText("Import contacts")).toBeInTheDocument();
   fireEvent.click(screen.getByRole("button", { name: "Profile" }));
 
   expect(await screen.findByRole("button", { name: "Edit Profile" })).toBeInTheDocument();
