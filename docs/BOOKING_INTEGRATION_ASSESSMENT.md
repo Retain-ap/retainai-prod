@@ -1,9 +1,10 @@
 # Booking platform integration: assessment
 
-Status, November 6, 2026: **no booking platform is connected or chosen.** The
-owner has not picked one. RetainAI's own calendar and appointments keep working
-in general mode and with the optional salon/barber preset. Nothing here was
-purchased, and no OAuth app was registered.
+Status, November 6, 2026: after no reply on the platform question, Codex told
+the owner RetainAI would assume **Square first**. A read-only Square Bookings
+integration is **built but not live**: no Square application is registered and
+no credentials are set, so the app says Square is "not available yet". Nothing
+was purchased.
 
 ## What RetainAI needs from a booking platform
 
@@ -72,6 +73,54 @@ so rebooking intervals gain less than with Square.
 - Contact files import through the existing CSV/vCard importer.
 - Google Calendar sync remains subject to Google's verification status; see
   `chats/`.
+
+## Square v1 as built (`backend/square_bookings.py`, `backend/app_square.py`)
+
+- **Who:** the workspace owner only. Team members get 403 and don't see the card.
+- **Scopes:** `APPOINTMENTS_READ APPOINTMENTS_ALL_READ CUSTOMERS_READ` (seller-level reads,
+  available on Square's free plan). No write scopes.
+- **OAuth:**
+  - Square's code flow for a confidential server, using the app secret. Square documents
+    PKCE for public clients: there it replaces the secret and makes refresh tokens single-use
+    and 90-day expiring. So CSRF protection comes from RetainAI's single-use, 10-minute `state`.
+  - The callback must arrive in the same signed-in owner session that started it.
+  - `session=false` in production.
+  - A Square seller can be linked to only one workspace.
+- **Tokens:**
+  - Encrypted with `DATA_ENCRYPTION_KEY`, never returned or exported.
+  - Renewed when older than 7 days, as Square recommends, and on a 401 (retried once). If
+    Square refuses the renewal, the connection is marked "reconnect needed".
+  - Disconnecting, or deleting the workspace, revokes at Square with
+    `Authorization: Client <secret>` and deletes the stored tokens.
+- **Sync (manual "Sync now"; no webhooks):**
+  - Reads 31-day windows from 180 days back to 60 days ahead, page by page, up to 2,000
+    bookings and 500 customer lookups. A capped read is reported as partial.
+  - Imports only bookings whose Square customer matches exactly one existing RetainAI contact
+    by email, otherwise by phone. **No contact is created**, no consent recorded, nothing sent,
+    no automation started.
+  - Idempotent on the Square booking ID: a re-sync updates status or time, and never
+    duplicates or deletes.
+- **Status mapping:**
+  - `CANCELLED_BY_CUSTOMER`, `CANCELLED_BY_SELLER` and `DECLINED` become cancelled.
+  - `NO_SHOW` becomes no-show.
+  - `ACCEPTED` becomes scheduled, or **completed once its start time has passed**. Square has
+    no "completed" status, so this is an inference, and it is documented.
+  - `PENDING` becomes scheduled if in the future; a past pending booking is skipped.
+- **Time:** stored in the workspace's timezone. Square location timezones are not read,
+  because that would need another scope.
+
+### What the owner must do before it can be used (not done)
+
+1. Create a Square Developer application (free). Register
+   `https://api.retainai.ca/api/square/oauth/callback` as its OAuth redirect URL, and set the
+   application's API version in the Developer Console. RetainAI sends no `Square-Version`
+   header, so Square applies that setting.
+2. Test in Square's Sandbox first. Set on the backend service: `SQUARE_ENVIRONMENT=sandbox`,
+   `SQUARE_APPLICATION_ID` and `SQUARE_APPLICATION_SECRET` (the secret as a secret value), and
+   `FRONTEND_URL=https://www.retainai.ca`. Use a sandbox seller with test bookings.
+3. Only after a real sandbox OAuth round trip and sync pass, switch to production credentials.
+   Confirm whether Square requires App Marketplace review for connecting other sellers'
+   accounts. Until all of this is done, do not describe Square as connected.
 
 ## Recommendation
 

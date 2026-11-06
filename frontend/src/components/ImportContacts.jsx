@@ -3,6 +3,7 @@ import { FaCloudUploadAlt, FaGoogle, FaHistory, FaUndo } from "react-icons/fa";
 import { apiUrl } from "../apiBase";
 import "./product-system.css";
 import "./ImportContacts.css";
+import SquareBookingsCard from "./SquareBookingsCard";
 
 export const FIELDS = [
   ["name", "Full name"], ["first_name", "First name"], ["last_name", "Last name"],
@@ -313,6 +314,8 @@ export default function ImportContacts({ user, focusGoogle = false }) {
           {google?.google_connected ? <button type="button" className="product-button danger" onClick={disconnectGoogle} disabled={Boolean(busy)}>{busy === "google-disconnect" ? "Disconnecting…" : "Disconnect"}</button> : null}
         </div>
       </section>
+
+      <SquareBookingsCard />
 
       <section className="product-card">
         <div className="product-card-header"><div><h2>Recent imports</h2><p className="product-card-copy">Undo removes the contacts a file import added and restores the ones it changed. Contacts edited since then are kept.</p></div><FaHistory aria-hidden="true" /></div>
