@@ -1,6 +1,6 @@
 import React from "react";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
-import Appointments from "./Appointments";
+import Appointments, { localAppointmentKey } from "./Appointments";
 
 const user = { email: "owner@example.com" };
 const appointment = { _localKey: "appt-1", title: "Colour consult", date: "2099-01-15", time: "10:00", done: false };
@@ -84,4 +84,77 @@ test("shows an error and changes nothing when the latest list cannot be loaded",
   expect(await screen.findByText(/Service unavailable/)).toBeInTheDocument();
   expect(setLeads.mock.calls.some(([value]) => Array.isArray(value))).toBe(false);
   expect(global.fetch.mock.calls.some(([, options]) => options?.method === "POST")).toBe(false);
+});
+
+describe("appointments saved before keys were stored", () => {
+  // Same title, date and time three times: twice on one contact, once on another.
+  const slot = { title: "Colour consult", date: "2099-01-15", time: "10:00", done: false };
+  const first = { ...slot, notes: "first" };
+  const second = { ...slot, notes: "second" };
+  const other = { ...slot, notes: "other contact" };
+  const ana = { id: "ana", name: "Ana", email: "ana@example.com", appointments: [first, second] };
+  const ben = { id: "ben", name: "Ben", email: "ben@example.com", appointments: [other] };
+
+  async function showLegacyAppointments() {
+    mockServer([ana, ben]);
+    const saveLeads = jest.fn(async (next) => ({ leads: next, conflicts: [] }));
+    render(<Appointments user={user} leads={[ana, ben]} setLeads={jest.fn()} saveLeads={saveLeads} />);
+    expect(await screen.findAllByRole("button", { name: "Done" })).toHaveLength(3);
+    return saveLeads;
+  }
+
+  const savedList = (saveLeads) => saveLeads.mock.calls[0][0];
+
+  test("Done changes only the clicked appointment, not its identical twin or the other contact's", async () => {
+    const saveLeads = await showLegacyAppointments();
+    fireEvent.click(screen.getAllByRole("button", { name: "Done" })[1]);
+    await waitFor(() => expect(saveLeads).toHaveBeenCalledTimes(1));
+    expect(savedList(saveLeads)).toEqual([
+      { ...ana, appointments: [first, { ...second, done: true }] },
+      ben,
+    ]);
+  });
+
+  test("reschedule moves only the clicked appointment", async () => {
+    const saveLeads = await showLegacyAppointments();
+    fireEvent.click(screen.getAllByRole("button", { name: /\+1 week/ })[0]);
+    await waitFor(() => expect(saveLeads).toHaveBeenCalledTimes(1));
+    expect(savedList(saveLeads)).toEqual([
+      { ...ana, appointments: [{ ...first, date: "2099-01-22" }, second] },
+      ben,
+    ]);
+  });
+
+  test("delete removes only the clicked appointment", async () => {
+    const confirm = jest.spyOn(window, "confirm").mockReturnValue(true);
+    const saveLeads = await showLegacyAppointments();
+    fireEvent.click(screen.getAllByRole("button", { name: "Delete" })[2]);
+    await waitFor(() => expect(saveLeads).toHaveBeenCalledTimes(1));
+    expect(savedList(saveLeads)).toEqual([ana, { ...ben, appointments: [] }]);
+    confirm.mockRestore();
+  });
+
+  test("edit replaces only the clicked appointment and gives it a key of its own", async () => {
+    const saveLeads = await showLegacyAppointments();
+    fireEvent.click(screen.getAllByRole("button", { name: "Edit" })[0]);
+    fireEvent.change(screen.getByPlaceholderText("Appointment title"), { target: { value: "Cut and colour" } });
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+    await waitFor(() => expect(saveLeads).toHaveBeenCalledTimes(1));
+    const [savedAna, savedBen] = savedList(saveLeads);
+    expect(savedBen).toEqual(ben);
+    expect(savedAna.appointments).toHaveLength(2);
+    expect(savedAna.appointments[0]).toEqual(second); // the twin is untouched
+    const edited = savedAna.appointments[1];
+    expect(edited).toMatchObject({ title: "Cut and colour", date: slot.date, time: slot.time, notes: "first" });
+    // A positional key would now equal the twin's (it moved to position 0).
+    expect(edited._localKey).toMatch(/^ana\|local\|/);
+    expect(edited._localKey).not.toBe(localAppointmentKey("ana", second, 0));
+  });
+});
+
+test("localAppointmentKey keeps stored keys and tells identical legacy appointments apart", () => {
+  const legacy = { title: "Consult", date: "2099-01-15", time: "10:00" };
+  expect(localAppointmentKey("ana", { ...legacy, _localKey: "stored" }, 4)).toBe("stored");
+  expect(localAppointmentKey("ana", legacy, 0)).not.toBe(localAppointmentKey("ana", legacy, 1));
+  expect(localAppointmentKey("ana", legacy, 0)).not.toBe(localAppointmentKey("ben", legacy, 0));
 });

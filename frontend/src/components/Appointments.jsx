@@ -244,9 +244,8 @@ function getAppointments(leads = [], backendRows = [], fallbackTimezone = "") {
       const normalized = {
         ...app,
         _local: true,
-        _localKey:
-          app._localKey ||
-          `${String(lead.id)}|${String(app.title)}|${String(app.date)}|${String(app.time || "")}|${idx}`,
+        _localKey: localAppointmentKey(lead.id, app, idx),
+        _hasStoredKey: Boolean(app._localKey),
         lead,
         timeZone: fallbackTimezone,
         sortKey: dt.getTime(),
@@ -310,6 +309,23 @@ function getLeadDisplayName(lead) {
 
 function dateWeeksFromNow(weeks, timeZone) {
   return addDaysToDateKey(dayKeyNow(timeZone), weeks * 7);
+}
+
+/**
+ * The key that identifies one appointment stored on a contact. Appointments
+ * saved before keys were stored get one from their contact, fields and
+ * position, so two appointments with the same title and time stay distinct.
+ */
+export function localAppointmentKey(leadId, appointment, index) {
+  if (appointment?._localKey) return String(appointment._localKey);
+  return `${String(leadId)}|${String(appointment?.title)}|${String(appointment?.date)}|${String(appointment?.time || "")}|${index}`;
+}
+
+function newLocalAppointmentKey(leadId) {
+  const random = typeof crypto !== "undefined" && crypto.randomUUID
+    ? crypto.randomUUID()
+    : `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
+  return `${String(leadId)}|local|${random}`;
 }
 
 export default function Appointments({ user, leads = [], setLeads, saveLeads }) {
@@ -767,9 +783,8 @@ export default function Appointments({ user, leads = [], setLeads, saveLeads }) 
           if (String(l.id) !== String(appt.lead.id)) return l;
           return {
             ...l,
-            appointments: (l.appointments || []).map((x) =>
-              String(x._localKey || `${l.id}|${x.title}|${x.date}|${x.time || ""}`) ===
-              String(appt._localKey)
+            appointments: (l.appointments || []).map((x, index) =>
+              localAppointmentKey(l.id, x, index) === String(appt._localKey)
                 ? { ...x, done: !x.done }
                 : x
             ),
@@ -833,9 +848,8 @@ export default function Appointments({ user, leads = [], setLeads, saveLeads }) 
             rebook_recommended_for: visitNote.rebook || lead.rebook_recommended_for || "",
           };
           if (!isBackend(noteAppointment)) {
-            updated.appointments = (lead.appointments || []).map((item) => {
-              const localKey = item._localKey || `${lead.id}|${item.title}|${item.date}|${item.time || ""}`;
-              return String(localKey) === String(noteAppointment._localKey)
+            updated.appointments = (lead.appointments || []).map((item, index) => {
+              return localAppointmentKey(lead.id, item, index) === String(noteAppointment._localKey)
                 ? { ...item, done: true, notes: [item.notes, summary].filter(Boolean).join("\n\n") }
                 : item;
             });
@@ -892,9 +906,8 @@ export default function Appointments({ user, leads = [], setLeads, saveLeads }) 
           if (String(l.id) !== String(appt.lead.id)) return l;
           return {
             ...l,
-            appointments: (l.appointments || []).map((x) => {
-              const localKey = x._localKey || `${l.id}|${x.title}|${x.date}|${x.time || ""}`;
-              if (String(localKey) !== String(appt._localKey)) return x;
+            appointments: (l.appointments || []).map((x, index) => {
+              if (localAppointmentKey(l.id, x, index) !== String(appt._localKey)) return x;
               return { ...x, date: addDaysToDateKey(x.date, days) || x.date };
             }),
           };
@@ -934,10 +947,9 @@ export default function Appointments({ user, leads = [], setLeads, saveLeads }) 
           String(l.id) === String(appt.lead.id)
             ? {
                 ...l,
-                appointments: (l.appointments || []).filter((x) => {
-                  const localKey = x._localKey || `${l.id}|${x.title}|${x.date}|${x.time || ""}`;
-                  return String(localKey) !== String(appt._localKey);
-                }),
+                appointments: (l.appointments || []).filter(
+                  (x, index) => localAppointmentKey(l.id, x, index) !== String(appt._localKey)
+                ),
               }
             : l
         )
@@ -993,11 +1005,9 @@ export default function Appointments({ user, leads = [], setLeads, saveLeads }) 
       } else if (editing) {
         await updateLocalLeadAppointments((prev) => {
           return prev.map((l) => {
-            const filtered = (l.appointments || []).filter((x) => {
-              const localKey =
-                x._localKey || `${l.id}|${x.title}|${x.date}|${x.time || ""}`;
-              return String(localKey) !== String(editing._localKey);
-            });
+            const filtered = (l.appointments || []).filter(
+              (x, index) => localAppointmentKey(l.id, x, index) !== String(editing._localKey)
+            );
             if (String(l.id) !== String(leadId)) {
               return filtered.length === (l.appointments || []).length
                 ? l
@@ -1006,7 +1016,7 @@ export default function Appointments({ user, leads = [], setLeads, saveLeads }) 
             return {
               ...l,
               appointments: [...filtered, {
-                _localKey: editing._localKey,
+                _localKey: editing._hasStoredKey ? editing._localKey : newLocalAppointmentKey(leadId),
                 title: title.trim(),
                 date,
                 time,
