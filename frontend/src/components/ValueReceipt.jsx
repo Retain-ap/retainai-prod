@@ -56,7 +56,15 @@ async function call(path, options = {}) {
   return data;
 }
 
-export default function ValueReceipt({ leads = [] }) {
+/** Bookings RetainAI's server knows about, for the owner to tie a payment to. */
+function bookingsFor(appointments, leadId) {
+  return (appointments || [])
+    .filter((appt) => appt?._backend?.id && String(appt?.lead?.id || appt?._backend?.lead_id || "") === String(leadId))
+    .filter((appt) => ["scheduled", "completed"].includes(String(appt?._backend?.status || "scheduled").toLowerCase()))
+    .map((appt) => ({ id: String(appt._backend.id), label: `${appt.date || ""} ${appt.time || ""} · ${appt.title || "Appointment"} (${appt._backend.status || "scheduled"})`.trim() }));
+}
+
+export default function ValueReceipt({ leads = [], appointments = [] }) {
   const [period, setPeriod] = useState("90");
   const [receipt, setReceipt] = useState(null);
   const [error, setError] = useState("");
@@ -184,7 +192,7 @@ export default function ValueReceipt({ leads = [] }) {
 
       <div className="value-actions">
         {receipt.stripe_connected && <button type="button" className="product-button" onClick={sync} disabled={Boolean(busy)}>{busy === "sync" ? "Reading Stripe…" : "Update from Stripe"}</button>}
-        <button type="button" className="product-button" onClick={() => setForm({ lead_id: leads[0]?.id || "", amount: "", currency: "cad", paid_at: localDay(0), paid_time: "", reference: "", idempotency_key: newKey() })} disabled={Boolean(busy) || !leads.length}>Record a payment</button>
+        <button type="button" className="product-button" onClick={() => setForm({ lead_id: leads[0]?.id || "", amount: "", currency: "cad", paid_at: localDay(0), paid_time: "", appointment_id: "", reference: "", idempotency_key: newKey() })} disabled={Boolean(busy) || !leads.length}>Record a payment</button>
         <button type="button" className="product-button" onClick={exportCsv} disabled={Boolean(busy)}>{busy === "export" ? "Exporting…" : "Export CSV"}</button>
         <small className="product-card-copy">{receipt.stripe_connected ? `Stripe last read ${receipt.sync?.last_synced_at ? shortDate(receipt.sync.last_synced_at) : "never"}.` : "Connect Stripe in Invoices to add verified payments."}</small>
       </div>
@@ -192,12 +200,16 @@ export default function ValueReceipt({ leads = [] }) {
       {form && (
         <form className="value-form" onSubmit={savePayment} aria-label="Record a payment">
           <p className="product-card-copy">For payments taken outside Stripe (cash, card terminal, e-transfer). They are shown as owner-recorded, never as verified.</p>
-          <label>Customer<select className="product-input" value={form.lead_id} onChange={(e) => setForm({ ...form, lead_id: e.target.value })}>{leads.filter((lead) => lead.id).map((lead) => <option key={lead.id} value={lead.id}>{lead.name || lead.email || lead.id}</option>)}</select></label>
+          <label>Customer<select className="product-input" value={form.lead_id} onChange={(e) => setForm({ ...form, lead_id: e.target.value, appointment_id: "" })}>{leads.filter((lead) => lead.id).map((lead) => <option key={lead.id} value={lead.id}>{lead.name || lead.email || lead.id}</option>)}</select></label>
           <label>Amount<input className="product-input" inputMode="decimal" required value={form.amount} onChange={(e) => setForm({ ...form, amount: e.target.value })} /></label>
           <label>Currency<select className="product-input" value={form.currency} onChange={(e) => setForm({ ...form, currency: e.target.value })}>{CURRENCY_CHOICES.map((code) => <option key={code} value={code}>{code.toUpperCase()}</option>)}</select></label>
           <label>Date received<input className="product-input" type="date" required max={localDay(0)} value={form.paid_at} onChange={(e) => setForm({ ...form, paid_at: e.target.value })} /></label>
+          <label>Booking this payment is for (optional)<select className="product-input" value={form.appointment_id} onChange={(e) => setForm({ ...form, appointment_id: e.target.value })}>
+            <option value="">No booking (won't be linked)</option>
+            {bookingsFor(appointments, form.lead_id).map((booking) => <option key={booking.id} value={booking.id}>{booking.label}</option>)}
+          </select></label>
           <label>Time received (optional)<input className="product-input" type="time" aria-describedby="value-time-help" value={form.paid_time} onChange={(e) => setForm({ ...form, paid_time: e.target.value })} /></label>
-          <small id="value-time-help" className="product-card-copy">Without a time, a booking made the same day can't be linked, because their order is unknown.</small>
+          <small id="value-time-help" className="product-card-copy">A payment is linked only through the booking you choose here. Without a time, a booking made the same day can't be linked, because their order is unknown.</small>
           <label>Reference (optional)<input className="product-input" maxLength={120} value={form.reference} onChange={(e) => setForm({ ...form, reference: e.target.value })} /></label>
           <div className="value-actions"><button type="submit" className="product-button primary" disabled={busy === "save"}>{busy === "save" ? "Saving…" : "Save payment"}</button><button type="button" className="product-button" onClick={() => setForm(null)}>Cancel</button></div>
         </form>

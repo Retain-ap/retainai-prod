@@ -331,7 +331,7 @@ export default function RetentionCommandCenter({ leads = [], appointments = [], 
 
       {tab === "value" && (
         <div className="product-grid">
-          <ValueReceipt leads={leads} />
+          <ValueReceipt leads={leads} appointments={appointments} />
           <section className="product-card">
             <div className="product-eyebrow">Estimates · not revenue</div>
             <h3 style={{ marginTop: 10 }}>Open rebooking opportunities</h3>

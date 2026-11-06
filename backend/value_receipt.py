@@ -194,6 +194,20 @@ def _write(path, data):
     os.replace(temp, path)
 
 
+def valid_bookings_for(lead, appointments):
+    """This contact's bookings that can confirm a sale (scheduled or completed)."""
+    lead_id, email = str((lead or {}).get("id") or ""), _email((lead or {}).get("email"))
+    rows = []
+    for appt in appointments or []:
+        if not isinstance(appt, dict) or not appt.get("id"):
+            continue
+        status = str(appt.get("status") or "scheduled").lower()
+        same = (lead_id and str(appt.get("lead_id") or "") == lead_id) or (email and _email(appt.get("lead_email")) == email)
+        if same and status in BOOKING_STATUSES and _utc(appt.get("created_at")):
+            rows.append(appt)
+    return rows
+
+
 # ---------------------------------------------------------- revenue evidence
 
 class RevenueStore:
@@ -249,7 +263,7 @@ class RevenueStore:
             bucket["last_sync"] = {"at": synced_at, "complete": bool(complete), "read": len(records), "not_refreshed": not_refreshed}
         return {"added": added, "updated": updated, "not_refreshed": not_refreshed, "complete": bool(complete)}
 
-    def add_manual(self, workspace, payload, *, lead, recorded_by, now, timezone_name="UTC"):
+    def add_manual(self, workspace, payload, *, lead, recorded_by, now, timezone_name="UTC", bookings=()):
         key = str(payload.get("idempotency_key") or "").strip()
         if not re.fullmatch(r"[A-Za-z0-9_-]{8,80}", key):
             raise EvidenceError("A valid idempotency key is required.")
@@ -275,6 +289,9 @@ class RevenueStore:
             # Only the day is known: keep it as a day, never invent a time.
             paid_at = dt.datetime.combine(paid_on, dt.time(0), zone)
         reference = str(payload.get("reference") or "").strip()[:120]
+        booking_id = str(payload.get("appointment_id") or "").strip()
+        if booking_id and booking_id not in {str(row.get("id") or "") for row in valid_bookings_for(lead, bookings)}:
+            raise EvidenceError("Choose one of this customer's bookings, or leave the booking empty.")
         record = {
             "id": f"manual:{key}",
             "source": "manual",
@@ -291,11 +308,12 @@ class RevenueStore:
             "customer_email": _email(lead.get("email")),
             "customer_name": str(lead.get("name") or "")[:160],
             "reference": reference,
+            "booking_ref": booking_id,
             "livemode": True,
             "recorded_by": recorded_by,
             "recorded_at": _iso(now),
         }
-        identity = {k: record[k] for k in ("amount_minor", "currency", "paid_at", "paid_precision", "lead_id", "reference")}
+        identity = {k: record[k] for k in ("amount_minor", "currency", "paid_at", "paid_precision", "lead_id", "reference", "booking_ref")}
         with self._bucket(workspace) as bucket:
             stored = bucket["records"]
             existing = stored.get(record["id"])
@@ -386,8 +404,10 @@ def stripe_invoice_record(invoice, account_id):
         verification, settlement = UNCONFIRMED, "charge_incomplete"
     if verification != VERIFIED:
         refunded = min(amount_paid, _int(_field(invoice, "post_payment_credit_notes_amount")))
-    issued_at = _utc(_field(invoice, "status_transitions", "finalized_at")) or _utc(_field(invoice, "created"))
+    # The invoice itself is the confirmation: its own finalization time.
+    issued_at = _utc(_field(invoice, "status_transitions", "finalized_at"))
     invoice_id = str(_field(invoice, "id") or "")
+    booking_ref = str(_field(invoice, "metadata", "retainai_appointment_id") or "").strip()[:80]
     return {
         "id": f"stripe:{invoice_id}",
         "source": "stripe",
@@ -402,6 +422,7 @@ def stripe_invoice_record(invoice, account_id):
         "invoice_id": invoice_id,
         "invoice_number": str(_field(invoice, "number") or ""),
         "invoice_issued_at": _iso(issued_at),
+        "booking_ref": booking_ref,
         "charge_id": str(_field(charge, "id") or "") if charge and not isinstance(charge, str) else "",
         "customer_email": _email(_field(invoice, "customer_email")),
         "customer_name": str(_field(invoice, "customer_name") or "")[:160],
@@ -532,20 +553,6 @@ def build_receipt(*, records, leads, followups, appointments, start, end, window
             key=lambda row: row["_at"],
         )
 
-    def bookings_for(lead):
-        lead_id, email = str(lead.get("id") or ""), _email(lead.get("email"))
-        rows = []
-        for appt in appointments or []:
-            if not isinstance(appt, dict):
-                continue
-            status = str(appt.get("status") or "scheduled").lower()
-            same = (lead_id and str(appt.get("lead_id") or "") == lead_id) or (email and _email(appt.get("lead_email")) == email)
-            booked_at = _utc(appt.get("created_at"))
-            if same and status in BOOKING_STATUSES and booked_at:
-                rows.append({"kind": "booking", "at": booked_at, "id": str(appt.get("id") or ""),
-                             "label": f"Booking ({status})", "appointment_time": appt.get("appointment_time") or ""})
-        return rows
-
     items, totals = [], {}
     for record in records:
         paid_at = _utc(record.get("paid_at"))
@@ -586,11 +593,20 @@ def build_receipt(*, records, leads, followups, appointments, start, end, window
         else:
             item["lead_id"] = str(lead.get("id") or "")
             item["customer_name"] = lead.get("name") or item["customer_name"]
+            # Only evidence tied to THIS payment can confirm it: the paid
+            # invoice's own finalization, or the one booking the payment
+            # explicitly references (owner-selected, or carried by the invoice).
+            # Other bookings of the same customer are never used.
             confirmations = []
             if record.get("source") == "stripe" and _utc(record.get("invoice_issued_at")):
                 confirmations.append({"kind": "invoice", "at": _utc(record["invoice_issued_at"]),
                                       "id": record.get("invoice_id") or "", "label": f"Invoice {record.get('invoice_number') or ''}".strip()})
-            confirmations += bookings_for(lead)
+            booking_ref = record.get("booking_ref") or ""
+            referenced = next((appt for appt in valid_bookings_for(lead, appointments) if str(appt.get("id")) == booking_ref), None) if booking_ref else None
+            if referenced:
+                confirmations.append({"kind": "booking", "at": _utc(referenced.get("created_at")), "id": booking_ref,
+                                      "label": f"Booking ({str(referenced.get('status') or 'scheduled').lower()})",
+                                      "appointment_time": referenced.get("appointment_time") or ""})
             same_day = [c for c in confirmations if day_only and before_payment <= c["at"] < same_day_end]
             confirmations = sorted((c for c in confirmations if c["at"] <= before_payment and (not day_only or c["at"] < before_payment)),
                                    key=lambda c: c["at"], reverse=True)
@@ -605,10 +621,15 @@ def build_receipt(*, records, leads, followups, appointments, start, end, window
                                             "label": confirmation["label"], "appointment_time": confirmation.get("appointment_time", "")}
                     break
             if not item["linked"]:
-                if same_day:
+                if booking_ref and not referenced:
+                    item["reason"] = "The booking selected for this payment no longer exists or was cancelled"
+                elif same_day:
                     item["reason"] = "The booking was on the payment day and the payment time isn't recorded, so their order is unknown. Add the time to link it."
                 elif not confirmations:
-                    item["reason"] = "No booking or invoice before the payment"
+                    item["reason"] = (
+                        "No booking selected for this payment" if record.get("source") == "manual"
+                        else "No finalized invoice time or referenced booking for this payment"
+                    )
                 else:
                     item["reason"] = f"No recorded follow-up in the {window.days} days before the booking or invoice"
         bucket = totals.setdefault(currency, {"linked_verified_minor": 0, "linked_owner_recorded_minor": 0,
@@ -638,8 +659,9 @@ def build_receipt(*, records, leads, followups, appointments, start, end, window
             "window_days": window.days,
             "linked_means": (
                 "A RetainAI follow-up was sent to this customer, then within "
-                f"{window.days} days a booking was recorded or an invoice was issued, "
-                "and the customer paid after that."
+                f"{window.days} days the paid invoice was issued or the booking tied to "
+                "this payment was made, and the customer paid after that. Other bookings "
+                "of the same customer are never used."
             ),
             "not_causal": "A link shows the order of events. It does not prove the follow-up caused the payment.",
             "excluded": ("RetainAI membership charges, test-mode payments, refunded amounts and Stripe payments "

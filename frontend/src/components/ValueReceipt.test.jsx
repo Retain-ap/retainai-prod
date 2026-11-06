@@ -68,16 +68,24 @@ test("says when the last Stripe update was partial and which refunds were not re
 
 test("records an owner payment with an idempotency key and reads Stripe on request", async () => {
   mockApi();
-  render(<ValueReceipt leads={[{ id: "a", name: "Ana" }]} />);
+  const appointments = [
+    { _backend: { id: "appt-a", lead_id: "a", status: "completed" }, lead: { id: "a" }, date: "2026-11-01", time: "10:00", title: "Cut" },
+    { _backend: { id: "appt-x", lead_id: "x", status: "completed" }, lead: { id: "x" }, date: "2026-11-01", time: "11:00", title: "Other customer" },
+    { _backend: { id: "appt-c", lead_id: "a", status: "cancelled" }, lead: { id: "a" }, date: "2026-11-02", time: "10:00", title: "Cancelled" },
+  ];
+  render(<ValueReceipt leads={[{ id: "a", name: "Ana" }]} appointments={appointments} />);
   fireEvent.click(await screen.findByRole("button", { name: "Record a payment" }));
   const form = screen.getByRole("form", { name: "Record a payment" });
   fireEvent.change(within(form).getByLabelText("Amount"), { target: { value: "80.00" } });
+  const booking = within(form).getByLabelText("Booking this payment is for (optional)");
+  expect(within(booking).getAllByRole("option").map((option) => option.value)).toEqual(["", "appt-a"]); // only this customer's live bookings
+  fireEvent.change(booking, { target: { value: "appt-a" } });
   fireEvent.change(within(form).getByLabelText("Time received (optional)"), { target: { value: "16:30" } });
   expect(within(form).getByText(/a booking made the same day can't be linked/)).toBeInTheDocument();
   fireEvent.click(within(form).getByRole("button", { name: "Save payment" }));
   expect(await screen.findByText(/shown as owner-recorded, not verified/)).toBeInTheDocument();
   const posted = calls.find((call) => call.url.endsWith("/value-receipt/payments")).body;
-  expect(posted).toMatchObject({ lead_id: "a", amount: "80.00", currency: "cad", paid_time: "16:30" });
+  expect(posted).toMatchObject({ lead_id: "a", amount: "80.00", currency: "cad", paid_time: "16:30", appointment_id: "appt-a" });
   expect(posted.idempotency_key.length).toBeGreaterThanOrEqual(8);
 
   fireEvent.click(screen.getByRole("button", { name: "Update from Stripe" }));

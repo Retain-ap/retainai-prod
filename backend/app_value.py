@@ -170,9 +170,12 @@ def record_payment():
     if not lead:
         return jsonify({"error": "Choose a customer from this workspace."}), 400
     try:
+        import app as core
+
         record, created = revenue_store.add_manual(
             ctx["workspace"], body, lead=lead, recorded_by=ctx["email"], now=_now(),
             timezone_name=ctx["owner"].get("timezone") or "UTC",
+            bookings=(core.load_appointments() or {}).get(ctx["workspace"]) or [],
         )
     except vr.EvidenceError as exc:
         return jsonify({"error": str(exc)}), 409 if "idempotency key was already used" in str(exc) else 400

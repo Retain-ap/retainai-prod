@@ -141,6 +141,7 @@ class EvidenceRuleTests(unittest.TestCase):
         self.assertEqual(timed["paid_at"], "2026-10-20T20:30:00Z")
         same_day_booking = {"id": "appt", "lead_id": "b", "status": "completed", "created_at": "2026-10-20T15:00:00Z"}
         follow = [followup("2026-10-18T12:00:00Z", lead_id="b")]
+        day_only, timed = dict(day_only, booking_ref="appt"), dict(timed, booking_ref="appt")
         unknown = receipt([day_only], follow, [same_day_booking])
         self.assertFalse(unknown["items"][0]["linked"])
         self.assertIn("order is unknown", unknown["items"][0]["reason"])
@@ -185,7 +186,8 @@ class EvidenceRuleTests(unittest.TestCase):
 
     def test_owner_recorded_payment_links_through_a_booking_and_stays_separate(self):
         manual = {"id": "manual:k1", "source": "manual", "verification": vr.OWNER, "amount_minor": 8000, "refunded_minor": 0,
-                  "currency": "cad", "paid_at": "2026-10-20T18:00:00Z", "lead_id": "b", "customer_email": "ben@example.com", "livemode": True}
+                  "currency": "cad", "paid_at": "2026-10-20T18:00:00Z", "lead_id": "b", "customer_email": "ben@example.com", "livemode": True,
+                  "booking_ref": "appt-1"}
         booking = {"id": "appt-1", "lead_id": "b", "lead_email": "ben@example.com", "status": "completed",
                    "created_at": "2026-10-15T12:00:00Z", "appointment_time": "2026-10-20T17:00:00"}
         cancelled = dict(booking, id="appt-2", status="cancelled")
@@ -194,8 +196,48 @@ class EvidenceRuleTests(unittest.TestCase):
         self.assertEqual(result["items"][0]["confirmation"]["kind"], "booking")
         self.assertEqual(result["totals"]["cad"]["linked_owner_recorded_minor"], 8000)
         self.assertEqual(result["totals"]["cad"]["linked_verified_minor"], 0)
-        no_booking = receipt([manual], [followup("2026-10-14T12:00:00Z", lead_id="b")], [cancelled])
-        self.assertEqual(no_booking["items"][0]["reason"], "No booking or invoice before the payment")
+        cancelled_ref = receipt([dict(manual, booking_ref="appt-2")], [followup("2026-10-14T12:00:00Z", lead_id="b")], [booking, cancelled])
+        self.assertEqual(cancelled_ref["items"][0]["reason"], "The booking selected for this payment no longer exists or was cancelled")
+        unselected = receipt([dict(manual, booking_ref="")], [followup("2026-10-14T12:00:00Z", lead_id="b")], [booking])
+        self.assertEqual(unselected["items"][0]["reason"], "No booking selected for this payment")
+        self.assertEqual(unselected["totals"]["cad"]["linked_owner_recorded_minor"], 0)
+
+    def test_an_unrelated_older_booking_never_links_a_later_payment(self):
+        # 2025: a follow-up and a booking. 2026: an unrelated payment from the same customer.
+        old_follow = [followup("2025-05-01T12:00:00Z", lead_id="b")]
+        old_booking = {"id": "appt-old", "lead_id": "b", "status": "completed", "created_at": "2025-05-02T12:00:00Z"}
+        manual = {"id": "manual:k2", "source": "manual", "verification": vr.OWNER, "amount_minor": 9000, "refunded_minor": 0,
+                  "currency": "cad", "paid_at": "2026-10-20T18:00:00Z", "lead_id": "b", "livemode": True, "booking_ref": ""}
+        stripe_paid = vr.stripe_invoice_record(invoice("in_late", email="ben@example.com", created="2026-10-10T10:00:00",
+                                                       paid="2026-10-12T15:00:00"), "acct")
+        result = receipt([manual, stripe_paid], old_follow, [old_booking])
+        self.assertTrue(all(not item["linked"] for item in result["items"]))
+        self.assertEqual(result["totals"]["cad"]["linked_verified_minor"], 0)
+        self.assertEqual(result["totals"]["cad"]["linked_owner_recorded_minor"], 0)
+        # An invoice links only through its own finalization, or a booking it explicitly carries.
+        no_finalized = dict(stripe_paid, invoice_issued_at="")
+        self.assertFalse(receipt([no_finalized], [followup("2026-10-05T09:00:00Z", lead_id="b")], [old_booking])["items"][0]["linked"])
+        carried = dict(no_finalized, booking_ref="appt-new")
+        new_booking = {"id": "appt-new", "lead_id": "b", "status": "scheduled", "created_at": "2026-10-06T12:00:00Z"}
+        linked = receipt([carried], [followup("2026-10-05T09:00:00Z", lead_id="b")], [old_booking, new_booking])
+        self.assertTrue(linked["items"][0]["linked"])
+        self.assertEqual(linked["items"][0]["confirmation"]["id"], "appt-new")
+
+    def test_owner_must_pick_one_of_this_customers_bookings(self):
+        store = vr.RevenueStore(os.path.join(_TEST_DATA.name, f"rev-{uuid.uuid4().hex}.json"))
+        lead = {"id": "b", "email": "ben@example.com"}
+        mine = {"id": "appt-b", "lead_id": "b", "status": "completed", "created_at": "2026-10-01T12:00:00Z"}
+        theirs = {"id": "appt-x", "lead_id": "x", "status": "completed", "created_at": "2026-10-01T12:00:00Z"}
+        cancelled = {"id": "appt-c", "lead_id": "b", "status": "cancelled", "created_at": "2026-10-01T12:00:00Z"}
+        now = dt.datetime(2026, 10, 20, tzinfo=UTC)
+        base = {"amount": "10", "currency": "cad", "paid_at": "2026-10-19"}
+        for bad in ("appt-x", "appt-c", "missing"):
+            with self.subTest(bad=bad), self.assertRaises(vr.EvidenceError):
+                store.add_manual("ws", {**base, "appointment_id": bad, "idempotency_key": f"pick-{bad}-1"}, lead=lead,
+                                 recorded_by="o", now=now, bookings=[mine, theirs, cancelled])
+        record, _ = store.add_manual("ws", {**base, "appointment_id": "appt-b", "idempotency_key": "pick-ok-001"}, lead=lead,
+                                     recorded_by="o", now=now, bookings=[mine, theirs, cancelled])
+        self.assertEqual(record["booking_ref"], "appt-b")
 
     def test_refunds_test_mode_ambiguous_contacts_currencies_and_period(self):
         follow = [followup("2026-10-05T09:00:00Z"), followup("2026-10-05T09:00:00Z", lead_id="", email="ana@example.com")]
@@ -362,7 +404,8 @@ class ValueReceiptApiTests(unittest.TestCase):
         changed = dict(payment, amount="90.00")
         self.assertEqual(client.post("/api/value-receipt/payments", json=changed, headers=ORIGIN).status_code, 409)
         for bad in ({**payment, "lead_id": "x"}, {**payment, "idempotency_key": "k"}, {**payment, "currency": "btc"},
-                    {**payment, "paid_at": "2099-01-01"}, {**payment, "amount": "1.234"}, ["not", "an", "object"]):
+                    {**payment, "paid_at": "2099-01-01"}, {**payment, "amount": "1.234"}, ["not", "an", "object"],
+                    {**payment, "appointment_id": "not-a-booking-of-this-customer", "idempotency_key": "pay-0002-abcd"}):
             with self.subTest(bad=bad):
                 self.assertEqual(client.post("/api/value-receipt/payments", json=bad, headers=ORIGIN).status_code, 400)
         refund = client.post(f"/api/value-receipt/payments/{record['id']}/refund", json={"refunded_amount": "20"}, headers=ORIGIN)
