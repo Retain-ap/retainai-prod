@@ -1738,7 +1738,14 @@ export default function Automations({ user }) {
   async function refreshFlows() {
     const d = await api.listFlows(userEmail);
     const items = Array.isArray(d?.flows) ? d.flows : [];
-    setFlows(items.map((f) => normalizeFlow(f, userEmail)));
+    const normalized = items.map((f) => normalizeFlow(f, userEmail));
+    setFlows(normalized);
+    // The setup checklist's "Activate your first playbook" step is done only
+    // while a saved automation is actually active, not when one was opened.
+    try {
+      if (normalized.some((flow) => flow.enabled)) localStorage.setItem("retainai:onboarding-playbook", "1");
+      else localStorage.removeItem("retainai:onboarding-playbook");
+    } catch {}
   }
 
   useEffect(() => {
@@ -1774,7 +1781,6 @@ export default function Automations({ user }) {
 
         try {
           const requested = localStorage.getItem("retainai:selected-playbook") || "";
-          if (requested) localStorage.setItem("retainai:onboarding-playbook", "1");
           const keywords = {
             winback: ["inactive", "win"],
             rebook: ["rebook", "follow"],

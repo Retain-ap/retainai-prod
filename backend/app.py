@@ -3926,6 +3926,9 @@ def create_stripe_invoice():
     unit_amount = data.get("unit_amount")
     quantity = data.get("quantity") or 1
     currency = (data.get("currency") or "").lower().strip() or None
+    request_key = str(data.get("idempotency_key") or "").strip()
+    if request_key and not re.fullmatch(r"[A-Za-z0-9_-]{8,80}", request_key):
+        return jsonify({"error": "Invalid idempotency key"}), 400
 
     if not all([user_email, customer_name, customer_email, description]):
         return jsonify({"error": "Missing required fields"}), 400
@@ -3957,6 +3960,14 @@ def create_stripe_invoice():
     if not acct_id:
         return jsonify({"error": "Stripe account not connected"}), 400
 
+    def step_key(step: str) -> dict:
+        # A retry of the same submission (same key) replays Stripe's stored
+        # result for each step instead of creating a second invoice.
+        if not request_key:
+            return {}
+        digest = hashlib.sha256(f"{org_email}|{acct_id}|{request_key}".encode("utf-8")).hexdigest()[:40]
+        return {"idempotency_key": f"ra-inv-{digest}-{step}"}
+
     try:
         if not currency:
             acct = stripe.Account.retrieve(acct_id)
@@ -3967,7 +3978,7 @@ def create_stripe_invoice():
             cust = existing[0]
             stripe.Customer.modify(cust.id, name=customer_name, stripe_account=acct_id)
         else:
-            cust = stripe.Customer.create(email=customer_email, name=customer_name, stripe_account=acct_id)
+            cust = stripe.Customer.create(email=customer_email, name=customer_name, stripe_account=acct_id, **step_key("customer"))
         cust_id = cust.id
 
         inv = stripe.Invoice.create(
@@ -3977,6 +3988,7 @@ def create_stripe_invoice():
             auto_advance=False,
             metadata={"user_email": org_email, "customer_name": customer_name},
             stripe_account=acct_id,
+            **step_key("invoice"),
         )
 
         total_minor = to_minor(total_float, currency)
@@ -3988,13 +4000,14 @@ def create_stripe_invoice():
             description=description,
             metadata={"user_email": org_email, "customer_name": customer_name, "quantity": quantity},
             stripe_account=acct_id,
+            **step_key("item"),
         )
 
-        inv = stripe.Invoice.finalize_invoice(inv.id, stripe_account=acct_id)
+        inv = stripe.Invoice.finalize_invoice(inv.id, stripe_account=acct_id, **step_key("finalize"))
         # collection_method=send_invoice does not email the customer merely by
         # finalizing. Explicitly send it so the UI's "Send Invoice" promise is
         # true and the first invoice does not silently remain only in Stripe.
-        inv = stripe.Invoice.send_invoice(inv.id, stripe_account=acct_id)
+        inv = stripe.Invoice.send_invoice(inv.id, stripe_account=acct_id, **step_key("send"))
 
         latest = stripe.Invoice.list(limit=100, expand=["data.customer"], stripe_account=acct_id).data
         invoices = [serialize_invoice(x) for x in latest]
@@ -4012,8 +4025,14 @@ def create_stripe_invoice():
             "invoices": invoices
         }), 200
 
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
+    except stripe.error.StripeError as e:
+        app.logger.warning("[INVOICE] Stripe rejected an invoice request: %s", type(e).__name__)
+        message = getattr(e, "user_message", None) or "Stripe could not create this invoice. Nothing was charged; try again."
+        return jsonify({"error": message}), 502
+    except Exception:
+        app.logger.exception("[INVOICE] Could not create an invoice")
+        hint = "Trying again is safe and will not send a duplicate." if request_key else "Check your invoice list before trying again."
+        return jsonify({"error": f"The invoice could not be created. {hint}"}), 500
 
 @app.route("/api/stripe/invoices", methods=["GET"])
 def list_stripe_invoices():

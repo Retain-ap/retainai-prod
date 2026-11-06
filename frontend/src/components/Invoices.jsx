@@ -4,6 +4,11 @@ import { API_BASE } from "../config";
 import { getWorkspaceCapabilities, getWorkspaceEmail } from "../workspaceIdentity";
 import "./Invoices.css";
 
+function newSubmissionKey() {
+  if (typeof crypto !== "undefined" && crypto.randomUUID) return crypto.randomUUID();
+  return `inv-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
+}
+
 const CURRENCIES = ["usd", "cad", "eur", "gbp", "aud"];
 
 export default function Invoices({ user, leads }) {
@@ -27,6 +32,7 @@ export default function Invoices({ user, leads }) {
   const workspaceEmail = getWorkspaceEmail(user);
   const { canManageBilling } = getWorkspaceCapabilities(user);
   const accountRequestRef = useRef(0);
+  const submissionRef = useRef({ signature: "", key: "" });
   const invoicesRequestRef = useRef(0);
 
   const fetchJson = useCallback(async (url, options = {}) => {
@@ -178,6 +184,7 @@ export default function Invoices({ user, leads }) {
 
   const handleSubmit = async (e) => {
     e.preventDefault();
+    if (sending) return;
     setSending(true);
     setMessage("");
 
@@ -198,6 +205,13 @@ export default function Invoices({ user, leads }) {
       return;
     }
 
+    // The same unchanged form reuses its key, so retrying after an error or a
+    // lost response finishes the same invoice instead of sending a second one.
+    const signature = JSON.stringify([form.customer_name, form.customer_email, form.item_name, price, quantity, form.currency]);
+    if (submissionRef.current.signature !== signature) {
+      submissionRef.current = { signature, key: newSubmissionKey() };
+    }
+
     try {
       const data = await fetchJson(`${API}/api/stripe/invoice`, {
         method: "POST",
@@ -211,6 +225,7 @@ export default function Invoices({ user, leads }) {
           currency: form.currency,
           quantity,
           unit_amount: price,
+          idempotency_key: submissionRef.current.key,
         }),
       });
 
@@ -226,6 +241,7 @@ export default function Invoices({ user, leads }) {
         const shownAmt = data.amount_total ?? data.amount_due;
         setMessage(`✅ Invoice sent${shownAmt ? ` for ${fmt(shownAmt, data.currency)}` : "!"}`);
 
+        submissionRef.current = { signature: "", key: "" };
         setShowModal(false);
         setForm({
           customer_name: "",
