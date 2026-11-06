@@ -1,6 +1,7 @@
 // src/components/LeadsDashboard.jsx
 import React, { useMemo, useState } from "react";
 import LeadDrawer from "./LeadDrawer";
+import { API_BASE } from "../apiBase";
 
 export default function LeadsDashboard({
   leads,
@@ -70,10 +71,6 @@ export default function LeadsDashboard({
     const redirectBack = `${window.location.origin}/app`;
 
     // Support either env var name; fall back to same-origin (proxy) if unset
-    const API_BASE =
-      process.env.REACT_APP_API_BASE ||
-      process.env.REACT_APP_API_URL ||
-      "";
 
     const base = API_BASE || ""; // empty => same-origin “/api/...”
     const url =

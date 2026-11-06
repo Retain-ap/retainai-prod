@@ -502,8 +502,8 @@ export default function Signup() {
                   <input value={referral} onChange={(e) => setReferral(e.target.value)} placeholder="How did you hear about us?" style={{ padding: "12px 14px", borderRadius: 12, border: `1px solid ${BG.line}`, background: "#0E1013", color: "#fff", fontSize: 16 }} />
 
                   <label style={{ display: "flex", alignItems: "flex-start", gap: 8, fontSize: 14 }}>
-                    <input type="checkbox" checked={agree} onChange={(e) => setAgree(e.target.checked)} style={{ marginTop: 3, accentColor: BG.gold }} />
-                    <span style={{ color: BG.text60 }}>
+                    <input type="checkbox" checked={agree} onChange={(e) => setAgree(e.target.checked)} style={{ flex: "0 0 18px", width: 18, height: 18, margin: "2px 0 0", accentColor: BG.gold }} />
+                    <span style={{ flex: 1, minWidth: 0, color: BG.text60 }}>
                       I agree to the <a href="/terms-of-service" style={{ color: BG.goldDeep, textDecoration: "underline" }}>Terms</a> and{" "}
                       <a href="/privacy-policy" style={{ color: BG.goldDeep, textDecoration: "underline" }}>Privacy Policy</a>.
                     </span>
@@ -521,7 +521,7 @@ export default function Signup() {
                   </div>
 
                   {error && (
-                    <div style={{ marginTop: 10, fontSize: 14, background: "#1a1306", border: "1px solid #6b4e00", color: BG.gold, borderRadius: 10, padding: "8px 10px" }}>
+                    <div role="alert" style={{ marginTop: 10, fontSize: 14, background: "#1a1306", border: "1px solid #6b4e00", color: BG.gold, borderRadius: 10, padding: "8px 10px" }}>
                       {error}
                     </div>
                   )}
