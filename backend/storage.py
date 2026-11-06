@@ -19,7 +19,10 @@ Env:
 import os
 import json
 import uuid
+import fcntl
+import hashlib
 import threading
+from contextlib import contextmanager
 from pathlib import Path
 from typing import List, Dict, Any, Optional
 
@@ -40,6 +43,50 @@ USERS_JSON = os.path.join(DATA_ROOT, "users.json")
 LEADS_JSON = os.path.join(DATA_ROOT, "leads.json")
 TEAM_JSON = os.path.join(DATA_ROOT, "team.json")  # kept for legacy compatibility
 _JSON_WRITE_LOCK = threading.RLock()
+LEADS_LOCK_FILE = os.path.join(DATA_ROOT, ".leads.lock")
+_LEADS_LOCK_STATE = threading.local()
+
+
+@contextmanager
+def leads_lock():
+    """Exclusive lock for reading and rewriting contact lists.
+
+    Held across load -> change -> save, it stops two writers (both gunicorn
+    workers and their threads) from overwriting each other. Re-entrant within
+    a thread, so a locked caller can still call save_user_leads().
+    """
+    depth = getattr(_LEADS_LOCK_STATE, "depth", 0)
+    if depth:
+        _LEADS_LOCK_STATE.depth = depth + 1
+        try:
+            yield
+        finally:
+            _LEADS_LOCK_STATE.depth -= 1
+        return
+    Path(os.path.dirname(os.path.abspath(LEADS_LOCK_FILE))).mkdir(parents=True, exist_ok=True)
+    with open(LEADS_LOCK_FILE, "a") as handle:
+        fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
+        _LEADS_LOCK_STATE.depth = 1
+        try:
+            yield
+        finally:
+            _LEADS_LOCK_STATE.depth = 0
+            fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+
+
+def leads_revision(leads) -> str:
+    """A fingerprint of one workspace's stored contact list.
+
+    Clients send back the revision they loaded; any write in between changes
+    it, so a stale whole-list save can be detected instead of overwriting.
+    """
+    canonical = json.dumps(leads if isinstance(leads, list) else [], sort_keys=True, separators=(",", ":"), default=str)
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()[:32]
+
+
+def load_user_leads(user_email: str) -> List[Dict[str, Any]]:
+    leads = (load_leads() or {}).get(str(user_email or "").strip().lower(), [])
+    return leads if isinstance(leads, list) else []
 
 
 # ----------------------------
@@ -373,6 +420,11 @@ def load_leads() -> Dict[str, List[Dict[str, Any]]]:
 
 
 def save_leads(leads_by_user: Dict[str, List[Dict[str, Any]]]) -> None:
+    with leads_lock():
+        _save_leads_unlocked(leads_by_user)
+
+
+def _save_leads_unlocked(leads_by_user: Dict[str, List[Dict[str, Any]]]) -> None:
     """
     Persist leads. For simplicity and safety at small scale:
     - In SQLite: delete all leads and re-insert from leads_by_user.
@@ -429,6 +481,11 @@ def save_leads(leads_by_user: Dict[str, List[Dict[str, Any]]]) -> None:
 
 def save_user_leads(user_email: str, leads: List[Dict[str, Any]]) -> None:
     """Atomically replace one workspace's contacts without touching others."""
+    with leads_lock():
+        _save_user_leads_unlocked(user_email, leads)
+
+
+def _save_user_leads_unlocked(user_email: str, leads: List[Dict[str, Any]]) -> None:
     email = str(user_email or "").strip().lower()
     if not email:
         raise ValueError("user_email is required")

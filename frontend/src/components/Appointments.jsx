@@ -13,6 +13,7 @@ import {
 } from "react-icons/fa";
 import { API_BASE } from "../apiBase";
 import { getWorkspaceEmail } from "../workspaceIdentity";
+import { createLeadsApi, diffLeads, hasChanges, saveFreshLeadChanges } from "../leadSync";
 import {
   addDaysToDateKey,
   appointmentDateTimeParts,
@@ -311,7 +312,7 @@ function dateWeeksFromNow(weeks, timeZone) {
   return addDaysToDateKey(dayKeyNow(timeZone), weeks * 7);
 }
 
-export default function Appointments({ user, leads = [], setLeads }) {
+export default function Appointments({ user, leads = [], setLeads, saveLeads }) {
   const [backendAppointments, setBackendAppointments] = useState([]);
   const [backendWorkspace, setBackendWorkspace] = useState("");
   const [workspaceTimezone, setWorkspaceTimezone] = useState("");
@@ -715,28 +716,26 @@ export default function Appointments({ user, leads = [], setLeads }) {
     return true;
   }
 
-  async function persistLocalLeads(nextLeads) {
-    if (!userEmail) throw new Error("Your workspace session is unavailable.");
-    const response = await fetch(`${API_BASE}/api/leads`, {
-      method: "POST",
-      credentials: "include",
-      headers: {
-        "Content-Type": "application/json",
-        Accept: "application/json",
-      },
-      body: JSON.stringify({ leads: nextLeads }),
-    });
-    const payload = await response.json().catch(() => ({}));
-    if (!response.ok) throw new Error(payload?.error || "Customer record update failed.");
-  }
-
+  // Appointments kept on a contact are saved as a change to those contacts
+  // only, never as a blind whole-list replacement. Inside the dashboard its
+  // shared save is used (confirmed list + revision, retry on conflict);
+  // standalone, the latest list is loaded and saved with its revision.
   async function updateLocalLeadAppointments(mutator) {
-    if (typeof setLeads !== "function") throw new Error("Customer records are unavailable.");
+    if (typeof setLeads !== "function" && typeof saveLeads !== "function") {
+      throw new Error("Customer records are unavailable.");
+    }
     const safeCurrent = Array.isArray(leads) ? leads : [];
     const next = mutator(safeCurrent);
-    await persistLocalLeads(next);
-    setLeads(next);
-    return next;
+    const changes = diffLeads(safeCurrent, next);
+    if (!hasChanges(changes)) return safeCurrent;
+    if (typeof saveLeads === "function") {
+      const result = await saveLeads(next, safeCurrent);
+      return result?.leads || next;
+    }
+    if (!userEmail) throw new Error("Your workspace session is unavailable.");
+    const result = await saveFreshLeadChanges(createLeadsApi(userEmail), [changes]);
+    setLeads(result.leads);
+    return result.leads;
   }
 
   async function toggleDone(appt) {

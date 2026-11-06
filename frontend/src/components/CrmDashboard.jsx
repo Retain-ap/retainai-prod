@@ -18,6 +18,7 @@ import { useSettings } from "./SettingsContext";
 import Automations from "./Automations";
 import InviteTeamModal from "./InviteTeamModal";
 import { apiUrl } from "../apiBase";
+import { conflictMessage, createLeadsApi, diffLeads, hasChanges, rebaseOnReload, sameValue, saveLeadChanges } from "../leadSync";
 import { FaBars } from "react-icons/fa";
 import RetentionCommandCenter from "./RetentionCommandCenter";
 import OwnerConsole from "./OwnerConsole";
@@ -381,10 +382,29 @@ function CrmDashboard({ authenticatedUser }) {
   // ---- Lead persistence strategy (fixes your issue) ----
   // 1) Load local cache immediately (fast UI)
   // 2) Fetch authoritative from backend: GET /api/leads with X-User-Email
-  // 3) Save to backend: POST /api/leads with X-User-Email + {leads:[...]} (debounced)
+  // 3) Save to backend: POST /api/leads with the confirmed list's base_revision
+  //    plus the user's own changes (see leadSync.js); stale saves get 409.
   const saveTimerRef = useRef(null);
   const leadSaveQueueRef = useRef(Promise.resolve());
   const lastSavedJsonRef = useRef("");
+  // The last contact list the server confirmed, with its revision. Every save
+  // is built from it plus the user's own changes, and a stale save is refused
+  // by the server instead of overwriting an import or another tab's edits.
+  const serverLeadsRef = useRef({ email: "", revision: "", leads: [] });
+  // The list the debounced save's pending edits are measured from. A reload
+  // re-bases it on the fresh list so pending edits are re-applied, not lost.
+  const pendingBaseRef = useRef(null);
+  // Change sets whose save failed. They stay on this device, are shown on top
+  // of reloads, and are sent first with the next save or a retry.
+  const unsavedChangesRef = useRef([]);
+  const [hasUnsavedLeads, setHasUnsavedLeads] = useState(false);
+  const [leadsReloadToken, setLeadsReloadToken] = useState(0);
+
+  useEffect(() => {
+    const reload = () => setLeadsReloadToken((value) => value + 1);
+    window.addEventListener("leads:changed", reload);
+    return () => window.removeEventListener("leads:changed", reload);
+  }, []);
 
   useEffect(() => {
     leadsRef.current = leads;
@@ -392,6 +412,10 @@ function CrmDashboard({ authenticatedUser }) {
 
   // Load per-user local cache immediately when user changes
   useEffect(() => {
+    serverLeadsRef.current = { email: effectiveEmail || "", revision: "", leads: [] };
+    pendingBaseRef.current = null;
+    unsavedChangesRef.current = [];
+    setHasUnsavedLeads(false);
     if (!effectiveEmail) {
       setLeads([]);
       setUserTags([]);
@@ -410,7 +434,9 @@ function CrmDashboard({ authenticatedUser }) {
     setTags(extractTags(lsLeads, lsTags));
   }, [effectiveEmail]);
 
-  // Fetch leads from backend (authoritative)
+  const fetchServerLeads = useCallback((email) => createLeadsApi(email).load(), []);
+
+  // Fetch leads from backend (authoritative); again after an import.
   useEffect(() => {
     let cancelled = false;
 
@@ -419,38 +445,36 @@ function CrmDashboard({ authenticatedUser }) {
 
       setLoadingLeads(true);
       try {
-        // ✅ NEW canonical endpoint style:
-        // GET /api/leads with header X-User-Email
-        const res = await fetch(apiUrl("leads"), {
-          method: "GET",
-          credentials: "include",
-          headers: {
-            Accept: "application/json",
-            "X-User-Email": effectiveEmail,
-          },
-        });
-
-        if (!res.ok) throw new Error(`HTTP ${res.status}`);
-        const data = await res.json().catch(() => ({}));
-
+        const fresh = await fetchServerLeads(effectiveEmail);
         if (cancelled) return;
 
-        const serverLeads = Array.isArray(data?.leads) ? data.leads : [];
-        setLeads(serverLeads);
-        setTags(extractTags(serverLeads, userTags));
+        serverLeadsRef.current = { email: effectiveEmail, ...fresh };
+        // Show the fresh list with this device's unsaved and pending edits on
+        // top. Pending edits are re-based so the timer saves exactly them.
+        const rebased = rebaseOnReload({
+          serverLeads: fresh.leads,
+          unsaved: unsavedChangesRef.current,
+          pendingBase: pendingBaseRef.current,
+          shown: leadsRef.current,
+        });
+        pendingBaseRef.current = rebased.pendingBase;
+        const shownLeads = rebased.shown;
+        leadsRef.current = shownLeads;
+        setLeads(shownLeads);
+        setTags(extractTags(shownLeads, userTags));
 
         try {
-          localStorage.setItem(leadsKey(effectiveEmail), JSON.stringify(serverLeads));
+          localStorage.setItem(leadsKey(effectiveEmail), JSON.stringify(shownLeads));
         } catch {}
 
         // reset save-deduper
         try {
-          lastSavedJsonRef.current = `${effectiveEmail}\n${JSON.stringify(serverLeads)}`;
+          lastSavedJsonRef.current = `${effectiveEmail}\n${JSON.stringify(shownLeads)}`;
         } catch {
           lastSavedJsonRef.current = "";
         }
       } catch {
-        // backend failed -> keep local cache
+        // backend failed -> keep local cache; the next save loads a fresh list first
       } finally {
         if (!cancelled) setLoadingLeads(false);
       }
@@ -460,11 +484,62 @@ function CrmDashboard({ authenticatedUser }) {
       cancelled = true;
     };
     // eslint-disable-next-line
-  }, [effectiveEmail]);
+  }, [effectiveEmail, leadsReloadToken]);
+
+  // Save the unsaved change sets plus `changeSets`. On failure the given sets
+  // (and earlier unsaved ones) stay queued on this device.
+  const postLeadChanges = useCallback(
+    async (email, changeSets, keepOnFailure = changeSets) => {
+      if (serverLeadsRef.current.email !== email) {
+        serverLeadsRef.current = { email, revision: "", leads: [] };
+      }
+      const earlier = unsavedChangesRef.current;
+      try {
+        const result = await saveLeadChanges({
+          server: serverLeadsRef.current,
+          changeSets: [...earlier, ...changeSets],
+          load: () => fetchServerLeads(email),
+          send: createLeadsApi(email).send,
+        });
+        unsavedChangesRef.current = [];
+        setHasUnsavedLeads(false);
+        return result;
+      } catch (error) {
+        unsavedChangesRef.current = [...earlier, ...keepOnFailure].filter(hasChanges);
+        setHasUnsavedLeads(unsavedChangesRef.current.length > 0);
+        throw error;
+      }
+    },
+    [fetchServerLeads]
+  );
+
+  // After a save, show the stored list (an import, another tab, a kept
+  // unsubscribe) unless newer local edits are already on their way.
+  const showSavedLeads = useCallback(
+    (email, shownAtSend, result) => {
+      if (leadsRef.current !== shownAtSend || pendingBaseRef.current || unsavedChangesRef.current.length) return;
+      let json = "";
+      try {
+        json = JSON.stringify(result.leads);
+      } catch {}
+      lastSavedJsonRef.current = json ? `${email}\n${json}` : "";
+      if (sameValue(result.leads, shownAtSend)) return;
+      leadsRef.current = result.leads;
+      setLeads(result.leads);
+      setTags(extractTags(result.leads, userTags));
+      try {
+        localStorage.setItem(leadsKey(email), json);
+      } catch {}
+    },
+    [userTags]
+  );
+
+  const unsavedMessage = (error) =>
+    `${error?.message || "Could not save customer changes."} Your changes are kept on this device; retry to save them.`;
 
   // Debounced backend save
   const saveLeadsToBackend = useCallback(
-    (newLeads) => {
+    (newLeads, previousLeads = leadsRef.current) => {
       const email = effectiveEmail;
       if (!email) return;
 
@@ -483,76 +558,110 @@ function CrmDashboard({ authenticatedUser }) {
       const saveSignature = json ? `${email}\n${json}` : "";
       if (saveSignature && saveSignature === lastSavedJsonRef.current) return;
 
+      if (!pendingBaseRef.current) pendingBaseRef.current = previousLeads;
       if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
 
       saveTimerRef.current = setTimeout(() => {
+        saveTimerRef.current = null;
+        // Measure against what is on screen now: a reload may have re-based it.
+        const shown = leadsRef.current;
+        const changes = diffLeads(pendingBaseRef.current || previousLeads, shown);
+        pendingBaseRef.current = null;
+        if (!hasChanges(changes) && !unsavedChangesRef.current.length) return;
         const operation = leadSaveQueueRef.current.then(async () => {
           try {
-            const res = await fetch(apiUrl("leads"), {
-              method: "POST",
-              credentials: "include",
-              headers: {
-                "Content-Type": "application/json",
-                Accept: "application/json",
-                "X-User-Email": email,
-              },
-              body: JSON.stringify({ leads: newLeads }),
-            });
-
-            if (res.ok) {
-              lastSavedJsonRef.current = saveSignature || lastSavedJsonRef.current;
-            }
-          } catch {
-            // keep local cache if backend fails
+            const result = await postLeadChanges(email, [changes]);
+            showSavedLeads(email, shown, result);
+            setLeadPersistenceError(conflictMessage(result.conflicts));
+          } catch (error) {
+            setLeadPersistenceError(unsavedMessage(error));
           }
         });
         leadSaveQueueRef.current = operation.catch(() => {});
       }, 450);
     },
-    [effectiveEmail, userTags]
+    // eslint-disable-next-line
+    [effectiveEmail, userTags, postLeadChanges, showSavedLeads]
   );
 
+  const retryUnsavedLeads = useCallback(() => {
+    const email = effectiveEmail;
+    if (!email || !unsavedChangesRef.current.length) return;
+    const shown = leadsRef.current;
+    const operation = leadSaveQueueRef.current.then(async () => {
+      try {
+        const result = await postLeadChanges(email, []);
+        showSavedLeads(email, shown, result);
+        setLeadPersistenceError(conflictMessage(result.conflicts));
+      } catch (error) {
+        setLeadPersistenceError(unsavedMessage(error));
+      }
+    });
+    leadSaveQueueRef.current = operation.catch(() => {});
+    // eslint-disable-next-line
+  }, [effectiveEmail, postLeadChanges, showSavedLeads]);
+
+  // Take the debounced save's pending edits out of the timer so an immediate
+  // save sends them too (and keeps them if it fails).
+  const takePendingChanges = (previousLeads) => {
+    if (saveTimerRef.current) {
+      clearTimeout(saveTimerRef.current);
+      saveTimerRef.current = null;
+    }
+    const pending = pendingBaseRef.current ? diffLeads(pendingBaseRef.current, previousLeads) : null;
+    pendingBaseRef.current = null;
+    return pending && hasChanges(pending) ? [pending] : [];
+  };
+
   const persistLeadsImmediately = useCallback(
-    async (newLeads) => {
+    async (newLeads, previousLeads = leadsRef.current) => {
       const email = effectiveEmail;
       if (!email) throw new Error("Missing workspace email");
 
-      if (saveTimerRef.current) {
-        clearTimeout(saveTimerRef.current);
-        saveTimerRef.current = null;
-      }
+      const carried = takePendingChanges(previousLeads);
+      const action = diffLeads(previousLeads, newLeads);
 
-      let json = "";
       try {
-        json = JSON.stringify(newLeads);
-        localStorage.setItem(leadsKey(email), json);
+        localStorage.setItem(leadsKey(email), JSON.stringify(newLeads));
       } catch {}
       setTags(extractTags(newLeads, userTags));
-      const saveSignature = json ? `${email}\n${json}` : "";
 
+      // On failure the caller rolls back `action`; carried edits stay queued.
       const operation = leadSaveQueueRef.current.then(async () => {
-        const res = await fetch(apiUrl("leads"), {
-          method: "POST",
-          credentials: "include",
-          headers: {
-            "Content-Type": "application/json",
-            Accept: "application/json",
-            "X-User-Email": email,
-          },
-          body: JSON.stringify({ leads: newLeads }),
-        });
-        const data = await res.json().catch(() => ({}));
-        if (!res.ok || data?.ok !== true || Number(data?.count) !== newLeads.length) {
-          throw new Error(data?.error || `Could not save customer changes (${res.status})`);
-        }
-        lastSavedJsonRef.current = saveSignature || lastSavedJsonRef.current;
-        return data;
+        const result = await postLeadChanges(email, [...carried, action], carried);
+        showSavedLeads(email, newLeads, result);
+        return result;
       });
 
       leadSaveQueueRef.current = operation.catch(() => {});
       return operation;
     },
-    [effectiveEmail, userTags]
+    // eslint-disable-next-line
+    [effectiveEmail, userTags, postLeadChanges, showSavedLeads]
+  );
+
+  // For other screens (appointments): show `next` at once, save only its
+  // changes through the shared path, and roll back if the save fails.
+  const saveLeadList = useCallback(
+    async (next, previous = leadsRef.current) => {
+      leadsRef.current = next;
+      setLeads(next);
+      try {
+        const result = await persistLeadsImmediately(next, previous);
+        setLeadPersistenceError(conflictMessage(result?.conflicts));
+        return result;
+      } catch (error) {
+        if (leadsRef.current === next) {
+          leadsRef.current = previous;
+          setLeads(previous);
+          try {
+            localStorage.setItem(leadsKey(effectiveEmail), JSON.stringify(previous));
+          } catch {}
+        }
+        throw error;
+      }
+    },
+    [effectiveEmail, persistLeadsImmediately]
   );
 
   const handleUpdateLead = useCallback(
@@ -576,8 +685,8 @@ function CrmDashboard({ authenticatedUser }) {
       });
 
       try {
-        await persistLeadsImmediately(next);
-        setLeadPersistenceError("");
+        const result = await persistLeadsImmediately(next, previous);
+        setLeadPersistenceError(conflictMessage(result?.conflicts));
         return updated;
       } catch (error) {
         if (leadsRef.current === next) {
@@ -629,7 +738,7 @@ function CrmDashboard({ authenticatedUser }) {
     }
 
     setLeads(newLeads);
-    saveLeadsToBackend(newLeads);
+    saveLeadsToBackend(newLeads, leads);
 
     setShowLeadModal(false);
     setEditLead(null);
@@ -660,11 +769,8 @@ function CrmDashboard({ authenticatedUser }) {
     }
 
     const newLeads = leads.filter((lead) => String(lead?.id) !== String(id));
-    const json = JSON.stringify(newLeads);
-    if (saveTimerRef.current) {
-      clearTimeout(saveTimerRef.current);
-      saveTimerRef.current = null;
-    }
+    const carried = takePendingChanges(leads);
+    const action = diffLeads(leads, newLeads);
 
     setDeletingLeadId(String(id));
     setLeadPersistenceError("");
@@ -672,31 +778,16 @@ function CrmDashboard({ authenticatedUser }) {
     setTags(extractTags(newLeads, userTags));
 
     try {
-      const operation = leadSaveQueueRef.current.then(async () => {
-        const response = await fetch(apiUrl("leads"), {
-          method: "POST",
-          credentials: "include",
-          headers: {
-            "Content-Type": "application/json",
-            Accept: "application/json",
-            "X-User-Email": email,
-          },
-          body: JSON.stringify({ leads: newLeads }),
-        });
-        const payload = await response.json().catch(() => ({}));
-        return { response, payload };
-      });
+      const operation = leadSaveQueueRef.current.then(() => postLeadChanges(email, [...carried, action], carried));
       leadSaveQueueRef.current = operation.then(() => undefined, () => undefined);
-      const { response, payload } = await operation;
-      if (!response.ok || payload?.ok === false || payload?.count !== newLeads.length) {
-        throw new Error(payload?.error || `Contact deletion failed (${response.status})`);
-      }
-
-      lastSavedJsonRef.current = `${email}\n${json}`;
+      const result = await operation;
+      showSavedLeads(email, newLeads, result);
+      setLeadPersistenceError(conflictMessage(result.conflicts));
       try {
-        localStorage.setItem(leadsKey(email), json);
+        localStorage.setItem(leadsKey(email), JSON.stringify(leadsRef.current));
       } catch {}
-      return true;
+      // Not deleted when someone changed the contact at the same time.
+      return !result.leads.some((lead) => String(lead?.id) === String(id));
     } catch (error) {
       if (normEmail(effectiveEmail) === normEmail(email)) {
         setLeads((current) => {
@@ -737,7 +828,7 @@ function CrmDashboard({ authenticatedUser }) {
           : l
       );
 
-      saveLeadsToBackend(next);
+      saveLeadsToBackend(next, prev);
       return next;
     });
 
@@ -1181,6 +1272,23 @@ function CrmDashboard({ authenticatedUser }) {
                 }}
               >
                 {leadPersistenceError}
+                {hasUnsavedLeads && (
+                  <button
+                    type="button"
+                    onClick={retryUnsavedLeads}
+                    style={{
+                      marginLeft: 10,
+                      padding: "4px 10px",
+                      borderRadius: 8,
+                      border: "1px solid rgba(255,155,155,.6)",
+                      background: "transparent",
+                      color: "#ffd0d0",
+                      cursor: "pointer",
+                    }}
+                  >
+                    Retry saving
+                  </button>
+                )}
               </div>
             )}
             <LeadsDashboard
@@ -1333,6 +1441,7 @@ function CrmDashboard({ authenticatedUser }) {
                 user={user}
                 leads={leads}
                 setLeads={setLeads}
+                saveLeads={saveLeadList}
                 events={crmAppointments}
                 googleEvents={googleEvents}
               />

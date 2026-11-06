@@ -1,6 +1,6 @@
 // src/components/LeadDrawer.jsx
 import React, { useEffect, useMemo, useState, useCallback } from "react";
-import { API_BASE } from "../apiBase";
+import { createLeadsApi, leadKey, leadPatchChanges, saveFreshLeadChanges } from "../leadSync";
 import { QRCodeSVG } from "qrcode.react";
 
 
@@ -173,46 +173,13 @@ export default function LeadDrawer({
 
       if (!userEmail) throw new Error("Missing user email");
 
-      const res = await fetch(`${API_BASE}/api/leads`, {
-        method: "GET",
-        credentials: "include",
-        headers: {
-          Accept: "application/json",
-          "X-User-Email": userEmail,
-        },
-      });
-
-      if (!res.ok) throw new Error("Failed to load leads");
-
-      const data = await res.json().catch(() => ({}));
-      const all = Array.isArray(data?.leads) ? data.leads : [];
-
-      const idx = all.findIndex(
-        (l) =>
-          String(l?.id || "") === String(lead?.id || "") ||
-          (lead?.email && String(l?.email || "").toLowerCase() === String(lead.email).toLowerCase())
-      );
-
-      if (idx === -1) throw new Error("Lead not found");
-
-      all[idx] = { ...all[idx], ...patch };
-
-      const save = await fetch(`${API_BASE}/api/leads`, {
-        method: "POST",
-        credentials: "include",
-        headers: {
-          "Content-Type": "application/json",
-          Accept: "application/json",
-          "X-User-Email": userEmail,
-        },
-        body: JSON.stringify({ leads: all }),
-      });
-
-      const saved = await save.json().catch(() => ({}));
-      if (!save.ok || saved?.ok !== true || Number(saved?.count) !== all.length) {
-        throw new Error(saved?.error || "Failed to save customer changes");
+      // Without the dashboard: load the latest list, write only these fields
+      // and save with its revision, so nothing changed elsewhere is lost.
+      const result = await saveFreshLeadChanges(createLeadsApi(userEmail), [leadPatchChanges(lead, patch)]);
+      if (result.conflicts.some((item) => item.reason === "missing")) {
+        throw new Error("This customer was deleted elsewhere. Reload to see the current list.");
       }
-      return all[idx];
+      return result.leads.find((item) => leadKey(item) === leadKey(lead)) || mergedLead;
     },
     [lead, onUpdateLead, userEmail]
   );
