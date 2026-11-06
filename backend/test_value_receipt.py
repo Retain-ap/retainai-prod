@@ -35,7 +35,9 @@ def invoice(invoice_id="in_1", *, email="ana@example.com", amount=12000, currenc
         "id": invoice_id, "status": status, "currency": currency, "amount_paid": amount, "livemode": livemode,
         "customer_email": email, "customer_name": "Ana", "number": f"N-{invoice_id}", "created": ts(created),
         "status_transitions": {"paid_at": ts(paid), "finalized_at": ts(created)},
-        "charge": {"id": "ch_1", "amount_refunded": refunded}, "post_payment_credit_notes_amount": credit_notes,
+        "charge": {"id": "ch_1", "paid": True, "status": "succeeded", "currency": currency, "amount": amount,
+                   "livemode": livemode, "amount_refunded": refunded},
+        "post_payment_credit_notes_amount": credit_notes,
         "paid_out_of_band": out_of_band,
     }
 
@@ -52,7 +54,7 @@ END = dt.datetime(2026, 11, 1, tzinfo=UTC)
 
 def receipt(records, followups=(), appointments=(), leads=LEADS, **kwargs):
     return vr.build_receipt(records=records, leads=list(leads), followups=list(followups),
-                            appointments=list(appointments), start=START, end=END, window_days=30, **kwargs)
+                            appointments=list(appointments), start=START, end=END, window_days=kwargs.pop("window_days", 30), **kwargs)
 
 
 class EvidenceRuleTests(unittest.TestCase):
@@ -65,18 +67,103 @@ class EvidenceRuleTests(unittest.TestCase):
         with self.assertRaises(vr.EvidenceError):
             vr.normalize_currency("btc")
 
-    def test_stripe_invoice_records(self):
+    def test_only_a_proven_successful_charge_is_provider_verified(self):
         verified = vr.stripe_invoice_record(invoice(), "acct_1")
-        self.assertEqual((verified["verification"], verified["amount_minor"], verified["refunded_minor"]), (vr.VERIFIED, 12000, 0))
-        self.assertEqual(vr.stripe_invoice_record(invoice(out_of_band=True), "acct_1")["verification"], vr.OWNER)
+        self.assertEqual((verified["verification"], verified["settlement"], verified["amount_minor"]), (vr.VERIFIED, "charge", 12000))
+        self.assertEqual(verified["stripe_api_version"], "2023-10-16")
+        cases = {
+            "no charge (credit balance or minimum amount)": ({"charge": None}, vr.UNCONFIRMED, "no_charge"),
+            "unexpanded charge id": ({"charge": "ch_1"}, vr.UNCONFIRMED, "charge_unreadable"),
+            "charge not succeeded": ({"charge": {**invoice()["charge"], "status": "pending"}}, vr.UNCONFIRMED, "charge_incomplete"),
+            "charge not paid": ({"charge": {**invoice()["charge"], "paid": False}}, vr.UNCONFIRMED, "charge_incomplete"),
+            "part paid from credit": ({"charge": {**invoice()["charge"], "amount": 7000}}, vr.UNCONFIRMED, "charge_incomplete"),
+            "currency mismatch": ({"charge": {**invoice()["charge"], "currency": "usd"}}, vr.UNCONFIRMED, "charge_incomplete"),
+            "test charge on live invoice": ({"charge": {**invoice()["charge"], "livemode": False}}, vr.UNCONFIRMED, "charge_incomplete"),
+            "marked paid outside Stripe": ({"paid_out_of_band": True, "charge": None}, vr.OWNER, "outside_stripe"),
+        }
+        for label, (change, verification, settlement) in cases.items():
+            with self.subTest(label):
+                record = vr.stripe_invoice_record({**invoice(), **change}, "acct_1")
+                self.assertEqual((record["verification"], record["settlement"]), (verification, settlement))
         # A credit note that refunded the charge is subtracted once, not twice.
         self.assertEqual(vr.stripe_invoice_record(invoice(refunded=3000, credit_notes=3000), "acct_1")["refunded_minor"], 3000)
         self.assertEqual(vr.stripe_invoice_record(invoice(refunded=0, credit_notes=2000), "acct_1")["refunded_minor"], 2000)
-        unexpanded = invoice()
-        unexpanded["charge"] = "ch_1"
-        self.assertEqual(vr.stripe_invoice_record(unexpanded, "acct_1")["refunded_minor"], 0)
         self.assertIsNone(vr.stripe_invoice_record(invoice(status="open"), "acct_1"))
         self.assertIsNone(vr.stripe_invoice_record(invoice(currency="xyz"), "acct_1"))
+        broken_time = invoice()
+        broken_time["status_transitions"] = {"paid_at": 10 ** 20}
+        self.assertIsNone(vr.stripe_invoice_record(broken_time, "acct_1"))
+
+    def test_unconfirmed_stripe_payments_are_shown_but_never_counted(self):
+        record = vr.stripe_invoice_record({**invoice(), "charge": None}, "acct_1")
+        result = receipt([record], [followup("2026-10-05T09:00:00Z")])
+        item = result["items"][0]
+        self.assertFalse(item["linked"])
+        self.assertIn("Payment not confirmed", item["reason"])
+        self.assertEqual(result["totals"]["cad"]["linked_verified_minor"], 0)
+        self.assertEqual(result["totals"]["cad"]["paid_verified_minor"], 0)
+        self.assertEqual(result["totals"]["cad"]["paid_unconfirmed_minor"], 12000)
+
+    def test_invalid_windows_and_pathological_dates_are_rejected(self):
+        for bad in ("abc", "3", "1000", "-5", "7.5"):
+            with self.subTest(bad=bad), self.assertRaises(vr.EvidenceError):
+                vr.parse_window(bad)
+        now = dt.datetime(2026, 11, 6, tzinfo=UTC)
+        for since, until in (("9999-12-30", "9999-12-31"), ("0001-01-01", "0001-01-02"), ("2026-13-01", "")):
+            with self.subTest(since=since), self.assertRaises(vr.EvidenceError):
+                vr.parse_period(since, until, "UTC", now)
+        self.assertIsNone(vr._utc(10 ** 20))
+        self.assertIsNone(vr._utc("9999-12-31T23:59:59Z"))
+        self.assertIsNone(vr._utc(True))
+
+    def test_a_corrupt_evidence_file_fails_closed_and_is_never_overwritten(self):
+        path = os.path.join(_TEST_DATA.name, f"rev-{uuid.uuid4().hex}.json")
+        with open(path, "w") as handle:
+            handle.write('{"ws": {"records": {"stripe:in_1": ')  # truncated write
+        store = vr.RevenueStore(path)
+        with self.assertRaises(vr.EvidenceStoreError):
+            store.records("ws")
+        with self.assertRaises(vr.EvidenceStoreError):
+            store.upsert_stripe("ws", [], "2026-11-06T00:00:00Z", complete=True)
+        with open(path) as handle:
+            self.assertEqual(handle.read(), '{"ws": {"records": {"stripe:in_1": ')
+        self.assertEqual(vr.RevenueStore(os.path.join(_TEST_DATA.name, "missing.json")).records("ws"), [])
+
+    def test_day_only_payments_never_invent_a_same_day_order(self):
+        store = vr.RevenueStore(os.path.join(_TEST_DATA.name, f"rev-{uuid.uuid4().hex}.json"))
+        now = dt.datetime(2026, 10, 20, 23, 0, tzinfo=UTC)
+        lead = {"id": "b", "email": "ben@example.com", "name": "Ben"}
+        day_only, _ = store.add_manual("ws", {"amount": "80", "currency": "cad", "paid_at": "2026-10-20", "idempotency_key": "day-only-0001"},
+                                       lead=lead, recorded_by="o", now=now, timezone_name="America/Toronto")
+        self.assertEqual((day_only["paid_precision"], day_only["paid_at"]), ("day", "2026-10-20T04:00:00Z"))
+        timed, _ = store.add_manual("ws", {"amount": "80", "currency": "cad", "paid_at": "2026-10-20", "paid_time": "16:30",
+                                           "idempotency_key": "timed-00001"}, lead=lead, recorded_by="o", now=now, timezone_name="America/Toronto")
+        self.assertEqual(timed["paid_at"], "2026-10-20T20:30:00Z")
+        same_day_booking = {"id": "appt", "lead_id": "b", "status": "completed", "created_at": "2026-10-20T15:00:00Z"}
+        follow = [followup("2026-10-18T12:00:00Z", lead_id="b")]
+        unknown = receipt([day_only], follow, [same_day_booking])
+        self.assertFalse(unknown["items"][0]["linked"])
+        self.assertIn("order is unknown", unknown["items"][0]["reason"])
+        self.assertEqual(unknown["totals"]["cad"]["linked_owner_recorded_minor"], 0)
+        known = receipt([timed], follow, [same_day_booking])
+        self.assertTrue(known["items"][0]["linked"])
+        earlier_booking = dict(same_day_booking, created_at="2026-10-19T15:00:00Z")
+        self.assertTrue(receipt([day_only], follow, [earlier_booking])["items"][0]["linked"])
+        with self.assertRaises(vr.EvidenceError):
+            store.add_manual("ws", {"amount": "80", "currency": "cad", "paid_at": "2026-10-20", "paid_time": "23:30",
+                                    "idempotency_key": "future-time-1"}, lead=lead, recorded_by="o", now=now, timezone_name="America/Toronto")
+
+    def test_a_partial_sync_reports_payments_whose_refunds_were_not_rechecked(self):
+        store = vr.RevenueStore(os.path.join(_TEST_DATA.name, f"rev-{uuid.uuid4().hex}.json"))
+        old = vr.stripe_invoice_record(invoice("in_old"), "acct")
+        new = vr.stripe_invoice_record(invoice("in_new"), "acct")
+        store.upsert_stripe("ws", [old, dict(new)], "2026-11-01T00:00:00Z", complete=True)
+        result = store.upsert_stripe("ws", [dict(new)], "2026-11-06T00:00:00Z", complete=False)
+        self.assertEqual((result["not_refreshed"], result["complete"]), (1, False))
+        built = receipt(store.records("ws"), last_sync=store.meta("ws")["last_sync"])
+        stale = {item["id"]: item["refunds_stale"] for item in built["items"]}
+        self.assertEqual(stale, {"stripe:in_old": True, "stripe:in_new": False})
+        self.assertEqual((built["sync"]["complete"], built["sync"]["not_refreshed"], built["sync"]["stale_items"]), (False, 1, 1))
 
     def test_counts_only_a_follow_up_then_invoice_then_payment(self):
         record = vr.stripe_invoice_record(invoice(), "acct_1")
@@ -147,7 +234,7 @@ class EvidenceRuleTests(unittest.TestCase):
         record["customer_name"] = "=HYPERLINK(\"http://x\")"
         text = vr.receipt_csv(receipt([record], [followup("2026-10-05T09:00:00Z")], leads=[{"id": "a", "email": "ana@example.com"}]))
         self.assertIn("'=HYPERLINK", text)
-        self.assertIn("Provider-verified (Stripe)", text)
+        self.assertIn("Provider-verified (Stripe charge)", text)
         self.assertIn("120.00", text)
 
 
@@ -206,7 +293,9 @@ class ValueReceiptApiTests(unittest.TestCase):
         self.assertEqual(response.get_json()["added"], 1)
         self.assertEqual(listed.call_args.kwargs["stripe_account"], "acct_owner")
         self.assertEqual(listed.call_args.kwargs["status"], "paid")
-        refunded = dict(recent, charge={"id": "ch_1", "amount_refunded": 2000})
+        self.assertEqual(listed.call_args.kwargs["stripe_version"], "2023-10-16")
+        self.assertEqual(listed.call_args.kwargs["expand"], ["data.charge"])
+        refunded = dict(recent, charge={**recent["charge"], "amount_refunded": 2000})
         again, _ = self.sync(self.owner, [refunded])
         self.assertEqual((again.get_json()["added"], again.get_json()["updated"]), (0, 1))
         app_value.followup_log.record(self.owner, lead_id="a", channel="email", source="test",
@@ -217,6 +306,41 @@ class ValueReceiptApiTests(unittest.TestCase):
         # Another workspace with a same-email contact sees none of it.
         other = self.client(self.other).get("/api/value-receipt").get_json()
         self.assertEqual(other["items"], [])
+
+    def test_a_capped_sync_is_reported_as_partial(self):
+        now = dt.datetime.now(UTC)
+        stamp = lambda days: (now - dt.timedelta(days=days)).strftime("%Y-%m-%dT%H:%M:%S")
+        invoices = [invoice(f"in_{n}", created=stamp(n + 3), paid=stamp(n + 2)) for n in range(3)]
+        with patch.object(app_value, "MAX_SYNC_INVOICES", 2):
+            response, _ = self.sync(self.owner, invoices)
+        body = response.get_json()
+        self.assertEqual((body["truncated"], body["complete"], body["read"]), (True, False, 2))
+        receipt_body = self.client(self.owner).get("/api/value-receipt").get_json()
+        self.assertFalse(receipt_body["sync"]["complete"])
+
+    def test_bad_window_returns_400_and_an_unreadable_store_returns_503_without_writing(self):
+        self.assertEqual(self.client(self.owner).get("/api/value-receipt?window_days=abc").status_code, 400)
+        self.assertEqual(self.client(self.owner).get("/api/value-receipt?window_days=999").status_code, 400)
+        self.assertEqual(self.client(self.owner).get("/api/value-receipt?since=9999-12-30&until=9999-12-31").status_code, 400)
+        original = None
+        if os.path.exists(app_value.REVENUE_FILE):
+            with open(app_value.REVENUE_FILE, "rb") as handle:
+                original = handle.read()
+        try:
+            with open(app_value.REVENUE_FILE, "w") as handle:
+                handle.write("{not json")
+            client = self.client(self.owner)
+            self.assertEqual(client.get("/api/value-receipt").status_code, 503)
+            payment = {"lead_id": "a", "amount": "5", "currency": "cad", "paid_at": "2026-11-01", "idempotency_key": "corrupt-0001"}
+            self.assertEqual(client.post("/api/value-receipt/payments", json=payment, headers=ORIGIN).status_code, 503)
+            with open(app_value.REVENUE_FILE) as handle:
+                self.assertEqual(handle.read(), "{not json")
+        finally:
+            if original is None:
+                os.remove(app_value.REVENUE_FILE)
+            else:
+                with open(app_value.REVENUE_FILE, "wb") as handle:
+                    handle.write(original)
 
     def test_sync_needs_a_connected_account_and_reports_stripe_failures(self):
         self.users[self.owner]["stripe_account_id"] = ""
@@ -255,7 +379,7 @@ class ValueReceiptApiTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertTrue(response.headers["Content-Type"].startswith("text/csv"))
         self.assertIn("retainai-value-receipt-2026-10-01-to-2026-10-31.csv", response.headers["Content-Disposition"])
-        self.assertTrue(response.get_data(as_text=True).startswith("paid_at_utc,customer"))
+        self.assertTrue(response.get_data(as_text=True).startswith("paid_at_utc,paid_time_known,customer"))
         self.assertEqual(self.client(self.member).get("/api/value-receipt/export.csv").status_code, 403)
         self.assertEqual(self.client(self.owner).get("/api/value-receipt?since=2026-12-01&until=2026-01-01").status_code, 400)
 

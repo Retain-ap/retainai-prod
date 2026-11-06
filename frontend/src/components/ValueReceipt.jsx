@@ -36,6 +36,7 @@ function newKey() {
 
 function EvidenceBadge({ item }) {
   if (item.verification === "provider_verified") return <span className="status-pill active">Verified by Stripe</span>;
+  if (item.verification === "unconfirmed") return <span className="status-pill past_due">Payment not confirmed</span>;
   if (item.paid_outside_stripe) return <span className="status-pill trial">Marked paid outside Stripe</span>;
   return <span className="status-pill trial">Owner-recorded</span>;
 }
@@ -82,7 +83,9 @@ export default function ValueReceipt({ leads = [] }) {
     setBusy("sync"); setNotice(""); setError("");
     try {
       const result = await call("value-receipt/sync", { method: "POST" });
-      setNotice(`Read ${result.read} paid Stripe invoice${result.read === 1 ? "" : "s"}: ${result.added} new, ${result.updated} updated.`);
+      const partial = result.truncated ? " Only the newest 1,000 invoices were read." : "";
+      const stale = result.not_refreshed ? ` ${result.not_refreshed} earlier Stripe payment${result.not_refreshed === 1 ? " was" : "s were"} not re-checked, so their refunds may be out of date.` : "";
+      setNotice(`Read ${result.read} paid Stripe invoice${result.read === 1 ? "" : "s"}: ${result.added} new, ${result.updated} updated.${partial}${stale}`);
       await load();
     } catch (err) { setError(err.message === "stripe_read_failed" ? "Stripe could not be reached. Nothing was changed; try again." : err.message); }
     finally { setBusy(""); }
@@ -168,17 +171,22 @@ export default function ValueReceipt({ leads = [] }) {
             <span className="value-currency">{currency.toUpperCase()}</span>
             <div><strong>{formatMinor(total.linked_verified_minor, currency)}</strong><small>Linked, verified by Stripe</small></div>
             <div><strong>{formatMinor(total.linked_owner_recorded_minor, currency)}</strong><small>Linked, owner-recorded</small></div>
-            <div className="value-context"><small>{total.linked_count} of {total.payment_count} payments linked · all paid: {formatMinor(total.paid_verified_minor, currency)} verified, {formatMinor(total.paid_owner_recorded_minor, currency)} owner-recorded</small></div>
+            <div className="value-context"><small>{total.linked_count} of {total.payment_count} payments linked · all paid: {formatMinor(total.paid_verified_minor, currency)} verified, {formatMinor(total.paid_owner_recorded_minor, currency)} owner-recorded{total.paid_unconfirmed_minor ? ` · ${formatMinor(total.paid_unconfirmed_minor, currency)} shown as paid by Stripe without a confirmed charge (not counted)` : ""}</small></div>
           </div>
         ))}
       </div>
       {!linkedAny && currencies.length > 0 && <p className="product-card-copy">No payment in this period followed a recorded RetainAI follow-up and booking or invoice.</p>}
+      {receipt.sync?.last_synced_at && (!receipt.sync.complete || receipt.sync.stale_items > 0) && (
+        <div className="product-alert" role="note">
+          The last Stripe update was partial{receipt.sync.stale_items ? `: refunds for ${receipt.sync.stale_items} payment${receipt.sync.stale_items === 1 ? "" : "s"} shown here were not re-checked` : ""}. Totals may not reflect recent refunds.
+        </div>
+      )}
 
       <div className="value-actions">
         {receipt.stripe_connected && <button type="button" className="product-button" onClick={sync} disabled={Boolean(busy)}>{busy === "sync" ? "Reading Stripe…" : "Update from Stripe"}</button>}
-        <button type="button" className="product-button" onClick={() => setForm({ lead_id: leads[0]?.id || "", amount: "", currency: "cad", paid_at: localDay(0), reference: "", idempotency_key: newKey() })} disabled={Boolean(busy) || !leads.length}>Record a payment</button>
+        <button type="button" className="product-button" onClick={() => setForm({ lead_id: leads[0]?.id || "", amount: "", currency: "cad", paid_at: localDay(0), paid_time: "", reference: "", idempotency_key: newKey() })} disabled={Boolean(busy) || !leads.length}>Record a payment</button>
         <button type="button" className="product-button" onClick={exportCsv} disabled={Boolean(busy)}>{busy === "export" ? "Exporting…" : "Export CSV"}</button>
-        <small className="product-card-copy">{receipt.stripe_connected ? `Stripe last read ${receipt.last_synced_at ? shortDate(receipt.last_synced_at) : "never"}.` : "Connect Stripe in Invoices to add verified payments."}</small>
+        <small className="product-card-copy">{receipt.stripe_connected ? `Stripe last read ${receipt.sync?.last_synced_at ? shortDate(receipt.sync.last_synced_at) : "never"}.` : "Connect Stripe in Invoices to add verified payments."}</small>
       </div>
 
       {form && (
@@ -188,6 +196,8 @@ export default function ValueReceipt({ leads = [] }) {
           <label>Amount<input className="product-input" inputMode="decimal" required value={form.amount} onChange={(e) => setForm({ ...form, amount: e.target.value })} /></label>
           <label>Currency<select className="product-input" value={form.currency} onChange={(e) => setForm({ ...form, currency: e.target.value })}>{CURRENCY_CHOICES.map((code) => <option key={code} value={code}>{code.toUpperCase()}</option>)}</select></label>
           <label>Date received<input className="product-input" type="date" required max={localDay(0)} value={form.paid_at} onChange={(e) => setForm({ ...form, paid_at: e.target.value })} /></label>
+          <label>Time received (optional)<input className="product-input" type="time" aria-describedby="value-time-help" value={form.paid_time} onChange={(e) => setForm({ ...form, paid_time: e.target.value })} /></label>
+          <small id="value-time-help" className="product-card-copy">Without a time, a booking made the same day can't be linked, because their order is unknown.</small>
           <label>Reference (optional)<input className="product-input" maxLength={120} value={form.reference} onChange={(e) => setForm({ ...form, reference: e.target.value })} /></label>
           <div className="value-actions"><button type="submit" className="product-button primary" disabled={busy === "save"}>{busy === "save" ? "Saving…" : "Save payment"}</button><button type="button" className="product-button" onClick={() => setForm(null)}>Cancel</button></div>
         </form>
@@ -207,8 +217,9 @@ export default function ValueReceipt({ leads = [] }) {
             <ol className="value-chain">
               {item.followup && <li>Follow-up by {item.followup.channel} on {shortDate(item.followup.sent_at)} <small>({item.followup.evidence})</small></li>}
               {item.confirmation && <li>{item.confirmation.label} on {shortDate(item.confirmation.at)}</li>}
-              <li>Paid {formatMinor(item.amount_minor, item.currency)} on {shortDate(item.paid_at)}{item.refunded_minor ? `, refunded ${formatMinor(item.refunded_minor, item.currency)}` : ""}{item.invoice_number ? ` · invoice ${item.invoice_number}` : ""}{item.reference ? ` · ${item.reference}` : ""}</li>
+              <li>Paid {formatMinor(item.amount_minor, item.currency)} on {shortDate(item.paid_at)}{item.paid_precision === "day" ? " (time not recorded)" : ""}{item.refunded_minor ? `, refunded ${formatMinor(item.refunded_minor, item.currency)}` : ""}{item.invoice_number ? ` · invoice ${item.invoice_number}` : ""}{item.reference ? ` · ${item.reference}` : ""}</li>
             </ol>
+            {item.settlement_text && item.source === "stripe" && <small className="value-reason">{item.settlement_text}{item.refunds_stale ? ` · refunds last checked ${shortDate(item.refunds_checked_at)}` : ""}</small>}
             {item.reason && <small className="value-reason">Not counted: {item.reason}</small>}
             {item.source === "manual" && (
               <div className="value-actions">

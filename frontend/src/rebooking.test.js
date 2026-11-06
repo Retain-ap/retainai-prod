@@ -1,4 +1,4 @@
-import { businessKind, dueForRebooking, rebookingSuggestions, visitsByLead } from "./rebooking";
+import { businessKind, dayStart, dueForRebooking, rebookingSuggestions, visitsByLead } from "./rebooking";
 
 const visit = (lead, date, extra = {}) => ({ lead, date, time: "10:00", ...extra });
 const done = (lead, date) => visit(lead, date, { status: "completed", _backend: {} });
@@ -83,4 +83,25 @@ test("customers without a completed visit get no rebooking date", () => {
   expect(rebookingSuggestions({ leads: [{ id: "x" }], appointments: [], user: {}, today })).toEqual([]);
   expect(businessKind({ setup_preset: "salon_barber" })).toBe("salon");
   expect(businessKind({ businessType: "Consulting" })).toBe("general");
+});
+
+test("impossible dates are ignored and visits dated in the future are never completion evidence", () => {
+  const ana = { id: "a" };
+  const result = rebookingSuggestions({
+    leads: [ana],
+    appointments: [
+      done(ana, "2026-08-01"), done(ana, "2026-09-01"),
+      done(ana, "2026-02-31"), // not a real date (would roll over to March 3)
+      done(ana, "2026-13-01"),
+      done(ana, "2026-12-25"), // marked completed but in the future
+    ],
+    user: {},
+    today,
+  });
+  expect(result[0].completedVisits).toBe(2);
+  expect(result[0].lastVisit).toBe("2026-09-01");
+  expect(result[0].intervalDays).toBe(31);
+  expect(dayStart("2026-02-31")).toBeNull();
+  expect(dayStart("2026-02-28")).toBe(Date.UTC(2026, 1, 28));
+  expect(rebookingSuggestions({ leads: [ana], appointments: [done(ana, "2026-09-01")], user: {}, today: "not-a-date" })).toEqual([]);
 });

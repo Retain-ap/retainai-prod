@@ -32,6 +32,13 @@ def record_followup(workspace, *, lead_id="", lead_email="", channel, source):
         return None
 
 
+def _store_unavailable():
+    import app as core
+
+    core.app.logger.error("[VALUE RECEIPT] Evidence store unreadable; refusing to read or write")
+    return jsonify({"error": "Revenue records can't be read right now. Nothing was changed."}), 503
+
+
 def _now():
     return dt.datetime.now(dt.timezone.utc)
 
@@ -55,6 +62,7 @@ def _receipt_for(ctx):
     import app as core
 
     args = request.args
+    window_days = vr.parse_window(args.get("window_days"))
     start, end, since, until, zone = vr.parse_period(
         args.get("since"), args.get("until"), ctx["owner"].get("timezone"), _now()
     )
@@ -66,17 +74,17 @@ def _receipt_for(ctx):
     )
     appointments = (core.load_appointments() or {}).get(workspace) or []
     receipt = vr.build_receipt(
+        last_sync=revenue_store.meta(workspace)["last_sync"],
         records=revenue_store.records(workspace),
         leads=load_user_leads(workspace),
         followups=followups,
         appointments=appointments,
         start=start,
         end=end,
-        window_days=args.get("window_days") or vr.DEFAULT_WINDOW_DAYS,
+        window_days=window_days,
     )
     receipt["period"] = {"since": since, "until": until, "timezone": zone}
     receipt["stripe_connected"] = bool(ctx["account_id"])
-    receipt["last_synced_at"] = revenue_store.meta(workspace)["last_synced_at"]
     receipt["currencies"] = sorted(vr.CURRENCY_EXPONENTS)
     return receipt
 
@@ -90,6 +98,8 @@ def get_value_receipt():
         return jsonify(_receipt_for(ctx)), 200
     except vr.EvidenceError as exc:
         return jsonify({"error": str(exc)}), 400
+    except vr.EvidenceStoreError:
+        return _store_unavailable()
 
 
 @value_bp.get("/api/value-receipt/export.csv")
@@ -101,6 +111,8 @@ def export_value_receipt():
         receipt = _receipt_for(ctx)
     except vr.EvidenceError as exc:
         return jsonify({"error": str(exc)}), 400
+    except vr.EvidenceStoreError:
+        return _store_unavailable()
     name = f"retainai-value-receipt-{receipt['period']['since']}-to-{receipt['period']['until']}.csv"
     return Response(
         vr.receipt_csv(receipt),
@@ -125,6 +137,7 @@ def sync_value_receipt():
         listing = core.stripe.Invoice.list(
             status="paid", created={"gte": since}, limit=100,
             expand=["data.charge"], stripe_account=ctx["account_id"],
+            stripe_version=vr.STRIPE_API_VERSION,
         )
         for invoice in listing.auto_paging_iter():
             seen += 1
@@ -136,8 +149,12 @@ def sync_value_receipt():
     except Exception as exc:
         core.app.logger.warning("[VALUE RECEIPT] Stripe read failed: %s", type(exc).__name__)
         return jsonify({"error": "stripe_read_failed"}), 502
-    result = revenue_store.upsert_stripe(ctx["workspace"], records, vr._iso(_now()))
-    return jsonify({"ok": True, "read": len(records), **result, "truncated": seen > MAX_SYNC_INVOICES}), 200
+    truncated = seen > MAX_SYNC_INVOICES
+    try:
+        result = revenue_store.upsert_stripe(ctx["workspace"], records, vr._iso(_now()), complete=not truncated)
+    except vr.EvidenceStoreError:
+        return _store_unavailable()
+    return jsonify({"ok": True, "read": len(records), **result, "truncated": truncated}), 200
 
 
 @value_bp.post("/api/value-receipt/payments")
@@ -153,9 +170,14 @@ def record_payment():
     if not lead:
         return jsonify({"error": "Choose a customer from this workspace."}), 400
     try:
-        record, created = revenue_store.add_manual(ctx["workspace"], body, lead=lead, recorded_by=ctx["email"], now=_now())
+        record, created = revenue_store.add_manual(
+            ctx["workspace"], body, lead=lead, recorded_by=ctx["email"], now=_now(),
+            timezone_name=ctx["owner"].get("timezone") or "UTC",
+        )
     except vr.EvidenceError as exc:
         return jsonify({"error": str(exc)}), 409 if "idempotency key was already used" in str(exc) else 400
+    except vr.EvidenceStoreError:
+        return _store_unavailable()
     return jsonify({"ok": True, "record": record, "created": created}), 201 if created else 200
 
 
@@ -173,6 +195,8 @@ def record_refund(record_id):
         return jsonify({"error": "Only owner-recorded payments can be changed here."}), 404
     except vr.EvidenceError as exc:
         return jsonify({"error": str(exc)}), 400
+    except vr.EvidenceStoreError:
+        return _store_unavailable()
     return jsonify({"ok": True, "record": record}), 200
 
 
@@ -185,4 +209,6 @@ def delete_payment(record_id):
         revenue_store.delete_manual(ctx["workspace"], record_id)
     except KeyError:
         return jsonify({"error": "Only owner-recorded payments can be removed."}), 404
+    except vr.EvidenceStoreError:
+        return _store_unavailable()
     return jsonify({"ok": True}), 200

@@ -15,10 +15,13 @@ const receipt = {
       confirmation: { kind: "booking", at: "2026-10-15T12:00:00Z", label: "Booking (completed)" } },
     { id: "stripe:in_2", source: "stripe", verification: "provider_verified", currency: "cad", amount_minor: 8000, refunded_minor: 0, net_minor: 8000,
       paid_at: "2026-10-22T10:00:00Z", customer_name: "Cleo", linked: false, reason: "No booking or invoice before the payment", followup: null, confirmation: null },
+    { id: "stripe:in_3", source: "stripe", verification: "unconfirmed", settlement: "no_charge", settlement_text: "Stripe shows paid with no charge (credit balance, minimum amount or other settlement)",
+      currency: "cad", amount_minor: 5000, refunded_minor: 0, net_minor: 5000, paid_at: "2026-10-23T10:00:00Z", customer_name: "Dee", linked: false,
+      reason: "Payment not confirmed: Stripe shows paid with no charge", followup: null, confirmation: null },
   ],
   rules: { linked_means: "A RetainAI follow-up was sent…", not_causal: "It does not prove the follow-up caused the payment.", excluded: "RetainAI membership charges, test-mode payments and refunded amounts are never counted." },
   stripe_connected: true,
-  last_synced_at: "2026-11-01T10:00:00Z",
+  sync: { last_synced_at: "2026-11-01T10:00:00Z", complete: true, not_refreshed: 0, stale_items: 0 },
 };
 
 let calls;
@@ -51,6 +54,16 @@ test("keeps Stripe-verified and owner-recorded revenue apart and shows the evide
   fireEvent.click(screen.getByRole("button", { name: "Not linked" }));
   expect(screen.getByText("Cleo")).toBeInTheDocument();
   expect(screen.getByText(/Not counted: No booking or invoice before the payment/)).toBeInTheDocument();
+  expect(screen.getByText("Payment not confirmed")).toBeInTheDocument();
+  expect(screen.getByText(/credit balance, minimum amount/)).toBeInTheDocument();
+});
+
+test("says when the last Stripe update was partial and which refunds were not re-checked", async () => {
+  mockApi({ body: { ...receipt, totals: { cad: { ...receipt.totals.cad, paid_unconfirmed_minor: 5000 } },
+                    sync: { last_synced_at: "2026-11-01T10:00:00Z", complete: false, not_refreshed: 2, stale_items: 1 } } });
+  render(<ValueReceipt leads={[]} />);
+  expect(await screen.findByText(/The last Stripe update was partial: refunds for 1 payment shown here were not re-checked/)).toBeInTheDocument();
+  expect(screen.getByText(/shown as paid by Stripe without a confirmed charge \(not counted\)/)).toBeInTheDocument();
 });
 
 test("records an owner payment with an idempotency key and reads Stripe on request", async () => {
@@ -59,10 +72,12 @@ test("records an owner payment with an idempotency key and reads Stripe on reque
   fireEvent.click(await screen.findByRole("button", { name: "Record a payment" }));
   const form = screen.getByRole("form", { name: "Record a payment" });
   fireEvent.change(within(form).getByLabelText("Amount"), { target: { value: "80.00" } });
+  fireEvent.change(within(form).getByLabelText("Time received (optional)"), { target: { value: "16:30" } });
+  expect(within(form).getByText(/a booking made the same day can't be linked/)).toBeInTheDocument();
   fireEvent.click(within(form).getByRole("button", { name: "Save payment" }));
   expect(await screen.findByText(/shown as owner-recorded, not verified/)).toBeInTheDocument();
   const posted = calls.find((call) => call.url.endsWith("/value-receipt/payments")).body;
-  expect(posted).toMatchObject({ lead_id: "a", amount: "80.00", currency: "cad" });
+  expect(posted).toMatchObject({ lead_id: "a", amount: "80.00", currency: "cad", paid_time: "16:30" });
   expect(posted.idempotency_key.length).toBeGreaterThanOrEqual(8);
 
   fireEvent.click(screen.getByRole("button", { name: "Update from Stripe" }));

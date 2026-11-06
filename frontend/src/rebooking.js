@@ -27,10 +27,17 @@ export function businessKind(user) {
   return "general";
 }
 
-function dayStart(dateKey) {
+/** A real calendar day (YYYY-MM-DD...) as UTC midnight ms, or null. */
+export function dayStart(dateKey) {
   const match = /^(\d{4})-(\d{2})-(\d{2})/.exec(String(dateKey || ""));
   if (!match) return null;
-  return Date.UTC(Number(match[1]), Number(match[2]) - 1, Number(match[3]));
+  const [year, month, day] = [Number(match[1]), Number(match[2]), Number(match[3])];
+  if (year < 2000 || year > 2100) return null;
+  const ms = Date.UTC(year, month - 1, day);
+  const check = new Date(ms);
+  // Date.UTC rolls 2026-02-31 over to March: reject instead of guessing.
+  if (check.getUTCFullYear() !== year || check.getUTCMonth() !== month - 1 || check.getUTCDate() !== day) return null;
+  return ms;
 }
 
 function median(values) {
@@ -45,8 +52,11 @@ function leadKeyOf(lead) {
   return String(lead?.id || lead?.email || "").toLowerCase();
 }
 
-/** Completed and upcoming visits per contact key. */
-export function visitsByLead(appointments = []) {
+/**
+ * Completed and upcoming visits per contact key. A visit dated after
+ * `todayMs` can't have been completed yet, so it is never completion evidence.
+ */
+export function visitsByLead(appointments = [], todayMs = null) {
   const out = new Map();
   appointments.forEach((appt) => {
     const key = leadKeyOf(appt?.lead) || String(appt?.lead_id || appt?.lead_email || "").toLowerCase();
@@ -55,8 +65,9 @@ export function visitsByLead(appointments = []) {
     const status = String(appt?.status || "").toLowerCase().replace(/_/g, "-");
     const fromBackend = Boolean(appt?._backend || status);
     // Backend "done" is also set for cancelled and no-show visits.
-    const completed = fromBackend ? status === "completed" : Boolean(appt?.done);
-    const upcoming = !appt?.done && !["completed", "cancelled", "canceled", "no-show"].includes(status);
+    const markedDone = fromBackend ? status === "completed" : Boolean(appt?.done);
+    const completed = markedDone && (todayMs === null || day <= todayMs);
+    const upcoming = !markedDone && !appt?.done && !["completed", "cancelled", "canceled", "no-show"].includes(status);
     const entry = out.get(key) || { completed: [], upcoming: [] };
     if (completed) entry.completed.push(day);
     else if (upcoming) entry.upcoming.push(day);
@@ -85,8 +96,8 @@ function formatDay(ms) {
  * `today` is a YYYY-MM-DD string in the workspace's timezone.
  */
 export function rebookingSuggestions({ leads = [], appointments = [], user, today }) {
-  const visits = visitsByLead(appointments);
   const todayMs = dayStart(today);
+  const visits = visitsByLead(appointments, todayMs);
   const kind = businessKind(user);
 
   const personal = new Map();

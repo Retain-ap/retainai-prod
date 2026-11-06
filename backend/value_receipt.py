@@ -5,12 +5,21 @@ customers, and only when the record shows a RetainAI follow-up came before
 a confirmed booking or an issued invoice that was then paid. That sequence is
 reported as a link, never as proof the follow-up caused the payment.
 
-Two kinds of payment evidence are kept apart everywhere:
+Payment evidence is kept in three clearly separate kinds:
 
-* ``provider_verified``: a paid invoice read from the business's own connected
-  Stripe account (never RetainAI's membership billing).
+* ``provider_verified``: a paid invoice from the business's own connected
+  Stripe account whose expanded charge is live, paid, succeeded, in the same
+  currency and for the full amount the invoice says was paid. Never
+  RetainAI's membership billing.
 * ``owner_recorded``: an amount the owner typed in, or an invoice the owner
-  marked as paid outside Stripe. Shown, but never presented as verified.
+  marked as paid outside Stripe.
+* ``unconfirmed``: Stripe shows the invoice as paid but no matching successful
+  charge proves it (for example settled from a customer credit balance or a
+  minimum-amount rule, or the charge could not be read). Shown, never counted.
+
+Supported Stripe contract: API version 2023-10-16 (pinned on every read), where
+an invoice's payment is its ``charge``. Newer versions move payments to the
+``payments`` list; they are not read here and must not be assumed.
 
 Amounts are integers in the currency's minor unit and are never added across
 currencies. This module has no Flask or app imports so the rules can be tested
@@ -29,7 +38,9 @@ import re
 import uuid
 from contextlib import contextmanager
 from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
+STRIPE_API_VERSION = "2023-10-16"
 # Currencies RetainAI businesses invoice in, with their minor-unit exponent.
 CURRENCY_EXPONENTS = {
     "cad": 2, "usd": 2, "eur": 2, "gbp": 2, "aud": 2, "nzd": 2, "chf": 2,
@@ -41,6 +52,7 @@ MIN_WINDOW_DAYS, MAX_WINDOW_DAYS = 7, 90
 MAX_PERIOD_DAYS = 400
 MAX_AMOUNT_MINOR = 100_000_000  # 1,000,000.00 in a two-decimal currency
 MAX_MANUAL_RECORDS = 5000
+EARLIEST_YEAR, LATEST_YEAR = 2000, 2100
 BOOKING_STATUSES = {"scheduled", "completed"}
 
 # Notifications RetainAI writes only after an email was actually accepted for
@@ -49,28 +61,45 @@ LEGACY_EMAIL_SUBJECTS = {"AI email sent": "email", "Automation email sent": "ema
 
 VERIFIED = "provider_verified"
 OWNER = "owner_recorded"
+UNCONFIRMED = "unconfirmed"
+
+SETTLEMENT_TEXT = {
+    "charge": "Paid by a successful Stripe charge",
+    "outside_stripe": "Marked as paid outside Stripe by the business",
+    "no_charge": "Stripe shows paid with no charge (credit balance, minimum amount or other settlement)",
+    "charge_unreadable": "Stripe's charge for this invoice could not be read",
+    "charge_incomplete": "The charge does not prove the full paid amount",
+    "manual": "Recorded by the owner",
+}
 
 
 class EvidenceError(ValueError):
-    """A request to record evidence that cannot be accepted as given."""
+    """A request that cannot be accepted as given (shown to the owner)."""
+
+
+class EvidenceStoreError(RuntimeError):
+    """The evidence file exists but can't be read; nothing may be written."""
 
 
 # ---------------------------------------------------------------- utilities
 
+def _valid_year(moment):
+    return moment if moment and EARLIEST_YEAR <= moment.year <= LATEST_YEAR else None
+
+
 def _utc(value):
-    """Parse an ISO string or epoch seconds to an aware UTC datetime."""
-    if value in (None, ""):
+    """Parse an ISO string or epoch seconds to an aware UTC datetime, or None."""
+    if value in (None, "") or isinstance(value, bool):
         return None
-    if isinstance(value, (int, float)):
-        return dt.datetime.fromtimestamp(float(value), dt.timezone.utc)
-    if isinstance(value, dt.datetime):
-        return value if value.tzinfo else value.replace(tzinfo=dt.timezone.utc)
-    text = str(value).strip()
     try:
-        parsed = dt.datetime.fromisoformat(text.replace("Z", "+00:00"))
-    except ValueError:
+        if isinstance(value, (int, float)):
+            return _valid_year(dt.datetime.fromtimestamp(float(value), dt.timezone.utc))
+        if isinstance(value, dt.datetime):
+            return _valid_year(value if value.tzinfo else value.replace(tzinfo=dt.timezone.utc))
+        parsed = dt.datetime.fromisoformat(str(value).strip().replace("Z", "+00:00"))
+    except (ValueError, OverflowError, OSError):
         return None
-    return parsed if parsed.tzinfo else parsed.replace(tzinfo=dt.timezone.utc)
+    return _valid_year(parsed if parsed.tzinfo else parsed.replace(tzinfo=dt.timezone.utc))
 
 
 def _iso(moment):
@@ -79,6 +108,13 @@ def _iso(moment):
 
 def _email(value):
     return str(value or "").strip().lower()
+
+
+def _zone(name):
+    try:
+        return ZoneInfo(str(name or "UTC"))
+    except (ZoneInfoNotFoundError, ValueError):
+        return dt.timezone.utc
 
 
 def normalize_currency(value):
@@ -111,6 +147,18 @@ def format_minor(minor, currency):
     return f"{Decimal(minor) / (Decimal(10) ** exponent):.{exponent}f}"
 
 
+def parse_window(value):
+    if value in (None, ""):
+        return DEFAULT_WINDOW_DAYS
+    try:
+        days = int(str(value).strip())
+    except ValueError:
+        raise EvidenceError("The follow-up window must be a whole number of days.") from None
+    if not MIN_WINDOW_DAYS <= days <= MAX_WINDOW_DAYS:
+        raise EvidenceError(f"Choose a follow-up window from {MIN_WINDOW_DAYS} to {MAX_WINDOW_DAYS} days.")
+    return days
+
+
 @contextmanager
 def _locked(path):
     os.makedirs(os.path.dirname(os.path.abspath(path)), exist_ok=True)
@@ -123,18 +171,26 @@ def _locked(path):
 
 
 def _read(path):
+    """Missing file -> empty. Anything else unreadable fails closed, so a
+    following write can never replace stored evidence with an empty file."""
     try:
         with open(path, "r", encoding="utf-8") as handle:
             data = json.load(handle)
-        return data if isinstance(data, dict) else {}
-    except (OSError, ValueError):
+    except FileNotFoundError:
         return {}
+    except (OSError, ValueError) as exc:
+        raise EvidenceStoreError(f"{os.path.basename(path)} could not be read") from exc
+    if not isinstance(data, dict):
+        raise EvidenceStoreError(f"{os.path.basename(path)} has an unexpected format")
+    return data
 
 
 def _write(path, data):
     temp = f"{path}.{uuid.uuid4().hex}.tmp"
     with open(temp, "w", encoding="utf-8") as handle:
         json.dump(data, handle, ensure_ascii=False)
+        handle.flush()
+        os.fsync(handle.fileno())
     os.replace(temp, path)
 
 
@@ -152,7 +208,7 @@ class RevenueStore:
 
     def meta(self, workspace):
         bucket = _read(self.path).get(workspace) or {}
-        return {"last_synced_at": bucket.get("last_synced_at") or ""}
+        return {"last_sync": bucket.get("last_sync") or None}
 
     @contextmanager
     def _bucket(self, workspace):
@@ -163,49 +219,74 @@ class RevenueStore:
             yield bucket
             _write(self.path, data)
 
-    def upsert_stripe(self, workspace, records, synced_at):
+    def upsert_stripe(self, workspace, records, synced_at, *, complete):
         """Store invoices read from the workspace's own Stripe account.
 
-        Re-syncing the same invoice updates its refund figures; nothing is
-        double counted and nothing is ever deleted by a sync.
+        Re-reading the same invoice updates its refund figures; nothing is
+        double counted or deleted. Stored Stripe payments this read did not
+        reach keep their old refund figures and are reported as not
+        re-checked.
         """
         added = updated = 0
+        seen = set()
         with self._bucket(workspace) as bucket:
             stored = bucket["records"]
             for record in records:
                 key = record["id"]
+                seen.add(key)
+                record["checked_at"] = synced_at
                 if key in stored:
                     previous = stored[key]
                     record["recorded_at"] = previous.get("recorded_at") or synced_at
-                    if previous != record:
+                    compare = {k: v for k, v in previous.items() if k != "checked_at"}
+                    if compare != {k: v for k, v in record.items() if k != "checked_at"}:
                         updated += 1
                 else:
                     record["recorded_at"] = synced_at
                     added += 1
                 stored[key] = record
-            bucket["last_synced_at"] = synced_at
-        return {"added": added, "updated": updated}
+            not_refreshed = sum(1 for key, item in stored.items() if item.get("source") == "stripe" and key not in seen)
+            bucket["last_sync"] = {"at": synced_at, "complete": bool(complete), "read": len(records), "not_refreshed": not_refreshed}
+        return {"added": added, "updated": updated, "not_refreshed": not_refreshed, "complete": bool(complete)}
 
-    def add_manual(self, workspace, payload, *, lead, recorded_by, now):
+    def add_manual(self, workspace, payload, *, lead, recorded_by, now, timezone_name="UTC"):
         key = str(payload.get("idempotency_key") or "").strip()
         if not re.fullmatch(r"[A-Za-z0-9_-]{8,80}", key):
             raise EvidenceError("A valid idempotency key is required.")
         currency = normalize_currency(payload.get("currency"))
         amount_minor = to_minor(payload.get("amount"), currency)
-        paid_at = _utc(payload.get("paid_at"))
-        if not paid_at:
-            raise EvidenceError("Enter the date the payment was received.")
-        if paid_at > now + dt.timedelta(days=1) or paid_at.year < 2000:
+        zone = _zone(timezone_name)
+        paid_on_text = str(payload.get("paid_at") or "").strip()[:10]
+        try:
+            paid_on = dt.date.fromisoformat(paid_on_text)
+        except ValueError:
+            raise EvidenceError("Enter the date the payment was received.") from None
+        paid_time = str(payload.get("paid_time") or "").strip()
+        if paid_time and not re.fullmatch(r"([01]\d|2[0-3]):[0-5]\d", paid_time):
+            raise EvidenceError("Enter the time as HH:MM.")
+        if not EARLIEST_YEAR <= paid_on.year <= LATEST_YEAR or paid_on > now.astimezone(zone).date():
             raise EvidenceError("The payment date can't be in the future.")
+        if paid_time:
+            hours, minutes = (int(part) for part in paid_time.split(":"))
+            paid_at = dt.datetime.combine(paid_on, dt.time(hours, minutes), zone)
+            if paid_at > now:
+                raise EvidenceError("The payment time can't be in the future.")
+        else:
+            # Only the day is known: keep it as a day, never invent a time.
+            paid_at = dt.datetime.combine(paid_on, dt.time(0), zone)
         reference = str(payload.get("reference") or "").strip()[:120]
         record = {
             "id": f"manual:{key}",
             "source": "manual",
             "verification": OWNER,
+            "settlement": "manual",
             "amount_minor": amount_minor,
             "refunded_minor": 0,
             "currency": currency,
             "paid_at": _iso(paid_at),
+            "paid_precision": "time" if paid_time else "day",
+            "paid_day_start": _iso(dt.datetime.combine(paid_on, dt.time(0), zone)),
+            "paid_day_end": _iso(dt.datetime.combine(paid_on + dt.timedelta(days=1), dt.time(0), zone)),
             "lead_id": str(lead.get("id") or ""),
             "customer_email": _email(lead.get("email")),
             "customer_name": str(lead.get("name") or "")[:160],
@@ -214,7 +295,7 @@ class RevenueStore:
             "recorded_by": recorded_by,
             "recorded_at": _iso(now),
         }
-        identity = {k: record[k] for k in ("amount_minor", "currency", "paid_at", "lead_id", "reference")}
+        identity = {k: record[k] for k in ("amount_minor", "currency", "paid_at", "paid_precision", "lead_id", "reference")}
         with self._bucket(workspace) as bucket:
             stored = bucket["records"]
             existing = stored.get(record["id"])
@@ -255,50 +336,78 @@ def _field(obj, *path):
     return obj
 
 
-def stripe_invoice_record(invoice, account_id):
-    """Evidence from one paid invoice of the business's connected account.
+def _int(value):
+    try:
+        return int(value or 0)
+    except (TypeError, ValueError):
+        return 0
 
-    Handles the 2023-10-16 API shape this app pins (``charge``,
-    ``paid_out_of_band``) and the newer one (``amount_paid_off_stripe``).
-    Returns None for anything that is not a paid invoice.
+
+def stripe_invoice_record(invoice, account_id):
+    """Evidence from one paid invoice, read with API version 2023-10-16.
+
+    Provider-verified only when the expanded ``charge`` proves the payment:
+    paid, succeeded, live like the invoice, same currency and exactly the
+    amount Stripe reports as paid. Anything else is kept as unconfirmed, or
+    as owner-recorded when the business marked it paid outside Stripe.
+    Returns None for anything that is not a paid invoice with a valid time.
     """
     if str(_field(invoice, "status") or "") != "paid":
         return None
     currency = str(_field(invoice, "currency") or "").lower()
     if currency not in CURRENCY_EXPONENTS:
         return None
-    amount_paid = int(_field(invoice, "amount_paid") or 0)
-    if amount_paid <= 0:
+    amount_paid = _int(_field(invoice, "amount_paid"))
+    paid_at = _utc(_field(invoice, "status_transitions", "paid_at"))
+    if amount_paid <= 0 or not paid_at:
         return None
-    paid_at = _utc(_field(invoice, "status_transitions", "paid_at")) or _utc(_field(invoice, "created"))
+    livemode = bool(_field(invoice, "livemode"))
     charge = _field(invoice, "charge")
-    # ``charge`` is an ID unless expanded; only an expanded charge has refunds.
-    charge_refunded = 0 if not charge or isinstance(charge, str) else int(_field(charge, "amount_refunded") or 0)
-    credit_notes = int(_field(invoice, "post_payment_credit_notes_amount") or 0)
-    # A credit note that refunds money also refunds the charge: take the larger
-    # figure instead of adding them, so a refund is never subtracted twice.
-    refunded = min(amount_paid, max(charge_refunded, credit_notes))
-    off_stripe = bool(_field(invoice, "paid_out_of_band")) or int(_field(invoice, "amount_paid_off_stripe") or 0) > 0
+    refunded = 0
+    if bool(_field(invoice, "paid_out_of_band")):
+        verification, settlement = OWNER, "outside_stripe"
+    elif not charge:
+        verification, settlement = UNCONFIRMED, "no_charge"
+    elif isinstance(charge, str):
+        verification, settlement = UNCONFIRMED, "charge_unreadable"
+    elif (
+        _field(charge, "paid") is True
+        and str(_field(charge, "status") or "") == "succeeded"
+        and str(_field(charge, "currency") or "").lower() == currency
+        and bool(_field(charge, "livemode")) == livemode
+        and _int(_field(charge, "amount")) == amount_paid
+    ):
+        verification, settlement = VERIFIED, "charge"
+        # A credit note that refunds money also refunds the charge: take the
+        # larger figure instead of adding them, so it is subtracted once.
+        refunded = min(amount_paid, max(_int(_field(charge, "amount_refunded")),
+                                        _int(_field(invoice, "post_payment_credit_notes_amount"))))
+    else:
+        verification, settlement = UNCONFIRMED, "charge_incomplete"
+    if verification != VERIFIED:
+        refunded = min(amount_paid, _int(_field(invoice, "post_payment_credit_notes_amount")))
     issued_at = _utc(_field(invoice, "status_transitions", "finalized_at")) or _utc(_field(invoice, "created"))
     invoice_id = str(_field(invoice, "id") or "")
     return {
         "id": f"stripe:{invoice_id}",
         "source": "stripe",
-        # Marked paid in Stripe without a Stripe payment: Stripe only records
-        # the owner's statement, so it is not provider-verified money.
-        "verification": OWNER if off_stripe else VERIFIED,
-        "paid_outside_stripe": off_stripe,
+        "verification": verification,
+        "settlement": settlement,
+        "paid_outside_stripe": settlement == "outside_stripe",
         "amount_minor": amount_paid,
         "refunded_minor": refunded,
         "currency": currency,
         "paid_at": _iso(paid_at),
+        "paid_precision": "time",
         "invoice_id": invoice_id,
         "invoice_number": str(_field(invoice, "number") or ""),
         "invoice_issued_at": _iso(issued_at),
+        "charge_id": str(_field(charge, "id") or "") if charge and not isinstance(charge, str) else "",
         "customer_email": _email(_field(invoice, "customer_email")),
         "customer_name": str(_field(invoice, "customer_name") or "")[:160],
         "stripe_account": account_id,
-        "livemode": bool(_field(invoice, "livemode")),
+        "stripe_api_version": STRIPE_API_VERSION,
+        "livemode": livemode,
     }
 
 
@@ -375,21 +484,19 @@ def collect_followups(workspace, *, log_entries, notifications, chats):
 
 def parse_period(since, until, timezone_name, now):
     """Inclusive local dates -> UTC [start, end). Defaults to the last 90 days."""
-    from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
-
-    try:
-        zone = ZoneInfo(str(timezone_name or "UTC"))
-    except (ZoneInfoNotFoundError, ValueError):
-        zone = dt.timezone.utc
+    zone = _zone(timezone_name)
     today = now.astimezone(zone).date()
 
     def day(value, fallback):
         if not value:
             return fallback
         try:
-            return dt.date.fromisoformat(str(value)[:10])
+            parsed = dt.date.fromisoformat(str(value)[:10])
         except ValueError:
             raise EvidenceError("Use dates in YYYY-MM-DD format.") from None
+        if not EARLIEST_YEAR <= parsed.year <= LATEST_YEAR:
+            raise EvidenceError(f"Use dates between {EARLIEST_YEAR} and {LATEST_YEAR}.")
+        return parsed
 
     end_day = day(until, today)
     start_day = day(since, end_day - dt.timedelta(days=89))
@@ -409,8 +516,9 @@ def _lead_for(record, leads_by_id, leads_by_email):
     return matches[0] if len(matches) == 1 else None
 
 
-def build_receipt(*, records, leads, followups, appointments, start, end, window_days, include_test=False):
-    window = dt.timedelta(days=max(MIN_WINDOW_DAYS, min(MAX_WINDOW_DAYS, int(window_days or DEFAULT_WINDOW_DAYS))))
+def build_receipt(*, records, leads, followups, appointments, start, end, window_days, last_sync=None, include_test=False):
+    window = dt.timedelta(days=parse_window(window_days))
+    last_sync_at = (last_sync or {}).get("at") or ""
     leads_by_id = {str(lead.get("id")): lead for lead in leads if isinstance(lead, dict) and lead.get("id")}
     leads_by_email = {}
     for lead in leads:
@@ -443,23 +551,36 @@ def build_receipt(*, records, leads, followups, appointments, start, end, window
         paid_at = _utc(record.get("paid_at"))
         if not paid_at or not (start <= paid_at < end):
             continue
+        day_only = record.get("paid_precision") == "day"
+        # With only the payment day known, anything on that same day has an
+        # unknown order relative to the payment, so it can't establish a link.
+        before_payment = _utc(record.get("paid_day_start")) if day_only else paid_at
+        same_day_end = _utc(record.get("paid_day_end")) if day_only else None
         currency = record.get("currency")
         net = int(record.get("amount_minor") or 0) - int(record.get("refunded_minor") or 0)
+        verification = record.get("verification")
         item = {
-            "id": record["id"], "source": record.get("source"), "verification": record.get("verification"),
+            "id": record["id"], "source": record.get("source"), "verification": verification,
+            "settlement": record.get("settlement") or ("manual" if record.get("source") == "manual" else ""),
+            "settlement_text": SETTLEMENT_TEXT.get(record.get("settlement") or "", ""),
             "paid_outside_stripe": bool(record.get("paid_outside_stripe")),
             "currency": currency, "amount_minor": int(record.get("amount_minor") or 0),
             "refunded_minor": int(record.get("refunded_minor") or 0), "net_minor": max(0, net),
-            "paid_at": _iso(paid_at), "invoice_number": record.get("invoice_number") or "",
+            "paid_at": _iso(paid_at), "paid_precision": "day" if day_only else "time",
+            "invoice_number": record.get("invoice_number") or "",
             "invoice_id": record.get("invoice_id") or "", "reference": record.get("reference") or "",
             "customer_name": record.get("customer_name") or "", "lead_id": "", "linked": False,
             "reason": "", "followup": None, "confirmation": None,
+            "refunds_checked_at": record.get("checked_at") or "",
+            "refunds_stale": record.get("source") == "stripe" and bool(last_sync_at) and record.get("checked_at") != last_sync_at,
         }
         lead = _lead_for(record, leads_by_id, leads_by_email)
         if not record.get("livemode", True) and not include_test:
             item["reason"] = "Stripe test-mode payment (not real money)"
         elif net <= 0:
             item["reason"] = "Fully refunded"
+        elif verification == UNCONFIRMED:
+            item["reason"] = f"Payment not confirmed: {SETTLEMENT_TEXT.get(record.get('settlement'), 'no proof of payment')}"
         elif not lead:
             item["reason"] = "No single matching contact in RetainAI"
         else:
@@ -470,7 +591,9 @@ def build_receipt(*, records, leads, followups, appointments, start, end, window
                 confirmations.append({"kind": "invoice", "at": _utc(record["invoice_issued_at"]),
                                       "id": record.get("invoice_id") or "", "label": f"Invoice {record.get('invoice_number') or ''}".strip()})
             confirmations += bookings_for(lead)
-            confirmations = sorted((c for c in confirmations if c["at"] <= paid_at), key=lambda c: c["at"], reverse=True)
+            same_day = [c for c in confirmations if day_only and before_payment <= c["at"] < same_day_end]
+            confirmations = sorted((c for c in confirmations if c["at"] <= before_payment and (not day_only or c["at"] < before_payment)),
+                                   key=lambda c: c["at"], reverse=True)
             sent = followups_for(lead)
             for confirmation in confirmations:
                 before = [row for row in sent if confirmation["at"] - window <= row["_at"] <= confirmation["at"]]
@@ -482,26 +605,35 @@ def build_receipt(*, records, leads, followups, appointments, start, end, window
                                             "label": confirmation["label"], "appointment_time": confirmation.get("appointment_time", "")}
                     break
             if not item["linked"]:
-                item["reason"] = (
-                    "No booking or invoice before the payment" if not confirmations
-                    else f"No recorded follow-up in the {window.days} days before the booking or invoice"
-                )
+                if same_day:
+                    item["reason"] = "The booking was on the payment day and the payment time isn't recorded, so their order is unknown. Add the time to link it."
+                elif not confirmations:
+                    item["reason"] = "No booking or invoice before the payment"
+                else:
+                    item["reason"] = f"No recorded follow-up in the {window.days} days before the booking or invoice"
         bucket = totals.setdefault(currency, {"linked_verified_minor": 0, "linked_owner_recorded_minor": 0,
                                               "paid_verified_minor": 0, "paid_owner_recorded_minor": 0,
-                                              "linked_count": 0, "payment_count": 0})
+                                              "paid_unconfirmed_minor": 0, "linked_count": 0, "payment_count": 0})
         counted = record.get("livemode", True) or include_test
         if counted and net > 0:
-            kind = "verified" if record.get("verification") == VERIFIED else "owner_recorded"
+            kind = {VERIFIED: "verified", OWNER: "owner_recorded"}.get(verification, "unconfirmed")
             bucket[f"paid_{kind}_minor"] += net
             bucket["payment_count"] += 1
-            if item["linked"]:
+            if item["linked"] and kind != "unconfirmed":
                 bucket[f"linked_{kind}_minor"] += net
                 bucket["linked_count"] += 1
         items.append(item)
     items.sort(key=lambda row: row["paid_at"], reverse=True)
+    sync = dict(last_sync or {})
     return {
         "totals": totals,
         "items": items,
+        "sync": {
+            "last_synced_at": sync.get("at", ""),
+            "complete": bool(sync.get("complete")) if sync else False,
+            "not_refreshed": int(sync.get("not_refreshed") or 0),
+            "stale_items": sum(1 for item in items if item["refunds_stale"]),
+        },
         "rules": {
             "window_days": window.days,
             "linked_means": (
@@ -510,7 +642,9 @@ def build_receipt(*, records, leads, followups, appointments, start, end, window
                 "and the customer paid after that."
             ),
             "not_causal": "A link shows the order of events. It does not prove the follow-up caused the payment.",
-            "excluded": "RetainAI membership charges, test-mode payments and refunded amounts are never counted.",
+            "excluded": ("RetainAI membership charges, test-mode payments, refunded amounts and Stripe payments "
+                         "without a confirmed successful charge are never counted."),
+            "stripe_api_version": STRIPE_API_VERSION,
         },
     }
 
@@ -521,25 +655,31 @@ def _safe_cell(value):
     return f"'{text}" if text[:1] in ("=", "+", "-", "@", "\t", "\r") else text
 
 
+def _evidence_label(item):
+    if item["verification"] == VERIFIED:
+        return "Provider-verified (Stripe charge)"
+    if item["verification"] == UNCONFIRMED:
+        return "Unconfirmed (Stripe shows paid)"
+    return "Marked paid outside Stripe" if item["paid_outside_stripe"] else "Owner-recorded"
+
+
 def receipt_csv(receipt):
     out = io.StringIO()
     writer = csv.writer(out)
     writer.writerow([
-        "paid_at_utc", "customer", "currency", "amount", "refunded", "net", "evidence",
+        "paid_at_utc", "paid_time_known", "customer", "currency", "amount", "refunded", "net", "evidence", "settlement",
         "source", "linked", "followup_channel", "followup_sent_at_utc", "confirmation",
-        "confirmation_at_utc", "invoice_number", "reference", "reason_not_linked",
+        "confirmation_at_utc", "invoice_number", "reference", "refunds_checked_at_utc", "reason_not_linked",
     ])
     for item in receipt["items"]:
         currency = item["currency"]
         writer.writerow([_safe_cell(v) for v in (
-            item["paid_at"], item["customer_name"], (currency or "").upper(),
+            item["paid_at"], "no" if item["paid_precision"] == "day" else "yes", item["customer_name"], (currency or "").upper(),
             format_minor(item["amount_minor"], currency), format_minor(item["refunded_minor"], currency),
-            format_minor(item["net_minor"], currency),
-            "Provider-verified (Stripe)" if item["verification"] == VERIFIED
-            else ("Marked paid outside Stripe" if item["paid_outside_stripe"] else "Owner-recorded"),
+            format_minor(item["net_minor"], currency), _evidence_label(item), item["settlement_text"],
             item["source"], "yes" if item["linked"] else "no",
             (item["followup"] or {}).get("channel", ""), (item["followup"] or {}).get("sent_at", ""),
             (item["confirmation"] or {}).get("label", ""), (item["confirmation"] or {}).get("at", ""),
-            item["invoice_number"], item["reference"], item["reason"],
+            item["invoice_number"], item["reference"], item["refunds_checked_at"], item["reason"],
         )])
     return out.getvalue()

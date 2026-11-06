@@ -1,6 +1,6 @@
 import React, { useMemo, useState } from "react";
 import { FaCheckCircle, FaRegCircle } from "react-icons/fa";
-import { visitsByLead } from "../rebooking";
+import { dayStart, visitsByLead } from "../rebooking";
 
 const DAY = 24 * 60 * 60 * 1000;
 const REVIEWED_KEY = "retainai:salon-playbooks-reviewed";
@@ -15,14 +15,12 @@ export const SALON_PLAYBOOKS = [
   { key: "birthday", name: "Birthday note", copy: "Sent only to clients whose email consent is confirmed." },
 ];
 
-function dayStart(key) {
-  const match = /^(\d{4})-(\d{2})-(\d{2})/.exec(String(key || ""));
-  return match ? Date.UTC(Number(match[1]), Number(match[2]) - 1, Number(match[3])) : null;
-}
-
 /** Aggregate counts only: no names, notes or messages. */
 export function salonMetrics({ leads = [], appointments = [], rebooking = [], today }) {
   const todayMs = dayStart(today);
+  if (todayMs === null) {
+    return { completed30: 0, noShowRate30: null, withRhythm: 0, dueNow: 0, withNextBooking: 0, importedAwaitingConsent: 0 };
+  }
   const since = todayMs - 30 * DAY;
   let completed30 = 0;
   let noShow30 = 0;
@@ -36,7 +34,7 @@ export function salonMetrics({ leads = [], appointments = [], rebooking = [], to
     else if (fromBackend ? status === "completed" : appt?.done) completed30 += 1;
     if (status !== "cancelled" && status !== "canceled") booked30 += 1;
   });
-  const visits = visitsByLead(appointments);
+  const visits = visitsByLead(appointments, todayMs);
   let withNextBooking = 0;
   visits.forEach((entry) => { if (entry.upcoming.some((day) => day >= todayMs)) withNextBooking += 1; });
   return {
