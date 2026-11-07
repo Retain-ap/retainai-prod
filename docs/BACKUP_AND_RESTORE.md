@@ -10,9 +10,10 @@
   and every JSON data file, plus `manifest.json` with each file's size and
   SHA-256. A `.sha256` file stores the archive's own checksum. The last 14 are
   kept (`BACKUP_RETENTION_COUNT`).
-- **Gap:** the archives sit on the same Render disk as the data and are not
-  encrypted there. Losing the disk or the service loses the backups too. Until
-  this procedure is followed, no off-Render copy and no restore drill exist.
+- The server archives still sit on the same Render disk and are not encrypted
+  there. A real production archive was downloaded, encrypted and independently
+  restored on the owner's computer on November 7 UTC (details below).
+  A second private cloud copy and recurring off-site retention remain open.
 
 ## What a backup contains and needs
 
@@ -28,12 +29,14 @@
 Run these steps on the owner's own computer, from a checkout of this
 repository, with Python 3.11 or 3.12 and `pip install -r backend/requirements.txt`.
 
-**Platforms.** `verify` and `seal` write no plaintext and run anywhere.
-`open` and `drill` write decrypted customer data and run **only on Linux and
-macOS**: there the tool creates the output owner-only (files 0600, folder 0700)
+**Platforms.** Use Linux or macOS for the complete procedure. Verifying a
+SQLite archive extracts a temporary database for its integrity check; `seal`
+also performs that verification. Plaintext output is supported **only on Linux
+and macOS**: there the tool creates the output owner-only (files 0600, folder 0700)
 and checks it after creating it. On native Windows, mode bits don't set a
 private access list (DACL), so `open` and `drill` refuse to run instead of
-claiming private output. Use WSL or a Linux/macOS computer for them until a
+claiming private output. Use WSL's Linux filesystem (not `/mnt/c`) or a
+Linux/macOS computer for temporary and restored files until a
 Windows wrapper that sets and checks a private ACL exists. The downloaded
 `.zip` from step 3 is plaintext on any platform: keep it in a private folder
 and delete it after sealing.
@@ -82,10 +85,26 @@ archive checksum. Compare the counts with the Owner Console. Then delete the
   `backend/test_backup_tools.py`. That shows the tool works on the real backup
   format. It is **not** evidence that a production backup has been copied off
   Render or restored.
-- **Not yet done for production:** no production RetainAI backup has been
-  downloaded, sealed, stored off Render or drilled by Claude (it has no owner
-  MFA sign-in, by design). The first real weekly copy and drill are owner
-  actions; record the date and the drill's counts here when they pass.
+- **Production drill completed by Codex, November 7 UTC:** the owner signed
+  into the MFA-protected Owner Console. A fresh archive,
+  `retainai-backup-20261107T021411Z.zip`, passed the server checksum/manifest
+  check and SQLite integrity check, then was downloaded and sealed with
+  scrypt/AES-256-GCM. An independent restore using the app's own storage layer
+  recovered **5 users, 1 workspace with contacts, 5 contacts and 15 files**,
+  matching the observed Owner Console totals. SQLite integrity was `ok`.
+  The restore ran inside a mode-0700 directory on WSL Ubuntu's Linux
+  filesystem, with no provider credentials or scheduler loaded. The restored
+  plaintext and the original downloaded ZIP were removed after verification.
+  The encrypted archive remains in the owner's private Windows recovery
+  folder, with its new passphrase protected separately by current-user DPAPI.
+  - Original archive SHA-256:
+    `5c9ac60ff0a13716b279dda663641979ff751f2f57eaeaa4aeae48d2f194976e`
+  - Encrypted `.rbk` SHA-256:
+    `4b2327823e551be496720ef1b2304e768db4c7c8234e365f7e310e12da39e480`
+  - **Still open:** private cloud upload and round-trip verification,
+    independent password-manager recovery-key custody, production
+    `DATA_ENCRYPTION_KEY` escrow and recurring off-site copies. Do not describe
+    this local drill as proof of those separate requirements.
 
 ## Restoring production (only in a real data loss)
 
@@ -104,10 +123,9 @@ Do not restore by any route that skips owner MFA or weakens access.
 
 ## Blockers needing owner credentials (not done by Claude)
 
-- **Copying backups off Render** needs the owner's MFA-protected Owner Console
-  sign-in, or owner access to the service shell. Claude has neither, by design.
-  Codex's Render SSH attempt was refused with `publickey`, and the right fix is
-  the owner adding their own SSH key, not weakening access.
+- **Owner Console access worked for the November 7 local copy and drill.**
+  Future copies still require owner MFA or authorized service-shell access.
+  Do not bypass MFA or weaken SSH authentication to automate them.
 - **Automatic off-site copies** (for example to object storage) would need the
   owner to choose a storage provider and create a write-only credential for it.
   Nothing was chosen or bought. Until then the weekly manual copy above is the
