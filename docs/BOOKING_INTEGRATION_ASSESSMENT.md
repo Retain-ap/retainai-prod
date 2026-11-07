@@ -127,8 +127,10 @@ and the API reference for scheduled events and invitees.
    **Log in** there opened
    `https://developer.calendly.com/login?origin=https://developer.calendly.com/console/apps`,
    which redirected to the separate developer sign-in at `https://login.calendly.com/`.
-   The owner-email registration form is prepared, but API terms acceptance and
-   account creation are not complete. After developer sign-in, open **OAuth apps**
+   Codex prepared the owner-email registration and held the API terms step. A
+   later read-only check found **Verification email sent**; Codex did not submit
+   that step. Email verification and developer-console access are still pending.
+   After developer sign-in, open **OAuth apps**
    and create a **Sandbox** app first:
    - If asked for the app type, choose a web (server-side) app, not native.
    - Redirect URI: exactly one, `https://api.retainai.ca/api/calendly/oauth/callback`

@@ -3,8 +3,9 @@
 This continues the [November 6 release handoff](2026-11-06-value-calendly-and-inspired-looks.md).
 The owner opened RetainAI's MFA-protected Owner Console. The standard Google
 reviewer account is now created and tested. Calendly's normal personal account
-is signed in, and its separate developer registration is prepared with
-`owner@retainai.ca`; no Calendly app credentials or live connection are claimed.
+is signed in, and its separate developer portal has reached **Verification
+email sent** after the owner-email registration was prepared. No Calendly app
+credentials or live connection are claimed.
 
 ## Fixed AI route
 
@@ -99,10 +100,11 @@ started. Backend runtime remains the separately validated PR39 release.
 
 The account menu's **Developer** link currently opens the developer docs. The
 docs' **Log in** link leads to a separate developer portal at
-`https://login.calendly.com/`, whose sign-up form is prepared with the owner
-email and name. Registration is held because its final step accepts Calendly
-API terms; the owner is away and requested no questions. No password or API key
-has been created for that account yet.
+`https://login.calendly.com/`. Codex prepared the owner email and name and held
+the Register step for its API terms. A later read-only check found that the
+page had advanced to **Verification email sent**; Codex did not submit that
+step. Email verification and developer-console access are not yet confirmed.
+No Calendly API key has been created or configured.
 
 The existing personal Calendly login remains Google-linked. Its **Change email**
 action opens a Google account chooser rather than an ordinary email edit form.
