@@ -1029,7 +1029,16 @@ function CrmDashboard({ authenticatedUser }) {
     }
   }, [effectiveEmail]);
 
+  // The contact importer: files from iPhone/Mac/iCloud, Google, Outlook, CRMs or
+  // spreadsheets, plus Google Contacts. Opens at the file importer.
   const openImports = useCallback(() => {
+    setSettingsTab("imports");
+    setSection("settings");
+    navigate("/app/import");
+  }, [navigate]);
+
+  // Google Calendar prompts jump to the Google connection card on the same page.
+  const openGoogleImport = useCallback(() => {
     setSettingsTab("imports");
     setSection("settings");
     navigate("/app/import?source=google");
@@ -1381,7 +1390,7 @@ function CrmDashboard({ authenticatedUser }) {
                   } else {
                     setGcalStatus("disconnected");
                     setGoogleEvents([]);
-                    openImports();
+                    openGoogleImport();
                   }
                 }}
               >
@@ -1412,7 +1421,7 @@ function CrmDashboard({ authenticatedUser }) {
                   {gcalStatus === "unavailable" && "service unavailable"}
                 </span>
                 <button
-                  onClick={openImports}
+                  onClick={openGoogleImport}
                   style={{
                     background: "#f7cb53",
                     color: "#232323",
