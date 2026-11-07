@@ -20,7 +20,7 @@ export default function ImportSourceChooser({ open, onClose, onSelect }) {
             </div>
             <button type="button" className="import-chooser-close" onClick={onClose} aria-label="Close import source chooser" data-autofocus><FaTimes aria-hidden="true" /></button>
           </div>
-          { ["Contacts & spreadsheets", "CRMs", "Other"].map(group => (
+          { ["Contacts & spreadsheets", "CRMs"].map(group => (
             <section className="import-chooser-group" key={group} aria-label={group}>
               <h3>{group}</h3>
               <div className="import-chooser-grid">

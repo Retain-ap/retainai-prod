@@ -11,6 +11,7 @@
 .import-chooser-group { margin-top: 22px; }
 .import-chooser-group h3 { margin: 0 0 9px; font-size: 12px; font-weight: 700; color: #bbc2cc; }
 .import-chooser-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; }
+.import-chooser-group[aria-label="CRMs"] .import-chooser-grid { grid-template-columns: repeat(4, minmax(0, 1fr)); }
 .import-chooser-option { display: flex; align-items: center; gap: 10px; min-height: 78px; min-width: 0; padding: 12px; border: 1px solid #383b44; border-radius: 14px; background: #23262c; color: #edf0f3; text-align: left; cursor: pointer; transition: border-color .15s, background .15s; }
 .import-chooser-option:hover { border-color: #f7cb53; background: #2c2b25; }
 .import-chooser-option:focus-visible, .import-chooser-close:focus-visible { outline: 2px solid #f7cb53; outline-offset: 3px; }
@@ -23,6 +24,6 @@
 .import-chooser-copy small { font-size: 11px; color: #b7bec8; line-height: 1.4; }
 .import-chooser-arrow { flex: 0 0 10px; width: 10px; color: #a6adb8; }
 .import-chooser-note { margin: 21px 0 0; font-size: 12px; line-height: 1.5; color: #b7bec8; }
-@media (max-width: 720px) { .import-chooser-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
-@media (max-width: 440px) { .import-chooser-position { padding: 12px; place-items: start center; } .import-chooser-panel { padding: 19px 15px; border-radius: 18px; } .import-chooser-grid { grid-template-columns: 1fr; } .import-chooser-option { min-height: 68px; } }
+@media (max-width: 720px) { .import-chooser-grid, .import-chooser-group[aria-label="CRMs"] .import-chooser-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+@media (max-width: 440px) { .import-chooser-position { padding: 12px; place-items: start center; } .import-chooser-panel { padding: 19px 15px; border-radius: 18px; } .import-chooser-grid, .import-chooser-group[aria-label="CRMs"] .import-chooser-grid { grid-template-columns: 1fr; } .import-chooser-option { min-height: 68px; } }
 @media (prefers-reduced-motion: reduce) { .import-chooser-option { transition: none; } }

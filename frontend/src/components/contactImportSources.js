@@ -11,7 +11,7 @@ export const SOURCES = [
   { key: "salesforce", label: "Salesforce", detail: "Upload a contact report as CSV", group: "CRMs", file: ".csv", steps: "Run a Contacts report → Export → Details only → CSV. Admins can also use Data Export." },
   { key: "pipedrive", label: "Pipedrive", detail: "Upload your People export", group: "CRMs", file: ".csv", steps: "Contacts → People → ⋯ → Export filter results → CSV." },
   { key: "zoho", label: "Zoho CRM", detail: "Upload a contact CSV export", group: "CRMs", file: ".csv", steps: "Setup → Data Administration → Export → Contacts → CSV." },
-  { key: "other", label: "Another service or file", detail: "Any CSV spreadsheet or vCard", group: "Other", file: ".csv or .vcf", steps: "Export contacts from your service as CSV or vCard (.vcf). For a spreadsheet, save as CSV with column names in the first row. Each contact needs an email or a phone number." },
+  { key: "other", label: "Another service or file", detail: "Any CSV spreadsheet or vCard", group: "Contacts & spreadsheets", file: ".csv or .vcf", steps: "Export contacts from your service as CSV or vCard (.vcf). For a spreadsheet, save as CSV with column names in the first row. Each contact needs an email or a phone number." },
 ];
 
 export function importSourcePath(source) {
