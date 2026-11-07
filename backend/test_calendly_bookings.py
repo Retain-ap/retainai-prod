@@ -438,6 +438,75 @@ class CalendlyTests(unittest.TestCase):
         self.assertEqual((result.get_json()["skipped"], result.get_json()["imported"]), (4, 0))
         self.assertEqual(self.appointments(), [])
 
+    def run_racing_sync(self, client, *, during, budget=None):
+        """Start sync A; while A is reading Calendly, ``during`` runs (sync B).
+        Returns A's response."""
+        real = self.fake.request
+        state = {"fired": False}
+
+        def racing(method, url, **kwargs):
+            if url.endswith("/invitees") and not state["fired"]:
+                state["fired"] = True
+                self.fake.request = real
+                during()  # B starts after A read its events page, and commits first
+                self.fake.request = racing
+            return real(method, url, **kwargs)
+
+        self.fake.request = racing
+        try:
+            if budget is None:
+                return self.sync(client)
+            with patch.object(cal, "SYNC_REQUEST_BUDGET", budget):
+                return self.sync(client)
+        finally:
+            self.fake.request = real
+
+    def test_an_older_sync_finishing_last_cannot_undo_a_newer_cancellation(self):
+        self.many(2)
+        client, _, _ = self.connect()
+        self.assertEqual(self.sync(client).get_json()["imported"], 2)
+        revision = self.stored()[self.owner]["sync_revision"]
+
+        def newer_sync_sees_a_cancellation():
+            self.fake.events[0] = event("E000", -100, "canceled")
+            newer = self.sync(self.client(self.owner)).get_json()
+            self.assertEqual(newer["updated"], 1)
+
+        older = self.run_racing_sync(client, during=newer_sync_sees_a_cancellation)
+        self.assertEqual(older.status_code, 409)
+        self.assertTrue(older.get_json()["superseded"])
+        statuses = {r["calendly_event_id"]: r["status"] for r in self.appointments()}
+        self.assertEqual(statuses["E000"], "cancelled")  # A had read it as active; its stale view was not written
+        self.assertEqual(self.stored()[self.owner]["sync_revision"], revision + 1)
+        self.assertEqual(self.stored()[self.owner]["last_sync"]["updated"], 1)
+
+    def test_an_older_sync_finishing_last_cannot_reset_a_newer_continuation(self):
+        self.many(6)
+        client, _, _ = self.connect()
+        with patch.object(cal, "PAGE_SIZE", 2):
+            with patch.object(cal, "SYNC_REQUEST_BUDGET", 3):
+                self.sync(client)  # pass in progress
+            before = self.stored()[self.owner]["sync_cursor"]
+            after_newer = {}
+
+            def newer_sync_advances():
+                with patch.object(cal, "SYNC_REQUEST_BUDGET", 3):
+                    self.sync(self.client(self.owner))
+                after_newer.update(self.stored()[self.owner]["sync_cursor"])
+
+            older = self.run_racing_sync(client, during=newer_sync_advances, budget=3)
+        self.assertEqual(older.status_code, 409)
+        cursor = self.stored()[self.owner]["sync_cursor"]
+        self.assertEqual(cursor, after_newer)
+        self.assertGreater(cursor["events_seen"], before["events_seen"])
+
+    def test_sequential_syncs_each_advance_the_revision(self):
+        self.many(1)
+        client, _, _ = self.connect()
+        self.sync(client)
+        self.sync(client)
+        self.assertEqual(self.stored()[self.owner]["sync_revision"], 2)
+
     def test_a_sync_that_outlives_a_disconnect_writes_nothing(self):
         self.many(2)
         client, _, _ = self.connect()

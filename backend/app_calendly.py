@@ -212,6 +212,10 @@ class ConnectionChanged(RuntimeError):
     """Calendly was disconnected or reconnected while a sync was running."""
 
 
+class SyncSuperseded(RuntimeError):
+    """Another sync of the same connection committed after this one started."""
+
+
 def _access_token(workspace, config, *, guard=None, force_refresh=False, connection_id=None):
     """A valid access token. Renewal happens under the file lock so two syncs
     never spend the same single-use refresh token."""
@@ -249,11 +253,13 @@ def _access_token(workspace, config, *, guard=None, force_refresh=False, connect
 def calendly_sync():
     """One bounded step of a pass over the owner's Calendly window.
 
-    Reads at most SYNC_REQUEST_BUDGET requests / SYNC_TIME_BUDGET_SECONDS,
-    never sleeps for a rate limit, and saves a server-side cursor so the next
-    Sync continues. Everything read in this step is written in one commit that
-    first re-checks, under the connection and appointment locks, that the same
-    Calendly connection is still in place.
+    Makes at most SYNC_REQUEST_BUDGET requests and starts none after about
+    SYNC_TIME_BUDGET_SECONDS (the request already in flight can still take up
+    to its TIMEOUT_SECONDS), never sleeps for a rate limit, and saves a
+    server-side cursor so the next Sync continues. Everything read in this
+    step is written in one commit that first re-checks, under the connection
+    and appointment locks, that the same Calendly connection is still in place
+    and that no other sync committed since this one started (sync_revision).
     """
     import app as core
 
@@ -271,6 +277,10 @@ def calendly_sync():
     except vr.EvidenceStoreError:
         return jsonify({"error": "Calendly connection details can't be read right now."}), 503
     user_uri, connection_id = connection.get("user_uri"), connection.get("connection_id") or ""
+    # Compare-and-swap token: read before any Calendly request, checked and
+    # incremented at commit, so steps that finish out of order can't regress
+    # appointments or the cursor.
+    revision = int(connection.get("sync_revision") or 0)
     if not user_uri:
         return jsonify({"error": "Calendly isn't connected."}), 400
     cursor, continuing = cal.cursor_for(connection.get("sync_cursor"), connection_id, user_uri, now)
@@ -335,6 +345,8 @@ def calendly_sync():
         current = data.get(workspace) or {}
         if current.get("connection_id", "") != connection_id or current.get("user_uri") != user_uri:
             raise ConnectionChanged()
+        if int(current.get("sync_revision") or 0) != revision:
+            raise SyncSuperseded()
         with vr._locked(appointments_path):
             ctx["guard"]()  # deleted while Calendly was being read: write nothing
             all_appointments = core.load_appointments() or {}
@@ -360,12 +372,16 @@ def calendly_sync():
         else:
             current["sync_cursor"] = step["cursor"]
         current["last_sync"] = results
+        current["sync_revision"] = revision + 1
         data[workspace] = current
 
     try:
         _update(commit, ctx["guard"])
     except ConnectionChanged:
         return changed
+    except SyncSuperseded:
+        return jsonify({"error": "Another Calendly sync finished first, so nothing from this one was saved. "
+                                 "Press Sync now to continue from where that one stopped.", "superseded": True}), 409
     except vr.EvidenceStoreError:
         return jsonify({"error": "Calendly connection details can't be read right now."}), 503
     return jsonify({"ok": True, **results}), 200

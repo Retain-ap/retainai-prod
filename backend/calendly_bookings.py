@@ -28,7 +28,9 @@ Follows Calendly's official developer docs (read November 6, 2026):
   request: a sync stops, saves where it got to, and reports when to try again.
 
 Sync is incremental: each "Sync now" makes at most ``SYNC_REQUEST_BUDGET``
-requests in ``SYNC_TIME_BUDGET_SECONDS`` and saves a server-side cursor (window,
+requests and starts no new request after about ``SYNC_TIME_BUDGET_SECONDS``
+(not a hard deadline: the request already in flight can add up to its
+``TIMEOUT_SECONDS``), and saves a server-side cursor (window,
 page and position, bound to the connection and Calendly user; no credentials).
 The next Sync continues from it. When the whole window has been read the cursor
 is cleared, so the following Sync starts a fresh pass and picks up later
@@ -62,7 +64,7 @@ PAGE_SIZE = 100
 REFRESH_MARGIN = dt.timedelta(minutes=5)
 TIMEOUT_SECONDS = 10
 SYNC_REQUEST_BUDGET = 40          # under the free plan's 50 requests/minute
-SYNC_TIME_BUDGET_SECONDS = 20     # well inside the web worker's timeout
+SYNC_TIME_BUDGET_SECONDS = 20     # no new request after this; one in flight may add TIMEOUT_SECONDS
 CURSOR_MAX_AGE = dt.timedelta(hours=24)
 MAX_PAGES_PER_PASS = MAX_EVENTS // PAGE_SIZE + 5
 

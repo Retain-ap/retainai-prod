@@ -68,8 +68,11 @@ and the API reference for scheduled events and invitees.
     5 invitee pages per event. A repeated or looping page token ends the pass.
     Hitting a cap is reported.
   - **Each Sync is one bounded step:** at most 40 requests (under the free
-    plan's 50 per minute) and 20 seconds, so it finishes well inside the web
-    worker's timeout. On a 429 it **does not sleep**: it stops, saves its
+    plan's 50 per minute). It starts no new request after about 20 seconds.
+    That is not a hard deadline: the request already in flight can add up to
+    its 10-second timeout, so a step ends within roughly 30 seconds. That is
+    well inside the backend's gunicorn `--timeout 120` (start command checked
+    November 7, 2026). On a 429 it **does not sleep**: it stops, saves its
     progress and says how many seconds Calendly asked to wait
     (`X-RateLimit-Reset`). Network and server errors get one 1-second retry. A
     persistent error saves nothing from that step.
@@ -88,6 +91,11 @@ and the API reference for scheduled events and invitees.
     the same connection and Calendly user are still in place and the workspace
     still exists. A sync that outlives a disconnect, reconnect or account
     deletion writes nothing (409 or 401).
+  - **Concurrent syncs of the same connection:** a `sync_revision` counter is
+    read before any Calendly request and checked at commit (compare-and-swap
+    under the connection lock), then incremented. If another sync committed in
+    between, the slower one saves nothing and returns 409. It therefore can't
+    undo a newer cancellation or move the cursor back.
   - Imports only invitees whose email matches **exactly one** existing RetainAI
     contact. **No contact is created**, no consent is recorded or inferred,
     nothing is sent and no automation is started. Booking-question answers,
