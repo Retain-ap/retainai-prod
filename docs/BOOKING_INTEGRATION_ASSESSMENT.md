@@ -4,7 +4,7 @@ Status, November 7, 2026: the owner chose **service businesses that use
 Calendly** as the first target. Calendly is now the **primary** booking
 connection; the read-only Square integration stays in the product as an
 **optional** second connection. Both are **built but not live**: no Calendly or
-Square OAuth app is registered and no credentials are set, so each card in
+Square OAuth credentials are configured, so each card in
 Import says it is "not available yet". Nothing was purchased, and no OAuth round
 trip with a real Calendly or Square account has been completed.
 
@@ -127,9 +127,11 @@ and the API reference for scheduled events and invitees.
    **Log in** there opened
    `https://developer.calendly.com/login?origin=https://developer.calendly.com/console/apps`,
    which redirected to the separate developer sign-in at `https://login.calendly.com/`.
-   Codex prepared the owner-email registration and held the API terms step. A
-   later read-only check found **Verification email sent**; Codex did not submit
-   that step. Email verification and developer-console access are still pending.
+   The owner reported completing developer-email verification. On November 7
+   Toronto time, the separate portal still showed its sign-in form; opening the
+   official developer login link did not establish a developer session. The
+   `owner@retainai.ca` address is filled in, but its password is not available to
+   Codex. Developer-console access and app creation are not yet verified.
    After developer sign-in, open **OAuth apps**
    and create a **Sandbox** app first:
    - If asked for the app type, choose a web (server-side) app, not native.
@@ -150,8 +152,14 @@ and the API reference for scheduled events and invitees.
 
 Complete any planned login-email, password or login-method change before the
 connection test: [Calendly's FAQ](https://developer.calendly.com/docs/getting-started/frequently-asked-questions)
-says each revokes OAuth and personal access tokens. The personal Google-linked
-account has not been changed. During the real Sandbox test, inspect the returned
+says each revokes OAuth and personal access tokens. On November 7 Toronto time,
+Codex verified the owner's newly opened account-settings page: the normal
+Calendly account now uses email/password login with `owner@retainai.ca`. The
+previous tab still showed the old email; it is not the current account evidence.
+The existing public RetainAI Setup event was also corrected from 15 to 10 minutes
+to match its name and RetainAI's advertised walkthrough; its URL is unchanged.
+No availability, booking, invitee, calendar connection or OAuth grant was changed.
+During the real Sandbox test, inspect the returned
 scope without recording tokens. One documentation example uses `scope: default`;
 that is not proof of the actual response and does not justify weakening the
 existing `scheduled_events:read` enforcement.
