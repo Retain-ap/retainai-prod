@@ -14,6 +14,7 @@ import AcceptInvite from "./pages/AcceptInvite"; // ← added
 import { SettingsProvider } from "./components/SettingsContext";
 import { API_BASE } from "./apiBase";
 import "./index.css";
+import routeMeta from "./routeMeta.json";
 
 const CHUNK_RELOAD_KEY = "retainai:chunk-reload";
 
@@ -85,42 +86,9 @@ function OAuthPopupBridge() {
   return null;
 }
 
-const ROUTE_META = {
-  "/partners": {
-    title: "Partner with RetainAI — Help Your Clients Keep Customers",
-    description: "Explore a RetainAI referral partnership for agencies, business coaches and advisors who help local businesses follow up and build customer relationships.",
-  },
-  "/": {
-    title: "RetainAI — Keep More Customers and Miss Fewer Follow-Ups",
-    description:
-      "Bring WhatsApp conversations, customer follow-ups, appointments, invoices, and retention priorities into one clear workspace with RetainAI.",
-  },
-  "/signup": {
-    title: "Start Your RetainAI Trial — Customer Retention CRM",
-    description:
-      "Start a 14-day RetainAI trial and organize customer relationships, follow-ups, appointments, invoices, and retention opportunities.",
-  },
-  "/privacy-policy": {
-    title: "Privacy Policy — RetainAI",
-    description: "Learn how RetainAI protects customer and account information.",
-  },
-  "/terms-of-service": {
-    title: "Terms of Service — RetainAI",
-    description: "Review the terms governing use of the RetainAI customer retention CRM.",
-  },
-  "/login": {
-    title: "Log in — RetainAI",
-    description: "Log in to your RetainAI workspace.",
-  },
-  "/accept-invite": {
-    title: "Join your team — RetainAI",
-    description: "Accept your invitation to a RetainAI workspace.",
-  },
-  "/refund-policy": {
-    title: "Refund & Cancellation Policy — RetainAI",
-    description: "Review RetainAI trial, subscription, cancellation, and refund terms.",
-  },
-};
+// Shared with scripts/prerender-routes.js, which writes the same metadata into
+// each public route's initial HTML at build time.
+const ROUTE_META = routeMeta;
 
 function RouteMetadata() {
   const { pathname } = useLocation();
