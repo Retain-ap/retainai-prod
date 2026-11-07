@@ -90,8 +90,11 @@ function OAuthPopupBridge() {
 // each public route's initial HTML at build time.
 const ROUTE_META = routeMeta;
 
-function RouteMetadata() {
-  const { pathname } = useLocation();
+export function RouteMetadata() {
+  const { pathname: rawPathname } = useLocation();
+  // A static host may redirect /partners to /partners/; the router matches both,
+  // so metadata must too. "/" itself stays "/".
+  const pathname = rawPathname.replace(/\/+$/, "") || "/";
 
   useEffect(() => {
     const privateRoute =
