@@ -3,9 +3,13 @@
 > Update: the factual public AI disclosure is now live through PR37 at
 > `cbcb7b79ed5c59205335711f267e4ac114c5a902`. See
 > [the later release handoff](2026-11-06-value-calendly-and-inspired-looks.md).
-> Routing has not changed; dedicated reviewer access and the final Google reply
-> remain pending. Historical statements below about unpublished policy text are
-> superseded by this update.
+> Subsequently, PR39 fixed routing to OpenAI GPT-4.1 mini through OpenRouter.
+> The dedicated reviewer account was created and tested. The technical AI-service
+> reply was sent on November 7 at 00:27 Toronto time; reviewer credentials remain
+> unsent pending specific disclosure approval. See the
+> [November 7 handoff](2026-11-07-fixed-ai-and-production-recovery.md).
+> Historical routing, unpublished-policy and unsent-reply statements below are
+> superseded by these updates; Google's approval remains pending.
 
 Read-only follow-up by Claude, independently checked and corrected by Codex.
 No provider/model/privacy setting changed, no AI request was made, and no message

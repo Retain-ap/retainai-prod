@@ -21,7 +21,7 @@ jest.mock("./Insights", () => () => null);
 jest.mock("./Invoices", () => () => null);
 jest.mock("./Automations", () => () => <div>Automation playbooks</div>);
 jest.mock("./InviteTeamModal", () => () => null);
-jest.mock("./RetentionCommandCenter", () => ({ onOpenMessages }) => <div>Retention overview<button onClick={onOpenMessages}>Overview messages shortcut</button></div>);
+jest.mock("./RetentionCommandCenter", () => ({ onOpenMessages, onOpenAppointments, onOpenImports }) => <div>Retention overview<button onClick={onOpenMessages}>Overview messages shortcut</button><button onClick={onOpenAppointments}>Setup add appointment</button><button onClick={onOpenImports}>Setup import contacts</button></div>);
 jest.mock("./OwnerConsole", () => () => <div>Platform owner console</div>);
 jest.mock("./TrialCommandBar", () => () => null);
 
@@ -156,5 +156,17 @@ test("the chosen contact source survives navigation and unknown values use the g
   act(() => window.RetainAI.openImports("whatsapp"));
   expect(screen.getByTestId("location")).toHaveTextContent(/^\/app\/import\?source=whatsapp$/);
   act(() => window.RetainAI.openImports("https://untrusted.example"));
+  expect(screen.getByTestId("location")).toHaveTextContent(/^\/app\/import$/);
+});
+
+test("the setup checklist's Add appointment opens the appointment list; contact import stays separate", async () => {
+  await mount();
+  fireEvent.click(screen.getByRole("button", { name: "Setup add appointment" }));
+  expect(screen.getByText("Appointment list")).toBeInTheDocument();
+  expect(screen.getByTestId("location")).toHaveTextContent(/^\/app\?section=calendar&view=appointments$/);
+  fireEvent.click(screen.getByRole("button", { name: "Browser back" }));
+  expect(screen.getByText("Retention overview")).toBeInTheDocument();
+  fireEvent.click(screen.getByRole("button", { name: "Setup import contacts" }));
+  expect(screen.getByText("Settings imports")).toBeInTheDocument();
   expect(screen.getByTestId("location")).toHaveTextContent(/^\/app\/import$/);
 });

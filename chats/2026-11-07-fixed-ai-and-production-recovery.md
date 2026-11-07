@@ -2,10 +2,10 @@
 
 This continues the [November 6 release handoff](2026-11-06-value-calendly-and-inspired-looks.md).
 The owner opened RetainAI's MFA-protected Owner Console. The standard Google
-reviewer account is now created and tested. Calendly's normal personal account
-is signed in, and its separate developer portal has reached **Verification
-email sent** after the owner-email registration was prepared. No Calendly app
-credentials or live connection are claimed.
+reviewer account is now created and tested. Calendly's normal account now uses
+`owner@retainai.ca` with email/password login. Its separate developer portal
+still needs a signed-in session. No Calendly app credentials or live connection
+are claimed.
 
 ## Fixed AI route
 
@@ -21,11 +21,15 @@ cost USD 0.00002. No customer data was used.
 Both services deployed `a514a8f7379da7e60c58ccf172969621d6427d8a` successfully,
 and all 15 anonymous production HTTP checks passed. Detailed evidence and
 limits are in [AI routing](../docs/AI_ROUTING.md). Public privacy text matches
-the fixed route and still does not claim zero retention. The final Google
-reply is prepared locally but **not sent**. The dedicated standard reviewer
-account was subsequently created and tested; specific approval to send its
-privately saved credential to Google's verification team remains required.
-No owner credentials will be supplied.
+the fixed route and still does not claim zero retention. The AI-service technical
+response was **sent in the existing Google verification thread at 00:27 Toronto
+time on November 7**; Gmail displayed **Message sent**. It documents the fixed
+model/provider, request controls, account settings and their retention limits,
+Limited Use policy, and current replacement video. It contains no reviewer or
+owner credential. The dedicated standard reviewer account was created and
+tested; specific approval to send its privately saved credential to Google's
+verification team remains required. The technical response says credentials
+will follow separately. Google's approval remains pending.
 
 ## Actual production backup
 
@@ -160,9 +164,10 @@ the active forms.
 
 ## Unchanged launch gates
 
-- RetainAI: complete Calendly account/app configuration and actual OAuth/import
-  acceptance; approval to disclose the dedicated reviewer credential and send
-  the prepared Google reply; the deferred Stripe Connect round trip; remaining
+- RetainAI: finish the separate Calendly developer login/app configuration and
+  actual OAuth/import acceptance; approval to disclose the dedicated reviewer
+  credential (the AI technical response is already sent); the deferred Stripe
+  Connect round trip; remaining
   cloud backup/key-custody steps.
 - Closet Muse: its real private cloud backup/restore already passed; independent
   key custody, recurring retention, physical-iPhone TestFlight 3 acceptance and
@@ -172,3 +177,16 @@ the active forms.
   approval. Partner posts still await the chosen app publishing accounts.
 
 This handoff is documentation-only. It contains no secrets or customer data.
+
+## Booking checklist review
+
+Claude's [PR46](https://github.com/Retain-ap/retainai-prod/pull/46) removes the
+Calendly-only completion requirement from the booking setup step. Any existing
+RetainAI appointment completes it. Codex's independent review also caught that
+the empty step opened contact imports, leaving no direct booking action. The
+revised **Add appointment** button opens `/app?section=calendar&view=appointments`;
+the contact-import action stays separate. Regression tests cover completion,
+both actions, the exact navigation route and browser Back. Claude reported all
+125 frontend tests, lint and build passing, with mutation checks detecting the
+old completion rule and broken navigation. Release CI and production navigation
+must be verified on the final PR head before calling this live.

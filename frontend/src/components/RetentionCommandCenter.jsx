@@ -81,7 +81,7 @@ function HealthPill({ health }) {
   return <span className={`health-pill ${health.kind}`}>{health.label} · {health.score}</span>;
 }
 
-export default function RetentionCommandCenter({ leads = [], appointments = [], user, onOpenAutomations, onOpenMessages, onUpdateLead, onOpenImports }) {
+export default function RetentionCommandCenter({ leads = [], appointments = [], user, onOpenAutomations, onOpenMessages, onUpdateLead, onOpenImports, onOpenAppointments }) {
   const [tab, setTab] = useState("briefing");
   const [timelineLead, setTimelineLead] = useState(null);
 
@@ -200,6 +200,7 @@ export default function RetentionCommandCenter({ leads = [], appointments = [], 
             today={dayKeyNow(workspaceTimeZone)}
             onOpenPlaybooks={() => setTab("playbooks")}
             onOpenImports={onOpenImports}
+            onOpenAppointments={onOpenAppointments}
           />
           <section className="product-card">
             <div className="product-card-header"><div><h2>Today’s priorities</h2><p className="product-card-copy">The highest-impact actions to take now.</p></div></div>

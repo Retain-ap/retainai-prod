@@ -67,7 +67,7 @@ const COPY = {
   },
 };
 
-export default function ServiceSetupPanel({ preset = "general", leads, appointments, rebooking, today, onOpenPlaybooks, onOpenImports }) {
+export default function ServiceSetupPanel({ preset = "general", leads, appointments, rebooking, today, onOpenPlaybooks, onOpenImports, onOpenAppointments }) {
   const copy = COPY[preset] || COPY.general;
   const reviewedKey = REVIEWED_KEYS[preset] || REVIEWED_KEYS.general;
   const [reviewed, setReviewed] = useState(() => {
@@ -80,11 +80,15 @@ export default function ServiceSetupPanel({ preset = "general", leads, appointme
     { label: copy.preset, done: true },
     { label: `Import your ${copy.customers} list`, done: leads.length > 0, action: onOpenImports, actionLabel: "Import" },
     {
-      label: "Bring in bookings from Calendly",
-      done: metrics.fromCalendly > 0,
-      action: onOpenImports,
-      actionLabel: "Open",
-      hint: "Optional. Connect Calendly on the Import page and press Sync now, or add visits in RetainAI.",
+      // Calendly is optional and may not be available on this server yet, so
+      // appointments added in RetainAI complete this step too.
+      id: "bookings",
+      label: "Bring in your bookings",
+      done: appointments.length > 0,
+      // Calendly may not be available, so the action adds a RetainAI appointment.
+      action: onOpenAppointments,
+      actionLabel: "Add appointment",
+      hint: "Add appointments in RetainAI, or sync them from Calendly if it is available on the Import page.",
     },
     { label: "A visit is marked completed", done: anyCompleted, hint: "Rebooking dates come from completed visits." },
     { label: `A ${copy.customers} has a personal rebooking rhythm`, done: metrics.withRhythm > 0, hint: `Needs 2 completed visits for the same ${copy.customers}.` },
@@ -118,7 +122,7 @@ export default function ServiceSetupPanel({ preset = "general", leads, appointme
       </div>
       <ul className="salon-steps">
         {steps.map((step) => (
-          <li key={step.label} className={step.done ? "done" : ""}>
+          <li key={step.label} className={step.done ? "done" : ""} data-testid={step.id ? `setup-step-${step.id}` : undefined}>
             {step.done ? <FaCheckCircle aria-hidden="true" /> : <FaRegCircle aria-hidden="true" />}
             <span><strong>{step.label}</strong>{step.hint && <small>{step.hint}</small>}</span>
             {!step.done && step.action && <button type="button" className="product-button" onClick={step.action}>{step.actionLabel}</button>}
