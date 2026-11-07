@@ -121,9 +121,17 @@ and the API reference for scheduled events and invitees.
 
 ### What the owner must do before Calendly can be used (not done)
 
-1. Sign in to the Calendly developer portal
-   (`https://calendly.com/app/developer`), open **OAuth apps**, and create a
-   **Sandbox** app first:
+1. Sign in to the Calendly developer portal. The older documented
+   `https://calendly.com/app/developer` route stalled in this owner's session.
+   On November 7 UTC, the account menu's **Developer** link opened the docs;
+   **Log in** there opened
+   `https://developer.calendly.com/login?origin=https://developer.calendly.com/console/apps`,
+   which redirected to the separate developer sign-in at `https://login.calendly.com/`.
+   Codex prepared the owner-email registration and held the API terms step. A
+   later read-only check found **Verification email sent**; Codex did not submit
+   that step. Email verification and developer-console access are still pending.
+   After developer sign-in, open **OAuth apps**
+   and create a **Sandbox** app first:
    - If asked for the app type, choose a web (server-side) app, not native.
    - Redirect URI: exactly one, `https://api.retainai.ca/api/calendly/oauth/callback`
      (Sandbox also allows `http://localhost` for local testing).
@@ -139,6 +147,14 @@ and the API reference for scheduled events and invitees.
 4. Calendly's docs read for this work describe no review or approval step for
    Production apps. Confirm that with Calendly before offering the connection
    to customers. Until steps 1-3 pass, do not describe Calendly as connected.
+
+Complete any planned login-email, password or login-method change before the
+connection test: [Calendly's FAQ](https://developer.calendly.com/docs/getting-started/frequently-asked-questions)
+says each revokes OAuth and personal access tokens. The personal Google-linked
+account has not been changed. During the real Sandbox test, inspect the returned
+scope without recording tokens. One documentation example uses `scope: default`;
+that is not proof of the actual response and does not justify weakening the
+existing `scheduled_events:read` enforcement.
 
 ## First setup path: service businesses on Calendly
 
