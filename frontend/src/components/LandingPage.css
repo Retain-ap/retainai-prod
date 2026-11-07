@@ -49,8 +49,9 @@
 .lp-preview { position: relative; z-index: 2; width: 100%; overflow: hidden; border: 1px solid rgba(255,255,255,.13); border-radius: 22px; background: #0c0f12; box-shadow: 0 40px 100px rgba(0,0,0,.5), 0 0 0 1px rgba(245,216,126,.04) inset; }
 .lp-preview::before { content: ""; position: absolute; inset: -1px; pointer-events: none; background: linear-gradient(125deg, rgba(245,216,126,.1), transparent 30%); }
 .lp-preview-top { height: 50px; display: flex; align-items: center; justify-content: space-between; padding: 0 18px; border-bottom: 1px solid var(--lp-line); color: #8f949c; font-size: 12px; }
-.lp-preview-top > b { display: flex; align-items: center; gap: 7px; color: #70f1aa; font-size: 10px; text-transform: uppercase; letter-spacing: .08em; }
-.lp-preview-top > b i { width: 6px; height: 6px; border-radius: 50%; background: #42e58b; box-shadow: 0 0 10px #42e58b; }
+/* Sample data, so a neutral "Example" badge rather than a live-status light. */
+.lp-preview-top > b { display: flex; align-items: center; gap: 7px; color: #f5d87e; font-size: 10px; text-transform: uppercase; letter-spacing: .08em; }
+.lp-preview-top > b i { width: 6px; height: 6px; border-radius: 50%; background: #c9a94a; }
 .lp-window-dots { display: flex; gap: 6px; }
 .lp-window-dots i { width: 8px; height: 8px; border-radius: 50%; background: #393d43; }
 .lp-preview-grid { min-height: 510px; display: grid; grid-template-columns: 190px 1fr; }
@@ -198,8 +199,13 @@
 
 @media (max-width: 620px) {
   .lp-nav { min-height: 64px; padding: 10px 16px; }
-  .lp-brand span, .lp-link-button { display: none; }
-  .lp-primary-button.small { min-height: 42px; }
+  /* Keep the wordmark and Log in visible for returning members; just compact. */
+  .lp-nav { gap: 10px; }
+  .lp-brand { gap: 8px; font-size: 17px; min-width: 0; }
+  .lp-brand img { width: 32px; height: 32px; }
+  .lp-nav-actions { gap: 8px; flex-shrink: 0; }
+  .lp-link-button { min-height: 42px; padding: 0 12px; font-size: 13px; }
+  .lp-primary-button.small { min-height: 42px; padding: 0 12px; }
   .lp-hero, .lp-value-strip, .lp-section, .lp-final-cta, .lp-footer { width: calc(100% - 30px); }
   .lp-hero { padding: 58px 0 55px; }
   .lp-hero h1 { font-size: clamp(44px, 14vw, 64px); }
@@ -231,6 +237,12 @@
   .lp-final-cta > div:last-child, .lp-final-cta .lp-primary-button { width: 100%; }
   .lp-footer { grid-template-columns: 1fr 1fr; }
   .lp-footer-brand { grid-column: 1 / -1; }
+}
+
+@media (max-width: 380px) {
+  .lp-nav { padding: 10px 12px; }
+  .lp-brand { font-size: 16px; }
+  .lp-primary-button.small svg { display: none; }
 }
 
 @media (prefers-reduced-motion: reduce) {

@@ -89,11 +89,11 @@ const faqs = [
 
 function AppPreview() {
   return (
-    <div className="lp-preview" role="img" aria-label="RetainAI product preview">
+    <div className="lp-preview" role="img" aria-label="RetainAI product preview with example data">
       <div className="lp-preview-top">
         <div className="lp-window-dots"><i /><i /><i /></div>
         <span>Today’s retention briefing</span>
-        <b><i /> Live</b>
+        <b className="lp-preview-badge"><i /> Example</b>
       </div>
       <div className="lp-preview-grid">
         <aside className="lp-preview-sidebar">
