@@ -118,20 +118,23 @@ developer machine's date near midnight. No backend or provider-scope change.
 
 ## Calendly owner setup
 
-The account menu's **Developer** link currently opens the developer docs. The
+The account menu's **Developer** link opens the developer docs. The
 docs' **Log in** link leads to a separate developer portal at
 `https://login.calendly.com/`. Codex prepared the owner email and name and held
 the Register step for its API terms. A later read-only check found that the
 page had advanced to **Verification email sent**; Codex did not submit that
-step. Email verification and developer-console access are not yet confirmed.
-No Calendly API key has been created or configured.
+step. At that checkpoint, email verification and developer-console access had
+not been confirmed. No Calendly API key had been created or configured.
 
-The existing personal Calendly login remains Google-linked. Its **Change email**
-action opens a Google account chooser rather than an ordinary email edit form.
-Codex backed out without choosing or granting access. Unlinking/changing that
-existing authentication method requires the owner's participation. Complete any
-login change before testing integrations, since Calendly documents that such
-changes revoke existing OAuth and personal access tokens
+At the earlier checkpoint, Calendly's **Change email** action opened a Google
+account chooser. The owner subsequently completed unlinking and the login-email
+change. On November 7 Toronto time, Codex verified the newly opened account's
+Login settings: **email/password login with `owner@retainai.ca`**. The old settings
+tab still showed stale personal-email information, so use the newer account tab.
+The separate developer portal still requires its own sign-in. The owner reported
+email verification, but Codex has not reached the developer console, created app
+credentials or connected RetainAI. Finish any further credential changes before
+testing integrations, since Calendly documents that they revoke existing tokens
 ([Calendly API FAQ](https://developer.calendly.com/docs/getting-started/frequently-asked-questions)).
 
 The prepared integration should use `scheduled_events:read` and callback
@@ -140,6 +143,20 @@ securely configure its credentials, then test the real token exchange and bookin
 import before production setup. A documentation example showing `scope: default`
 is not evidence that the live token response has that value: do not weaken
 current scope enforcement based on the example alone.
+
+The existing public **RetainAI Setup — 10 minutes** event was configured for
+15 minutes. Codex changed its duration to 10 minutes, observed **Saved** and
+verified the public booking page shows 10 minutes. Its existing URL, availability
+and conferencing settings remain unchanged. No appointment or invitation was
+created, and this booking-page correction does not prove an OAuth sync.
+
+An authorized read-only Apple API check at 05:23 UTC on November 7 confirmed
+Closet Muse build 3 is VALID and not expired; version 1.0 selects that build;
+the three-item review draft is READY_FOR_REVIEW with a null submitted date.
+Apple Business's browser session had expired, so banking/tax status was not
+freshly verified. The earlier U.S. forms were Active and Canadian tax/account
+requirements remain unresolved; do not invent registration details or resubmit
+the active forms.
 
 ## Unchanged launch gates
 
