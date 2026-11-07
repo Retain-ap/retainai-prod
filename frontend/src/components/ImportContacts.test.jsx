@@ -59,13 +59,27 @@ test("accepts vCard and CSV files and explains WhatsApp honestly", async () => {
   render(<ImportContacts user={user} />);
   expect(screen.getByTestId("import-file")).toHaveAttribute("accept", expect.stringContaining(".vcf"));
   expect(screen.getByTestId("import-file")).toHaveAttribute("accept", expect.stringContaining(".csv"));
-  fireEvent.click(screen.getByRole("button", { name: "Android or WhatsApp" }));
+  fireEvent.click(screen.getByRole("button", { name: "WhatsApp contacts" }));
   expect(screen.getByText(/has no contact export of its own/)).toBeInTheDocument();
   expect(screen.getByText(/Chats and messages are never imported/)).toBeInTheDocument();
-  for (const label of ["HubSpot", "Salesforce", "Pipedrive", "Zoho CRM", "Outlook", "iPhone, Mac or iCloud"]) {
+  for (const label of ["HubSpot", "Salesforce", "Pipedrive", "Zoho CRM", "Outlook / Microsoft People", "Apple Contacts", "Google Sheets", "Microsoft Excel"]) {
     expect(screen.getByRole("button", { name: label })).toBeInTheDocument();
   }
   expect(await screen.findByRole("button", { name: "Connect Google" })).toBeInTheDocument();
+});
+
+test("the chosen source opens its guide and updates when navigation changes", async () => {
+  mockApi();
+  const { rerender } = render(<ImportContacts user={user} initialSource="sheets" />);
+  expect(screen.getByRole("button", { name: "Google Sheets" })).toHaveAttribute("aria-pressed", "true");
+  expect(screen.getByText(/Comma-separated values/)).toBeInTheDocument();
+  rerender(<ImportContacts user={user} initialSource="whatsapp" />);
+  expect(screen.getByRole("button", { name: "WhatsApp contacts" })).toHaveAttribute("aria-pressed", "true");
+  expect(screen.getByText(/Chats and messages are never imported/)).toBeInTheDocument();
+  rerender(<ImportContacts user={user} initialSource="unknown-service" />);
+  expect(screen.getByRole("button", { name: "Apple Contacts" })).toHaveAttribute("aria-pressed", "true");
+  await screen.findByRole("button", { name: "Connect Google" });
+  expect(calls.some(call => /authorize|import-now|commit/.test(call.path))).toBe(false);
 });
 
 test("previews a file with detected source, per-row outcomes and a consent notice", async () => {

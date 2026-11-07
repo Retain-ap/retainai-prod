@@ -150,3 +150,11 @@ test("contact import shortcuts open the multi-source importer without the Google
   expect(screen.getByText("Settings imports")).toBeInTheDocument();
   expect(screen.getByTestId("location")).toHaveTextContent(/^\/app\/import$/);
 });
+
+test("the chosen contact source survives navigation and unknown values use the generic importer", async () => {
+  await mount("/app?section=dashboard");
+  act(() => window.RetainAI.openImports("whatsapp"));
+  expect(screen.getByTestId("location")).toHaveTextContent(/^\/app\/import\?source=whatsapp$/);
+  act(() => window.RetainAI.openImports("https://untrusted.example"));
+  expect(screen.getByTestId("location")).toHaveTextContent(/^\/app\/import$/);
+});

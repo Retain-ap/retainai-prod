@@ -6,7 +6,7 @@ links) and what is still open. Add a file at the end of each session.
 
 | Date | Session | Summary |
 | --- | --- | --- |
-| 2026-11-07 UTC | [Fixed AI routing and production recovery](2026-11-07-fixed-ai-and-production-recovery.md) | Fixed AI route and password form; reviewer login, demo import and AI draft verified; real encrypted backup restored locally; Calendly developer setup and remaining gates |
+| 2026-11-07 UTC | [Fixed AI routing and production recovery](2026-11-07-fixed-ai-and-production-recovery.md) | Fixed AI route and password form; reviewer workflow verified; 12-source import chooser and Calendar navigation; real encrypted backup restored locally; Calendly developer setup and remaining gates |
 | 2026-11-06 | [Service businesses, Calendly and inspired looks](2026-11-06-value-calendly-and-inspired-looks.md) | PR37 payment evidence/rebooking/booking imports; Closet Muse inspired looks and TestFlight 3; real cloud backup verified; exact release evidence and remaining owner/provider gates |
 | 2026-11-06 | [Contact import and save safety](2026-11-06-contact-import-and-save-safety.md) | Import, safe contact saves and legacy appointment fixes (#33–35) merged; Closet Muse community live and TestFlight build 2 ready; public App Review unsubmitted |
 | 2026-11-06 | [Joint launch completion](2026-11-06-joint-launch-completion.md) | RetainAI API-origin and signup fixes reviewed and deployed; fresh Closet Muse gates and Apple preparation verified; actual owner/provider/recovery requirements recorded |

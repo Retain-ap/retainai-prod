@@ -4,9 +4,9 @@ import RetentionCommandCenter from "./RetentionCommandCenter";
 
 function daysAgo(days) {
   const date = new Date();
-  date.setDate(date.getDate() - days);
-  const pad = (value) => String(value).padStart(2, "0");
-  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`;
+  // These workspaces use UTC; the fixture must too, including near midnight.
+  date.setUTCDate(date.getUTCDate() - days);
+  return date.toISOString().slice(0, 10);
 }
 
 const ana = { id: "a", name: "Ana Rivera", email: "ana@example.com", last_contacted: new Date().toISOString() };
