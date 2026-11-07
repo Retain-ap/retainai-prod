@@ -265,5 +265,26 @@ class SquareTests(unittest.TestCase):
         self.assertEqual(revoke["json"]["access_token"], "access-1")
         self.assertNotIn(self.owner, self.stored())
 
+    def test_a_sync_authenticated_before_deletion_writes_nothing_after_it(self):
+        import app_account
+
+        self.square.bookings = [booking("past-ok", -20)]
+        client, _, _ = self.connect()
+        real = self.square.request
+
+        def delete_mid_read(method, url, **kwargs):
+            if "/v2/customers/" in url and self.owner in self.users:
+                self.users.pop(self.owner)  # purge order: users first, then each store under its lock
+                app_account._purge_workspace_json(self.owner)
+            return real(method, url, **kwargs)
+
+        self.square.request = delete_mid_read
+        with patch.dict(os.environ, CONFIG):
+            response = client.post("/api/square/sync", headers=ORIGIN)
+        self.assertEqual(response.status_code, 401)
+        self.assertNotIn(self.owner, retainai.load_appointments() or {})
+        self.assertNotIn(self.owner, self.stored())
+
+
 if __name__ == "__main__":
     unittest.main()

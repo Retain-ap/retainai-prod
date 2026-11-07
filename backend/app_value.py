@@ -24,11 +24,38 @@ revenue_store = vr.RevenueStore(REVENUE_FILE)
 followup_log = vr.FollowupLog(FOLLOWUP_FILE)
 
 
+def workspace_guard(workspace, generation=None):
+    """A check run INSIDE a store's write lock. Account deletion removes the
+    users first and then scrubs each store under the same lock, so a request
+    authenticated before the deletion fails closed here instead of putting the
+    workspace back. With ``generation`` it also refuses a different account
+    that was created later under the same email."""
+    workspace = vr._email(workspace)
+
+    def check():
+        import app as core
+
+        users = core.load_users() or {}
+        role, org, owner, _ = core._resolve_org_and_role(workspace, users) if isinstance(users, dict) else (None,) * 4
+        if role != "owner" or vr._email(org) != workspace:
+            raise vr.WorkspaceGone(workspace)
+        if generation is not None and vr.workspace_generation(owner) != generation:
+            raise vr.WorkspaceGone(workspace)
+
+    return check
+
+
+@value_bp.app_errorhandler(vr.WorkspaceGone)
+def _workspace_gone(_exc):
+    return jsonify({"error": "authentication_required", "message": "This workspace no longer exists. Nothing was saved."}), 401
+
+
 def record_followup(workspace, *, lead_id="", lead_email="", channel, source):
     """Called by send paths right after a provider accepted a message."""
     try:
-        return followup_log.record(workspace, lead_id=lead_id, lead_email=lead_email, channel=channel, source=source)
-    except Exception:  # never let bookkeeping break a successful send
+        return followup_log.record(workspace, lead_id=lead_id, lead_email=lead_email, channel=channel, source=source,
+                                   guard=workspace_guard(workspace))
+    except Exception:  # never let bookkeeping break a successful send (or revive a deleted workspace)
         return None
 
 
@@ -55,7 +82,9 @@ def _owner_context():
     if role != "owner":
         # Revenue is the owner's business information, like invoices.
         return None, (jsonify({"error": "owner_required"}), 403)
-    return {"email": email, "workspace": vr._email(workspace), "owner": owner or {}, "account_id": account_id or ""}, None
+    workspace = vr._email(workspace)
+    return {"email": email, "workspace": workspace, "owner": owner or {}, "account_id": account_id or "",
+            "guard": workspace_guard(workspace, vr.workspace_generation(owner))}, None
 
 
 def _receipt_for(ctx):
@@ -151,7 +180,7 @@ def sync_value_receipt():
         return jsonify({"error": "stripe_read_failed"}), 502
     truncated = seen > MAX_SYNC_INVOICES
     try:
-        result = revenue_store.upsert_stripe(ctx["workspace"], records, vr._iso(_now()), complete=not truncated)
+        result = revenue_store.upsert_stripe(ctx["workspace"], records, vr._iso(_now()), complete=not truncated, guard=ctx["guard"])
     except vr.EvidenceStoreError:
         return _store_unavailable()
     return jsonify({"ok": True, "read": len(records), **result, "truncated": truncated}), 200
@@ -175,7 +204,7 @@ def record_payment():
         record, created = revenue_store.add_manual(
             ctx["workspace"], body, lead=lead, recorded_by=ctx["email"], now=_now(),
             timezone_name=ctx["owner"].get("timezone") or "UTC",
-            bookings=(core.load_appointments() or {}).get(ctx["workspace"]) or [],
+            bookings=(core.load_appointments() or {}).get(ctx["workspace"]) or [], guard=ctx["guard"],
         )
     except vr.EvidenceError as exc:
         return jsonify({"error": str(exc)}), 409 if "idempotency key was already used" in str(exc) else 400
@@ -193,7 +222,7 @@ def record_refund(record_id):
     if not isinstance(body, dict):
         return jsonify({"error": "Send the refund as a JSON object."}), 400
     try:
-        record = revenue_store.set_manual_refund(ctx["workspace"], record_id, body.get("refunded_amount", ""), _now())
+        record = revenue_store.set_manual_refund(ctx["workspace"], record_id, body.get("refunded_amount", ""), _now(), guard=ctx["guard"])
     except KeyError:
         return jsonify({"error": "Only owner-recorded payments can be changed here."}), 404
     except vr.EvidenceError as exc:
@@ -209,7 +238,7 @@ def delete_payment(record_id):
     if error:
         return error
     try:
-        revenue_store.delete_manual(ctx["workspace"], record_id)
+        revenue_store.delete_manual(ctx["workspace"], record_id, guard=ctx["guard"])
     except KeyError:
         return jsonify({"error": "Only owner-recorded payments can be removed."}), 404
     except vr.EvidenceStoreError:

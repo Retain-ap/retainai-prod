@@ -168,6 +168,34 @@ class BackupToolTests(unittest.TestCase):
         with self.assertRaisesRegex(bt.BackupError, "new folder"):
             bt.restore_drill(sealed, linked_dir, PASSPHRASE)
 
+    def test_plaintext_output_fails_closed_where_mode_bits_are_not_access_control(self):
+        path = make_archive(self.tmp.name, with_db=False)
+        sealed = os.path.join(self.tmp.name, "copy.rbk")
+        with patch.object(bt, "_posix_permissions", return_value=False):  # as on native Windows
+            self.assertEqual(bt.verify_archive(path)["archive_sha256"], bt._sha256_file(path))
+            bt.seal(path, sealed, PASSPHRASE)  # ciphertext only: allowed
+            restored = os.path.join(self.tmp.name, "restored.zip")
+            with self.assertRaisesRegex(bt.BackupError, "Linux and macOS"):
+                bt.unseal(sealed, restored, PASSPHRASE)
+            drill = os.path.join(self.tmp.name, "drill")
+            with self.assertRaisesRegex(bt.BackupError, "Linux and macOS"):
+                bt.restore_drill(sealed, drill, PASSPHRASE)
+            with patch("sys.stderr"):
+                self.assertEqual(bt.main(["open", sealed, "--out", restored]), 1)
+        self.assertFalse(os.path.lexists(restored))
+        self.assertFalse(os.path.lexists(drill))
+
+    def test_restore_folder_is_owner_only_even_with_a_permissive_umask(self):
+        path = make_archive(self.tmp.name, with_db=False)
+        sealed = os.path.join(self.tmp.name, "copy.rbk")
+        bt.seal(path, sealed, PASSPHRASE)
+        previous = os.umask(0o000)
+        try:
+            bt.restore_drill(sealed, os.path.join(self.tmp.name, "drill"), PASSPHRASE)
+        finally:
+            os.umask(previous)
+        self.assertEqual(os.stat(os.path.join(self.tmp.name, "drill")).st_mode & 0o777, 0o700)
+
     def test_cli_never_takes_a_passphrase_argument_and_enforces_length(self):
         path = make_archive(self.tmp.name)
         os.environ["RETAINAI_BACKUP_PASSPHRASE"] = "short"

@@ -84,6 +84,17 @@ class EvidenceStoreError(RuntimeError):
 
 # ---------------------------------------------------------------- utilities
 
+class WorkspaceGone(RuntimeError):
+    """The workspace was deleted (or replaced by a new account) after this
+    request was authenticated. Raised inside a store's write lock, so a slow
+    writer can never put a purged workspace's data back."""
+
+
+def workspace_generation(owner):
+    """Set once when the account is created; a re-signup gets a new value."""
+    return str((owner or {}).get("terms_accepted_at") or "")
+
+
 def _valid_year(moment):
     return moment if moment and EARLIEST_YEAR <= moment.year <= LATEST_YEAR else None
 
@@ -226,15 +237,17 @@ class RevenueStore:
         return {"last_sync": bucket.get("last_sync") or None}
 
     @contextmanager
-    def _bucket(self, workspace):
+    def _bucket(self, workspace, guard=None):
         with _locked(self.path):
+            if guard:
+                guard()
             data = _read(self.path)
             bucket = data.setdefault(workspace, {})
             bucket.setdefault("records", {})
             yield bucket
             _write(self.path, data)
 
-    def upsert_stripe(self, workspace, records, synced_at, *, complete):
+    def upsert_stripe(self, workspace, records, synced_at, *, complete, guard=None):
         """Store invoices read from the workspace's own Stripe account.
 
         Re-reading the same invoice updates its refund figures; nothing is
@@ -244,7 +257,7 @@ class RevenueStore:
         """
         added = updated = 0
         seen = set()
-        with self._bucket(workspace) as bucket:
+        with self._bucket(workspace, guard) as bucket:
             stored = bucket["records"]
             for record in records:
                 key = record["id"]
@@ -264,7 +277,7 @@ class RevenueStore:
             bucket["last_sync"] = {"at": synced_at, "complete": bool(complete), "read": len(records), "not_refreshed": not_refreshed}
         return {"added": added, "updated": updated, "not_refreshed": not_refreshed, "complete": bool(complete)}
 
-    def add_manual(self, workspace, payload, *, lead, recorded_by, now, timezone_name="UTC", bookings=()):
+    def add_manual(self, workspace, payload, *, lead, recorded_by, now, timezone_name="UTC", bookings=(), guard=None):
         key = str(payload.get("idempotency_key") or "").strip()
         if not re.fullmatch(r"[A-Za-z0-9_-]{8,80}", key):
             raise EvidenceError("A valid idempotency key is required.")
@@ -315,7 +328,7 @@ class RevenueStore:
             "recorded_at": _iso(now),
         }
         identity = {k: record[k] for k in ("amount_minor", "currency", "paid_at", "paid_precision", "lead_id", "reference", "booking_ref")}
-        with self._bucket(workspace) as bucket:
+        with self._bucket(workspace, guard) as bucket:
             stored = bucket["records"]
             existing = stored.get(record["id"])
             if existing:
@@ -327,8 +340,8 @@ class RevenueStore:
             stored[record["id"]] = record
         return record, True
 
-    def set_manual_refund(self, workspace, record_id, refunded, now):
-        with self._bucket(workspace) as bucket:
+    def set_manual_refund(self, workspace, record_id, refunded, now, guard=None):
+        with self._bucket(workspace, guard) as bucket:
             record = bucket["records"].get(record_id)
             if not record or record.get("source") != "manual":
                 raise KeyError(record_id)
@@ -339,8 +352,8 @@ class RevenueStore:
             record["refund_recorded_at"] = _iso(now)
             return record
 
-    def delete_manual(self, workspace, record_id):
-        with self._bucket(workspace) as bucket:
+    def delete_manual(self, workspace, record_id, guard=None):
+        with self._bucket(workspace, guard) as bucket:
             record = bucket["records"].get(record_id)
             if not record or record.get("source") != "manual":
                 raise KeyError(record_id)
@@ -450,7 +463,7 @@ class FollowupLog:
     def __init__(self, path):
         self.path = path
 
-    def record(self, workspace, *, lead_id="", lead_email="", channel, source, sent_at=None):
+    def record(self, workspace, *, lead_id="", lead_email="", channel, source, sent_at=None, guard=None):
         workspace = _email(workspace)
         if not workspace or not (lead_id or lead_email):
             return None
@@ -463,6 +476,8 @@ class FollowupLog:
             "sent_at": _iso(_utc(sent_at) or dt.datetime.now(dt.timezone.utc)),
         }
         with _locked(self.path):
+            if guard:
+                guard()
             data = _read(self.path)
             rows = data.get(workspace) if isinstance(data.get(workspace), list) else []
             rows.append(entry)

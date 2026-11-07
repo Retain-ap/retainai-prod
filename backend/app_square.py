@@ -57,9 +57,12 @@ def _load(workspace):
     return (vr._read(CONNECTIONS_FILE).get(workspace) or {}) if workspace else {}
 
 
-def _update(workspace, change):
-    """Read-modify-write one workspace's connection under the file lock."""
+def _update(workspace, change, guard=None):
+    """Read-modify-write one workspace's connection under the file lock.
+    ``guard`` re-checks inside the lock that the workspace still exists."""
     with vr._locked(CONNECTIONS_FILE):
+        if guard:
+            guard()
         data = vr._read(CONNECTIONS_FILE)
         result = change(data)
         vr._write(CONNECTIONS_FILE, data)
@@ -167,9 +170,9 @@ def square_callback():
         return ""
 
     try:
-        problem = _update(workspace, save)
-    except vr.EvidenceStoreError:
-        return back(square_error="failed")
+        problem = _update(workspace, save, ctx["guard"])
+    except (vr.EvidenceStoreError, vr.WorkspaceGone):
+        problem = "failed"
     if problem:
         try:  # don't keep an authorization RetainAI won't use
             _client(config).revoke(tokens["access_token"])
@@ -179,7 +182,7 @@ def square_callback():
     return back(square="connected")
 
 
-def _access_token(workspace, config, *, force_refresh=False):
+def _access_token(workspace, config, *, guard=None, force_refresh=False):
     connection = _load(workspace)
     if not connection.get("merchant_id"):
         raise LookupError("not_connected")
@@ -194,7 +197,7 @@ def _access_token(workspace, config, *, force_refresh=False):
         try:
             tokens = _client(config).refresh(refresh_token)
         except sq.SquareAuthError:
-            _update(workspace, lambda data: data.get(workspace, {}).update(status="needs_reconnect"))
+            _update(workspace, lambda data: data.get(workspace, {}).update(status="needs_reconnect"), guard)
             raise
         if not tokens.get("access_token"):
             raise sq.SquareError("Square returned no access token.")
@@ -207,7 +210,7 @@ def _access_token(workspace, config, *, force_refresh=False):
             _store_tokens(current, tokens, now)
             data[workspace] = current
 
-        _update(workspace, save)
+        _update(workspace, save, guard)
         return tokens["access_token"]
     return decrypt_secret(connection.get("access_token_enc"), key, previous)
 
@@ -225,11 +228,11 @@ def square_sync():
     workspace, now = ctx["workspace"], _now()
     client = _client(config)
     try:
-        token = _access_token(workspace, config)
+        token = _access_token(workspace, config, guard=ctx["guard"])
         try:
             bookings, truncated = sq.fetch_bookings(client, token, now)
         except sq.SquareAuthError:
-            token = _access_token(workspace, config, force_refresh=True)
+            token = _access_token(workspace, config, guard=ctx["guard"], force_refresh=True)
             bookings, truncated = sq.fetch_bookings(client, token, now)
     except LookupError:
         return jsonify({"error": "Square isn't connected."}), 400
@@ -270,6 +273,7 @@ def square_sync():
 
     appointments_path = os.path.join(DATA_ROOT, "appointments.json")
     with vr._locked(appointments_path):
+        ctx["guard"]()  # deleted while Square was being read: write nothing
         all_appointments = core.load_appointments() or {}
         rows = list(all_appointments.get(workspace) or [])
         index = {str(row.get("square_booking_id")): i for i, row in enumerate(rows) if isinstance(row, dict) and row.get("square_booking_id")}
@@ -296,7 +300,7 @@ def square_sync():
         if workspace in data and data[workspace].get("merchant_id"):
             data[workspace]["last_sync"] = results
 
-    _update(workspace, remember)
+    _update(workspace, remember, ctx["guard"])
     return jsonify({"ok": True, **results}), 200
 
 

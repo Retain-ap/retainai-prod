@@ -12,6 +12,12 @@ the Owner Console (which requires owner sign-in and MFA):
     python backup_tools.py open   backup.rbk --out restored.zip
     python backup_tools.py drill  backup.rbk --into ./restore-test
 
+``open`` and ``drill`` write decrypted customer data, so they run only on Linux
+and macOS, where the output is created owner-only (0600 files, 0700 folder) and
+checked after creation. On native Windows, POSIX mode bits do not set a private
+ACL, so those two commands refuse to run; use WSL or a Linux/macOS machine.
+``verify`` and ``seal`` write no plaintext and work everywhere.
+
 Output is limited to file names, sizes, digests and record counts: never
 customer data. Passphrases come from RETAINAI_BACKUP_PASSPHRASE or a hidden
 prompt, never from the command line.
@@ -113,15 +119,45 @@ def _read_bounded(archive, name, limit):
     return data
 
 
-def _new_private_file(path):
+def _posix_permissions() -> bool:
+    """True where mode bits are the real access control (Linux, macOS)."""
+    return os.name == "posix"
+
+
+def _require_private_plaintext_output():
+    if not _posix_permissions():
+        raise BackupError(
+            "Decrypting or restoring a backup is supported only on Linux and macOS, where the output can be made "
+            "owner-only. On Windows, file mode bits don't set a private access list, so RetainAI won't write "
+            "decrypted customer data here. Use WSL or a Linux/macOS computer."
+        )
+
+
+def _check_private(fd_or_path, mode):
+    info = os.fstat(fd_or_path) if isinstance(fd_or_path, int) else os.lstat(fd_or_path)
+    if info.st_mode & 0o077 or (hasattr(os, "geteuid") and info.st_uid != os.geteuid()) or info.st_mode & 0o777 != mode:
+        raise BackupError("The output could not be made owner-only; nothing was written.")
+
+
+def _new_private_file(path, *, plaintext=True):
     """Create a new owner-only file; never follow or replace an existing path."""
+    if plaintext:
+        _require_private_plaintext_output()
     if os.path.lexists(path):
         raise BackupError("The output file already exists; choose a new name.")
-    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0)
+    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_BINARY", 0)
     try:
-        return os.fdopen(os.open(path, flags, 0o600), "wb")
+        fd = os.open(path, flags, 0o600)
     except FileExistsError:
         raise BackupError("The output file already exists; choose a new name.") from None
+    if _posix_permissions():
+        try:
+            _check_private(fd, 0o600)
+        except BackupError:
+            os.close(fd)
+            os.remove(path)
+            raise
+    return os.fdopen(fd, "wb")
 
 
 def _extract_private(archive, name, target):
@@ -221,12 +257,13 @@ def seal(archive_path: str, out_path: str, passphrase: str) -> str:
     salt, nonce = os.urandom(SALT_BYTES), os.urandom(NONCE_BYTES)
     header = MAGIC + salt + nonce
     ciphertext = AESGCM(_key(passphrase, salt)).encrypt(nonce, plaintext, header)
-    with _new_private_file(out_path) as handle:
+    with _new_private_file(out_path, plaintext=False) as handle:  # ciphertext only
         handle.write(header + ciphertext)
     return report["archive_sha256"]
 
 
 def unseal(sealed_path: str, out_path: str, passphrase: str) -> str:
+    _require_private_plaintext_output()
     with open(sealed_path, "rb") as handle:
         blob = handle.read()
     if not blob.startswith(MAGIC):
@@ -249,10 +286,13 @@ def restore_drill(source: str, into: str, passphrase: str | None = None) -> dict
     Never touches production. Proves the backup can be read back by RetainAI's
     own code, reporting only counts.
     """
+    _require_private_plaintext_output()
     if os.path.lexists(into):
         raise BackupError("Restore into a new folder that does not exist yet.")
     os.makedirs(into, mode=0o700)
-    with tempfile.TemporaryDirectory() as scratch:
+    os.chmod(into, 0o700)  # makedirs applies the umask; make the folder exactly owner-only
+    _check_private(into, 0o700)
+    with tempfile.TemporaryDirectory() as scratch:  # mkdtemp: owner-only on POSIX
         archive = source
         if not zipfile.is_zipfile(source):
             archive = os.path.join(scratch, "restored.zip")

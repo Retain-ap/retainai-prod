@@ -28,6 +28,16 @@
 Run these steps on the owner's own computer, from a checkout of this
 repository, with Python 3.11 or 3.12 and `pip install -r backend/requirements.txt`.
 
+**Platforms.** `verify` and `seal` write no plaintext and run anywhere.
+`open` and `drill` write decrypted customer data and run **only on Linux and
+macOS**: there the tool creates the output owner-only (files 0600, folder 0700)
+and checks it after creating it. On native Windows, mode bits don't set a
+private access list (DACL), so `open` and `drill` refuse to run instead of
+claiming private output. Use WSL or a Linux/macOS computer for them until a
+Windows wrapper that sets and checks a private ACL exists. The downloaded
+`.zip` from step 3 is plaintext on any platform: keep it in a private folder
+and delete it after sealing.
+
 1. Sign in to RetainAI as the platform owner (MFA required). Open
    **Owner Console > Backups**.
 2. Press **Verify** on the newest backup. It must say that the files match the
@@ -51,7 +61,7 @@ repository, with Python 3.11 or 3.12 and `pip install -r backend/requirements.tx
 
 Keep at least the last 4 weekly copies and one from each month.
 
-## Restore drill (quarterly, and after any storage change)
+## Restore drill (quarterly, and after any storage change, Linux/macOS)
 
 The drill restores into an empty folder on the owner's computer and has
 RetainAI's own storage code read it back. It never touches production.
@@ -63,6 +73,19 @@ python backend/backup_tools.py drill retainai-<date>.rbk --into ./restore-test-<
 It prints only counts (users, workspaces with contacts, contacts) and the
 archive checksum. Compare the counts with the Owner Console. Then delete the
 `restore-test-<date>` folder.
+
+### What has and hasn't been proven
+
+- **Proven on a fixture only.** In PR37 the `verify`, `seal` and `drill` steps
+  ran end to end on a **local test archive built from seed data** (1 user,
+  12 contacts) in a disposable folder, plus the automated tests in
+  `backend/test_backup_tools.py`. That shows the tool works on the real backup
+  format. It is **not** evidence that a production backup has been copied off
+  Render or restored.
+- **Not yet done for production:** no production RetainAI backup has been
+  downloaded, sealed, stored off Render or drilled by Claude (it has no owner
+  MFA sign-in, by design). The first real weekly copy and drill are owner
+  actions; record the date and the drill's counts here when they pass.
 
 ## Restoring production (only in a real data loss)
 
