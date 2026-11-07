@@ -1,10 +1,10 @@
 # Fixed AI routing and production recovery — November 7, 2026 UTC
 
 This continues the [November 6 release handoff](2026-11-06-value-calendly-and-inspired-looks.md).
-The owner opened RetainAI's MFA-protected Owner Console. Calendly account
-sign-in and the switch from the personal address to `owner@retainai.ca` are
-still being completed in Edge; no Calendly app credentials or live connection
-are claimed.
+The owner opened RetainAI's MFA-protected Owner Console. The standard Google
+reviewer account is now created and tested. Calendly's normal personal account
+is signed in, and its separate developer registration is prepared with
+`owner@retainai.ca`; no Calendly app credentials or live connection are claimed.
 
 ## Fixed AI route
 
@@ -37,8 +37,11 @@ The temporary plaintext was removed. See [backup evidence and remaining
 gates](../docs/BACKUP_AND_RESTORE.md).
 
 This is a real local production restore, not the earlier seed-data fixture.
-Private cloud upload/round-trip verification, separate password-manager key
-escrow, production data-key escrow and recurring off-site retention remain.
+The private, empty OneDrive folder **RetainAI Backups** is prepared. Specific
+approval to upload the encrypted production archive is pending; no customer
+archive has been uploaded there. Cloud upload/round-trip verification, separate
+password-manager key escrow, production data-key escrow and recurring off-site
+retention remain.
 No recovery key or customer record was put in Git or chat.
 
 ## Owner account form
@@ -63,11 +66,65 @@ The new credential is current-user DPAPI-protected outside the repo; its
 temporary plaintext entry file was removed after login validation. The owner's
 previously attempted password was not read, copied or changed by Codex.
 
+The reviewer workspace's real CSV import subsequently added two fictional
+contacts, Alex Maple and Jordan Cedar, using `example.com` addresses and a
+**Review demo** tag. Preview and commit showed 2 added, 0 updated, skipped or
+failed. No email consent was recorded. A real AI Studio draft for Alex was
+generated through the production app. No messages were sent and no automation
+was enabled. The local Google reply now describes these ready-to-use samples.
+The point-in-time backup above predates this reviewer account and sample data;
+its 5-account/5-contact counts should not be presented as the newest live totals.
+
+## Import and Calendar navigation
+
+Claude implemented [PR42](https://github.com/Retain-ap/retainai-prod/pull/42),
+and Codex's independent review caught an adjacent Calendar bug: both connection
+prompts opened the Google Contacts importer, which requests Contacts scopes and
+cannot connect Calendar. The revised change opens Settings > Integrations for
+both Calendar prompts, while general contact entry points open the CSV/vCard
+importer. Explicit `?source=google` still highlights Google Contacts.
+
+All three required checks passed on the final up-to-date head `14bbcda` in
+[run 42331480195](https://github.com/Retain-ap/retainai-prod/actions/runs/42331480195),
+including 119 frontend tests in 29 suites. The new route regressions fail against
+the old code. Local real-backend browser checks passed at phone, tablet and
+desktop widths. PR42 merged as `5343012fdadfb468bf4d17ffc9758d7667b6d2be`.
+Frontend deployment `dep-dbn96c142hec73c7nsi0` went live at 02:56:44 UTC.
+Codex then verified the actual production reviewer session: Contacts > Import
+Leads opens `/app/import` at the file importer, and both Calendar prompts open
+`/app?tab=integrations` with the Google Calendar card. No authorization was
+started. Backend runtime remains the separately validated PR39 release.
+
+## Calendly owner setup
+
+The account menu's **Developer** link currently opens the developer docs. The
+docs' **Log in** link leads to a separate developer portal at
+`https://login.calendly.com/`, whose sign-up form is prepared with the owner
+email and name. Registration is held because its final step accepts Calendly
+API terms; the owner is away and requested no questions. No password or API key
+has been created for that account yet.
+
+The existing personal Calendly login remains Google-linked. Its **Change email**
+action opens a Google account chooser rather than an ordinary email edit form.
+Codex backed out without choosing or granting access. Unlinking/changing that
+existing authentication method requires the owner's participation. Complete any
+login change before testing integrations, since Calendly documents that such
+changes revoke existing OAuth and personal access tokens
+([Calendly API FAQ](https://developer.calendly.com/docs/getting-started/frequently-asked-questions)).
+
+The prepared integration should use `scheduled_events:read` and callback
+`https://api.retainai.ca/api/calendly/oauth/callback`. Register a Sandbox app,
+securely configure its credentials, then test the real token exchange and booking
+import before production setup. A documentation example showing `scope: default`
+is not evidence that the live token response has that value: do not weaken
+current scope enforcement based on the example alone.
+
 ## Unchanged launch gates
 
 - RetainAI: complete Calendly account/app configuration and actual OAuth/import
-  acceptance; dedicated Google reviewer access and final reply; the deferred
-  Stripe Connect round trip; remaining cloud backup/key-custody steps.
+  acceptance; approval to disclose the dedicated reviewer credential and send
+  the prepared Google reply; the deferred Stripe Connect round trip; remaining
+  cloud backup/key-custody steps.
 - Closet Muse: its real private cloud backup/restore already passed; independent
   key custody, recurring retention, physical-iPhone TestFlight 3 acceptance and
   Apple's Canadian tax requirements remain. Do not repeat the active U.S. forms.
