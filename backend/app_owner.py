@@ -777,6 +777,43 @@ def owner_backup_download(name):
     return send_file(path, as_attachment=True, download_name=safe_name)
 
 
+@owner_bp.post("/api/owner/backups/<path:name>/verify")
+def owner_backup_verify(name):
+    """Re-check a stored backup: checksum, manifest digests, SQLite and JSON."""
+    from backup_tools import BackupError, verify_archive
+
+    actor, error = _require_owner()
+    if error:
+        return error
+    safe_name = os.path.basename(name)
+    if safe_name != name or not safe_name.startswith("retainai-backup-") or not safe_name.endswith(".zip"):
+        return jsonify({"error": "invalid_backup_name"}), 400
+    path = os.path.join(BACKUP_ROOT, safe_name)
+    if not os.path.isfile(path):
+        return jsonify({"error": "backup_not_found"}), 404
+    expected = ""
+    try:
+        with open(f"{path}.sha256", "r", encoding="ascii") as checksum_file:
+            expected = checksum_file.read().strip()
+    except OSError:
+        pass
+    try:
+        report = verify_archive(path, expected)
+    except BackupError as exc:
+        _audit(actor, "backup_verify_failed", details={"name": safe_name, "reason": str(exc)[:200]})
+        return jsonify({"ok": False, "error": str(exc)}), 422
+    _audit(actor, "backup_verified", details={"name": safe_name, "files": len(report["files"])})
+    return jsonify({
+        "ok": True,
+        "name": safe_name,
+        "archive_sha256": report["archive_sha256"],
+        "checksum_file_matched": bool(expected),
+        "files": len(report["files"]),
+        "sqlite_integrity": (report["sqlite"] or {}).get("integrity", "not included"),
+        "created_at": report.get("created_at", ""),
+    }), 200
+
+
 @owner_bp.get("/api/owner/audit")
 def owner_audit():
     actor, error = _require_owner()

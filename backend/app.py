@@ -1582,6 +1582,7 @@ def api_get_user(email):
         "businessName": base.get("business", ""),
         "businessType": base.get("businessType", ""),
         "lineOfBusiness": base.get("businessType", ""),
+        "setup_preset": _setup_preset(base),
         "location": base.get("location", ""),
         "people": base.get("people") or base.get("teamSize", ""),
         "teamSize": base.get("teamSize") or base.get("people", ""),
@@ -1651,6 +1652,7 @@ def api_profile():
             "businessName": base.get("business", ""),
             "businessType": base.get("businessType", ""),
             "lineOfBusiness": base.get("businessType", ""),
+            "setup_preset": _setup_preset(base),
             "location": base.get("location", ""),
             "people": base.get("people") or base.get("teamSize", ""),
             "teamSize": base.get("teamSize") or base.get("people", ""),
@@ -1731,6 +1733,12 @@ def api_profile():
                 return jsonify({"error": "Business type must be 120 characters or fewer."}), 400
             target["businessType"] = business_type_value
 
+        if "setup_preset" in data:
+            preset_value = str(data.get("setup_preset") or "general").strip().lower()
+            if preset_value not in SETUP_PRESETS:
+                return jsonify({"error": "Choose the general setup or the salon and barber preset."}), 400
+            target["setup_preset"] = preset_value
+
         if "location" in data:
             location_value = str(data.get("location") or "").strip()
             if len(location_value) > 200:
@@ -1757,6 +1765,7 @@ def api_profile():
             "businessName": target.get("business", ""),
             "businessType": target.get("businessType", ""),
             "lineOfBusiness": target.get("businessType", ""),
+            "setup_preset": _setup_preset(target),
             "location": target.get("location", ""),
             "people": target.get("people") or target.get("teamSize", ""),
             "teamSize": target.get("teamSize") or target.get("people", ""),
@@ -2496,6 +2505,16 @@ def _platform_owner_emails() -> set:
 
 def _is_platform_owner(email: str) -> bool:
     return _norm_email(email) in _platform_owner_emails()
+
+# Optional setup presets. "general" is the default for every workspace; the
+# salon/barber preset only changes suggested playbooks, checklist and defaults.
+SETUP_PRESETS = {"general", "salon_barber"}
+
+
+def _setup_preset(record) -> str:
+    value = str((record or {}).get("setup_preset") or "general").strip().lower()
+    return value if value in SETUP_PRESETS else "general"
+
 
 def _req_user_email() -> str:
     return _norm_email(_session_org_email())
@@ -3907,6 +3926,9 @@ def create_stripe_invoice():
     unit_amount = data.get("unit_amount")
     quantity = data.get("quantity") or 1
     currency = (data.get("currency") or "").lower().strip() or None
+    request_key = str(data.get("idempotency_key") or "").strip()
+    if request_key and not re.fullmatch(r"[A-Za-z0-9_-]{8,80}", request_key):
+        return jsonify({"error": "Invalid idempotency key"}), 400
 
     if not all([user_email, customer_name, customer_email, description]):
         return jsonify({"error": "Missing required fields"}), 400
@@ -3938,6 +3960,14 @@ def create_stripe_invoice():
     if not acct_id:
         return jsonify({"error": "Stripe account not connected"}), 400
 
+    def step_key(step: str) -> dict:
+        # A retry of the same submission (same key) replays Stripe's stored
+        # result for each step instead of creating a second invoice.
+        if not request_key:
+            return {}
+        digest = hashlib.sha256(f"{org_email}|{acct_id}|{request_key}".encode("utf-8")).hexdigest()[:40]
+        return {"idempotency_key": f"ra-inv-{digest}-{step}"}
+
     try:
         if not currency:
             acct = stripe.Account.retrieve(acct_id)
@@ -3948,7 +3978,7 @@ def create_stripe_invoice():
             cust = existing[0]
             stripe.Customer.modify(cust.id, name=customer_name, stripe_account=acct_id)
         else:
-            cust = stripe.Customer.create(email=customer_email, name=customer_name, stripe_account=acct_id)
+            cust = stripe.Customer.create(email=customer_email, name=customer_name, stripe_account=acct_id, **step_key("customer"))
         cust_id = cust.id
 
         inv = stripe.Invoice.create(
@@ -3958,6 +3988,7 @@ def create_stripe_invoice():
             auto_advance=False,
             metadata={"user_email": org_email, "customer_name": customer_name},
             stripe_account=acct_id,
+            **step_key("invoice"),
         )
 
         total_minor = to_minor(total_float, currency)
@@ -3969,13 +4000,14 @@ def create_stripe_invoice():
             description=description,
             metadata={"user_email": org_email, "customer_name": customer_name, "quantity": quantity},
             stripe_account=acct_id,
+            **step_key("item"),
         )
 
-        inv = stripe.Invoice.finalize_invoice(inv.id, stripe_account=acct_id)
+        inv = stripe.Invoice.finalize_invoice(inv.id, stripe_account=acct_id, **step_key("finalize"))
         # collection_method=send_invoice does not email the customer merely by
         # finalizing. Explicitly send it so the UI's "Send Invoice" promise is
         # true and the first invoice does not silently remain only in Stripe.
-        inv = stripe.Invoice.send_invoice(inv.id, stripe_account=acct_id)
+        inv = stripe.Invoice.send_invoice(inv.id, stripe_account=acct_id, **step_key("send"))
 
         latest = stripe.Invoice.list(limit=100, expand=["data.customer"], stripe_account=acct_id).data
         invoices = [serialize_invoice(x) for x in latest]
@@ -3993,8 +4025,14 @@ def create_stripe_invoice():
             "invoices": invoices
         }), 200
 
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
+    except stripe.error.StripeError as e:
+        app.logger.warning("[INVOICE] Stripe rejected an invoice request: %s", type(e).__name__)
+        message = getattr(e, "user_message", None) or "Stripe could not create this invoice. Nothing was charged; try again."
+        return jsonify({"error": message}), 502
+    except Exception:
+        app.logger.exception("[INVOICE] Could not create an invoice")
+        hint = "Trying again is safe and will not send a duplicate." if request_key else "Check your invoice list before trying again."
+        return jsonify({"error": f"The invoice could not be created. {hint}"}), 500
 
 @app.route("/api/stripe/invoices", methods=["GET"])
 def list_stripe_invoices():
@@ -4090,6 +4128,13 @@ def stripe_webhook():
         event = stripe.Webhook.construct_event(payload, sig_header, endpoint_secret)
     except Exception:
         return "", 400
+
+    # Events from a merchant's connected account carry a top-level "account".
+    # Their invoices are the merchant's own revenue (metadata.user_email is the
+    # merchant's workspace), never RetainAI membership billing: they must not
+    # change billing status or partner commissions.
+    if event.get("account"):
+        return "", 200
 
     from flask import g
     g.partner_stripe_event = event
@@ -4344,6 +4389,7 @@ def _user_payload(email: str, user: dict) -> dict:
         "logo": logo,
 
         "businessType": base.get("businessType", ""),
+        "setup_preset": _setup_preset(base),
         "business": base.get("business", ""),
         "people": base.get("people") or base.get("teamSize", ""),
         "location": base.get("location", ""),
@@ -8376,6 +8422,7 @@ def send_ai_message():
         }), 502
 
     if owner_email:
+        record_followup(owner_email, lead_email=to_email, channel="email", source="ai_email")
         add_notification(
             user_email=owner_email,
             subject="AI email sent",
@@ -9210,6 +9257,13 @@ def execute_step(flow: Dict[str, Any], step: Dict[str, Any], lead: Dict[str, Any
         )
         if ok:
             mark_sent(run, CHANNEL_EMAIL)
+            record_followup(
+                (lead.get("owner") or flow.get("owner") or "").lower(),
+                lead_id=str(lead.get("id") or ""),
+                lead_email=email,
+                channel="email",
+                source="automation_email",
+            )
             add_notification(
                 user_email=(lead.get("owner") or flow.get("owner") or "").lower(),
                 subject="Automation email sent",
@@ -10509,6 +10563,9 @@ from app_owner import owner_bp
 from app_account import account_bp
 from partner_commissions import partners_bp, signup_partner
 from app_wa_auto_appointments import WA_AUTO_BP
+from app_value import value_bp, record_followup
+from app_square import square_bp
+from app_calendly import calendly_bp
 
 app.register_blueprint(imports_bp)
 app.register_blueprint(team_bp)
@@ -10516,6 +10573,9 @@ app.register_blueprint(owner_bp)
 app.register_blueprint(partners_bp)
 app.register_blueprint(account_bp)
 app.register_blueprint(WA_AUTO_BP)
+app.register_blueprint(value_bp)
+app.register_blueprint(square_bp)
+app.register_blueprint(calendly_bp)
 
 
 # ----------------------------

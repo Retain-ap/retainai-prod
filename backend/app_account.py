@@ -29,6 +29,12 @@ _WORKSPACE_JSON_FILES = (
     "google_tokens.json",
     "google_sync.json",
     "import_history.json",
+    # Value Receipt evidence, the follow-up send log and Square connections are
+    # keyed by workspace and are purged with it.
+    "revenue_evidence.json",
+    "followup_log.json",
+    "square_connections.json",
+    "calendly_connections.json",
 )
 
 
@@ -106,19 +112,10 @@ def _purge_workspace_json(workspace):
         path = os.path.join(DATA_ROOT, filename)
         if not os.path.isfile(path):
             continue
-        with open(path, "r", encoding="utf-8") as handle:
-            value = json.load(handle)
-        if filename == "appointments.json" and isinstance(value, dict):
-            raw_rows = value.get(workspace) or (
-                (value.get("appointments") or {}).get(workspace)
-                if isinstance(value.get("appointments"), dict) else []
-            )
-            for row in raw_rows or []:
-                if isinstance(row, dict) and row.get("id"):
-                    appointment_ids.add(str(row["id"]))
-        value, changed = scrub(value)
-        if changed:
-            _atomic_json(path, value)
+        # Hold the same per-file lock the writers use, so a write that started
+        # before the purge can't put the workspace's entries back afterwards.
+        with _file_lock(path):
+            appointment_ids |= _scrub_file(path, filename, workspace, scrub)
 
     ics_root = os.path.realpath(os.path.join(DATA_ROOT, "ics_files"))
     for appointment_id in appointment_ids:
@@ -130,6 +127,31 @@ def _purge_workspace_json(workspace):
         target = os.path.realpath(os.path.join(ics_root, f"{safe_id}.ics"))
         if os.path.dirname(target) == ics_root and os.path.isfile(target):
             os.remove(target)
+
+
+def _file_lock(path):
+    from value_receipt import _locked
+
+    return _locked(path)
+
+
+def _scrub_file(path, filename, workspace, scrub):
+    """Remove one workspace's entries from a JSON store; returns its appointment IDs."""
+    ids = set()
+    with open(path, "r", encoding="utf-8") as handle:
+        value = json.load(handle)
+    if filename == "appointments.json" and isinstance(value, dict):
+        raw_rows = value.get(workspace) or (
+            (value.get("appointments") or {}).get(workspace)
+            if isinstance(value.get("appointments"), dict) else []
+        )
+        for row in raw_rows or []:
+            if isinstance(row, dict) and row.get("id"):
+                ids.add(str(row["id"]))
+    value, changed = scrub(value)
+    if changed:
+        _atomic_json(path, value)
+    return ids
 
 
 def _purge_workspace(workspace, users):
@@ -146,6 +168,19 @@ def _purge_workspace(workspace, users):
     # storage helper ensures an owner exists while replacing contacts.
     save_user_leads(workspace, [])
     delete_users(removed)
+    # Tell Square and Calendly to forget RetainAI's authorization before the tokens go.
+    try:
+        from app_square import revoke_workspace as revoke_square
+
+        revoke_square(workspace)
+    except Exception:
+        pass
+    try:
+        from app_calendly import revoke_workspace as revoke_calendly
+
+        revoke_calendly(workspace)
+    except Exception:
+        pass
     _purge_workspace_json(workspace)
     return len(removed)
 
@@ -260,6 +295,28 @@ def sweep_due_account_deletions():
     _purge_due_deletions()
 
 
+def _workspace_records(workspace):
+    """Payment evidence, follow-up log and Square connection details (no tokens)."""
+    def read(name):
+        path = os.path.join(DATA_ROOT, name)
+        try:
+            with open(path, "r", encoding="utf-8") as handle:
+                data = json.load(handle)
+        except FileNotFoundError:
+            return {}
+        return data if isinstance(data, dict) else {}
+
+    revenue = read("revenue_evidence.json").get(workspace) or {}
+    square = read("square_connections.json").get(workspace) or {}
+    calendly = read("calendly_connections.json").get(workspace) or {}
+    return {
+        "payments": list((revenue.get("records") or {}).values()),
+        "follow_ups": read("followup_log.json").get(workspace) or [],
+        "square": {key: value for key, value in square.items() if "token" not in key.lower() and key != "pending"} or None,
+        "calendly": {key: value for key, value in calendly.items() if "token" not in key.lower() and key != "sync_cursor"} or None,
+    }
+
+
 @account_bp.get("/api/account/export")
 def account_export():
     workspace, context, error = _workspace()
@@ -281,6 +338,7 @@ def account_export():
         "profile": _clean(owner),
         "team": team,
         "contacts": leads.get(workspace, []) if isinstance(leads, dict) else [],
+        **_workspace_records(workspace),
         "notice": "Credentials, session data, encryption secrets and access tokens are excluded.",
     }
     return Response(

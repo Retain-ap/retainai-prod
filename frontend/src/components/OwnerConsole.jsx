@@ -67,6 +67,7 @@ export default function OwnerConsole() {
   const [audit, setAudit] = useState([]);
   const [features, setFeatures] = useState({});
   const [backups, setBackups] = useState([]);
+  const [backupChecks, setBackupChecks] = useState({});
   const [query, setQuery] = useState("");
   const [statusFilter, setStatusFilter] = useState("all");
   const [integrationFilter, setIntegrationFilter] = useState("all");
@@ -259,6 +260,19 @@ export default function OwnerConsole() {
       setBackups(data.backups || []);
     } catch (requestError) {
       setError(requestError.message || "Backup creation failed.");
+    } finally {
+      setBusy("");
+    }
+  }
+
+  async function verifyBackup(name) {
+    setBusy(`verify:${name}`);
+    setError("");
+    try {
+      const data = await ownerRequest(`backups/${encodeURIComponent(name)}/verify`, { method: "POST", body: JSON.stringify({}) });
+      setBackupChecks((current) => ({ ...current, [name]: { ok: true, text: `Verified: ${data.files} files match the manifest${data.checksum_file_matched ? " and stored checksum" : ""}; database ${data.sqlite_integrity}.` } }));
+    } catch (requestError) {
+      setBackupChecks((current) => ({ ...current, [name]: { ok: false, text: requestError.message || "Verification failed." } }));
     } finally {
       setBusy("");
     }
@@ -550,13 +564,15 @@ export default function OwnerConsole() {
       {tab === "backups" && (
         <section className="product-card" style={{ marginTop: 18 }}>
           <div className="product-card-header">
-            <div><h2>Verified platform backups</h2><p className="product-card-copy">Encrypted transport, integrity hashes, automatic retention and owner-only downloads. Keep an off-site copy for disaster recovery.</p></div>
+            <div><h2>Platform backups</h2><p className="product-card-copy">Daily archives with SHA-256 manifests, kept on the same Render disk as the data and downloadable only by the owner over HTTPS. Archives are not encrypted on the disk. For disaster recovery, follow docs/BACKUP_AND_RESTORE.md: verify, download, seal with a passphrase and keep copies off Render.</p></div>
             <button className="product-button primary" onClick={createBackup} disabled={Boolean(busy)}>{busy === "backup:create" ? "Creating…" : "Create backup now"}</button>
           </div>
           <div className="insight-list">
             {backups.map((backup) => (
               <div className="insight-row" key={backup.name}>
                 <div className="insight-row-main"><strong>{when(backup.created_at)}</strong><small>{backup.name} · {(backup.bytes / 1024 / 1024).toFixed(2)} MB · SHA-256 {backup.sha256.slice(0, 12)}…</small></div>
+                {backupChecks[backup.name] && <small className={backupChecks[backup.name].ok ? "backup-check ok" : "backup-check failed"} role="status">{backupChecks[backup.name].text}</small>}
+                <button className="product-button" disabled={Boolean(busy)} onClick={() => verifyBackup(backup.name)}>{busy === `verify:${backup.name}` ? "Verifying…" : "Verify"}</button>
                 <button className="product-button" disabled={Boolean(busy)} onClick={() => downloadBackup(backup.name)}>Download</button>
               </div>
             ))}

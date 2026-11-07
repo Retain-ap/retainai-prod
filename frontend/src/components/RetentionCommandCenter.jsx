@@ -18,6 +18,9 @@ import {
   getBrowserTimeZone,
   parseAppointmentDateTime,
 } from "./appointmentDateTime";
+import ValueReceipt from "./ValueReceipt";
+import ServiceSetupPanel, { SALON_PLAYBOOKS } from "./ServiceSetupPanel";
+import { dueForRebooking, rebookingSuggestions } from "../rebooking";
 import "./product-system.css";
 
 const DAY = 24 * 60 * 60 * 1000;
@@ -78,7 +81,7 @@ function HealthPill({ health }) {
   return <span className={`health-pill ${health.kind}`}>{health.label} · {health.score}</span>;
 }
 
-export default function RetentionCommandCenter({ leads = [], appointments = [], user, onOpenAutomations, onOpenMessages }) {
+export default function RetentionCommandCenter({ leads = [], appointments = [], user, onOpenAutomations, onOpenMessages, onUpdateLead, onOpenImports }) {
   const [tab, setTab] = useState("briefing");
   const [timelineLead, setTimelineLead] = useState(null);
 
@@ -89,22 +92,33 @@ export default function RetentionCommandCenter({ leads = [], appointments = [], 
   const atRisk = enriched.filter((item) => ["risk", "inactive"].includes(item.health.kind));
   const needsAttention = enriched.filter((item) => item.health.kind === "attention");
   const healthy = enriched.filter((item) => ["healthy", "vip"].includes(item.health.kind));
-  const opportunities = enriched
-    .filter((item) => item.health.days >= 21)
-    .map((item) => ({
-      ...item,
-      reason: item.health.days > 90 ? "Win-back opportunity" : "Likely ready to rebook",
-      value: Number(item.lead.next_value || item.lead.average_sale || item.lead.value || 75),
-    }));
+  const workspaceTimeZone = user?.timezone || getBrowserTimeZone();
+  const rebooking = useMemo(
+    () => rebookingSuggestions({ leads, appointments, user, today: dayKeyNow(workspaceTimeZone) }),
+    [leads, appointments, user, workspaceTimeZone]
+  );
+  const salonPreset = user?.setup_preset === "salon_barber";
+  const playbooks = salonPreset
+    ? SALON_PLAYBOOKS.map((playbook) => ({ ...playbook, icon: PLAYBOOKS.find((item) => item.key === playbook.key)?.icon }))
+    : PLAYBOOKS;
+  const estimateFor = (lead) => Number(lead.next_value || lead.average_sale || lead.value || 75);
+  const healthByLead = new Map(enriched.map((item) => [item.lead, item.health]));
+  const withVisits = new Set(rebooking.map((item) => item.lead));
+  const opportunities = [
+    // Due or overdue against each customer's own completed-visit rhythm.
+    ...dueForRebooking(rebooking).map((item) => ({
+      lead: item.lead,
+      health: healthByLead.get(item.lead) || healthFor(item.lead),
+      rebook: item,
+      reason: item.daysUntilDue < 0 ? `Rebooking overdue by ${-item.daysUntilDue} days` : item.daysUntilDue === 0 ? "Rebooking due today" : `Rebooking due in ${item.daysUntilDue} days`,
+      value: estimateFor(item.lead),
+    })),
+    // No completed visit on record: only long inactivity suggests a win-back.
+    ...enriched
+      .filter((item) => !withVisits.has(item.lead) && item.health.days > 90)
+      .map((item) => ({ ...item, reason: "Win-back: no completed visit recorded and inactive for 90+ days", value: estimateFor(item.lead) })),
+  ];
   const opportunityValue = opportunities.reduce((sum, item) => sum + item.value, 0);
-  const protectedValue = atRisk.reduce(
-    (sum, item) => sum + Number(item.lead.value || item.lead.average_sale || 75),
-    0
-  );
-  const estimatedHoursSaved = Math.max(
-    1,
-    Math.round((leads.length * 4 + appointments.length * 6) / 60)
-  );
   const pulse = leads.length
     ? Math.round(enriched.reduce((sum, item) => sum + item.health.score, 0) / enriched.length)
     : 0;
@@ -178,6 +192,15 @@ export default function RetentionCommandCenter({ leads = [], appointments = [], 
 
       {tab === "briefing" && (
         <div className="product-grid">
+          <ServiceSetupPanel
+            preset={salonPreset ? "salon_barber" : "general"}
+            leads={leads}
+            appointments={appointments}
+            rebooking={rebooking}
+            today={dayKeyNow(workspaceTimeZone)}
+            onOpenPlaybooks={() => setTab("playbooks")}
+            onOpenImports={onOpenImports}
+          />
           <section className="product-card">
             <div className="product-card-header"><div><h2>Today’s priorities</h2><p className="product-card-copy">The highest-impact actions to take now.</p></div></div>
             <div className="insight-list">
@@ -216,15 +239,42 @@ export default function RetentionCommandCenter({ leads = [], appointments = [], 
 
       {tab === "opportunities" && (
         <section className="product-card" style={{ marginTop: 18 }}>
-          <div className="product-card-header"><div><h2>Revenue Opportunities</h2><p className="product-card-copy">Customers most likely to benefit from a timely follow-up.</p></div><strong>{money(opportunityValue)}</strong></div>
+          <div className="product-card-header"><div><h2>Revenue Opportunities</h2><p className="product-card-copy">Rebooking dates come from each customer's completed visits. Values are estimates, not revenue.</p></div><strong title="Estimate">{money(opportunityValue)}</strong></div>
           <div className="insight-list">
-            {opportunities.slice(0, 30).map(({ lead, health, reason, value }) => (
-              <div className="insight-row" key={lead.id || lead.email}>
-                <div className="insight-row-main"><strong>{leadName(lead)}</strong><small>{reason} · {health.days} days since activity</small></div>
-                <strong>{money(value)}</strong>
-                <button className="product-button" onClick={() => setTimelineLead({ lead, health })}>View relationship</button>
+            {opportunities.slice(0, 30).map(({ lead, health, reason, value, rebook }) => (
+              <div className="insight-row rebook-row" key={lead.id || lead.email}>
+                <div className="insight-row-main">
+                  <strong>{leadName(lead)}</strong>
+                  <small>{reason}{rebook ? ` · every ${rebook.intervalDays} days` : ` · ${health.days} days since activity`}</small>
+                  {rebook && <ul className="rebook-reasons">{rebook.reasons.map((text) => <li key={text}>{text}</li>)}</ul>}
+                </div>
+                <strong title="Estimate">{money(value)}</strong>
+                <div className="rebook-actions">
+                  {rebook && onUpdateLead && (
+                    <button
+                      className="product-button"
+                      onClick={() => {
+                        const answer = window.prompt(`Rebook ${leadName(lead)} every how many days? (7 to 365)`, String(rebook.intervalDays));
+                        const days = Number(answer);
+                        if (answer === null) return;
+                        if (!Number.isInteger(days) || days < 7 || days > 365) {
+                          window.alert("Enter a whole number of days from 7 to 365.");
+                          return;
+                        }
+                        Promise.resolve(onUpdateLead({ ...lead, rebook_interval_days: days })).catch((error) => window.alert(error?.message || "The interval could not be saved."));
+                      }}
+                    >
+                      Set interval
+                    </button>
+                  )}
+                  {rebook?.basis === "override" && onUpdateLead && (
+                    <button className="product-button" onClick={() => Promise.resolve(onUpdateLead({ ...lead, rebook_interval_days: null })).catch((error) => window.alert(error?.message || "The change could not be saved."))}>Use visit history</button>
+                  )}
+                  <button className="product-button" onClick={() => setTimelineLead({ lead, health })}>View relationship</button>
+                </div>
               </div>
             ))}
+            {!opportunities.length && <div className="insight-row"><div className="insight-row-main"><strong>No one is due right now</strong><small>Customers appear here when their usual time between completed visits has nearly passed.</small></div></div>}
           </div>
         </section>
       )}
@@ -246,12 +296,13 @@ export default function RetentionCommandCenter({ leads = [], appointments = [], 
 
       {tab === "playbooks" && (
         <div className="product-grid">
-          {PLAYBOOKS.map((playbook) => (
+          {playbooks.map((playbook) => (
             <section className="product-card" key={playbook.key}>
               <div className="product-eyebrow">{playbook.icon} Ready-made playbook</div>
               <h3 style={{ marginTop: 12 }}>{playbook.name}</h3>
               <p style={{ color: "var(--ra-muted)", lineHeight: 1.6 }}>{playbook.copy}</p>
-              <button className="product-button primary" onClick={() => onOpenAutomations?.(playbook.key)}>Use this playbook</button>
+              <button className="product-button primary" onClick={() => onOpenAutomations?.(playbook.key)}>Review this playbook</button>
+              <small className="product-card-copy" style={{ display: "block", marginTop: 8 }}>Opens it for review. Nothing is sent until you activate it.</small>
             </section>
           ))}
         </div>
@@ -279,32 +330,28 @@ export default function RetentionCommandCenter({ leads = [], appointments = [], 
 
       {tab === "value" && (
         <div className="product-grid">
-          <section className="product-card" style={{ gridColumn: "1 / -1" }}>
-            <div className="product-eyebrow">Your RetainAI value receipt</div>
-            <h2 style={{ marginTop: 10 }}>
-              RetainAI is protecting relationships worth {money(protectedValue)}.
-            </h2>
-            <p className="product-card-copy">
-              A transparent estimate based on your current customer records,
-              follow-up opportunities, and upcoming bookings.
-            </p>
-          </section>
+          <ValueReceipt leads={leads} appointments={appointments} />
           <section className="product-card">
+            <div className="product-eyebrow">Estimates · not revenue</div>
+            <h3 style={{ marginTop: 10 }}>Open rebooking opportunities</h3>
+            <p className="product-card-copy">
+              Estimated from each customer's recorded value, or {money(75)} when none is recorded.
+              This is not money received and is never included in verified revenue.
+            </p>
             <div className="insight-list">
-              <div className="insight-row"><span>Revenue opportunities identified</span><strong>{money(opportunityValue)}</strong></div>
-              <div className="insight-row"><span>Relationships being monitored</span><strong>{leads.length}</strong></div>
-              <div className="insight-row"><span>Priority actions surfaced</span><strong>{atRisk.length + needsAttention.length}</strong></div>
-              <div className="insight-row"><span>Estimated admin time saved</span><strong>{estimatedHoursSaved}h</strong></div>
+              <div className="insight-row"><span>Estimated value of open opportunities</span><strong>{money(opportunityValue)}</strong></div>
+              <div className="insight-row"><span>Customers with an opportunity</span><strong>{opportunities.length}</strong></div>
+              <div className="insight-row"><span>Relationships monitored</span><strong>{leads.length}</strong></div>
             </div>
           </section>
           <section className="product-card">
-            <h3>Recommended next win</h3>
+            <h3>Recommended next step</h3>
             <p className="product-card-copy">
               {opportunities.length
-                ? `Contact your top ${Math.min(3, opportunities.length)} rebooking opportunities. Their estimated combined value is ${money(opportunities.slice(0, 3).reduce((sum, item) => sum + item.value, 0))}.`
-                : `Your ${user?.businessType || "business"} relationships look current. Activate review requests to build referral momentum.`}
+                ? `Review your top ${Math.min(3, opportunities.length)} rebooking opportunities and decide who to contact.`
+                : `Your ${user?.businessType || "business"} relationships look current.`}
             </p>
-            <button className="product-button primary" onClick={() => setTab("opportunities")}>Open next opportunities</button>
+            <button className="product-button primary" onClick={() => setTab("opportunities")}>Open opportunities</button>
           </section>
         </div>
       )}
