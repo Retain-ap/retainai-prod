@@ -79,16 +79,24 @@ test("appointments added in RetainAI complete the booking step without Calendly"
   const panel = screen.getByRole("region", { name: "Service business setup" });
   const step = within(panel).getByTestId("setup-step-bookings");
   expect(step).toHaveClass("done");
-  expect(within(step).queryByRole("button", { name: "Open" })).not.toBeInTheDocument();
+  expect(within(step).queryByRole("button", { name: "Add appointment" })).not.toBeInTheDocument();
 });
 
-test("with no bookings yet, the booking step stays open and points to adding or syncing them", () => {
+test("with no bookings yet, the booking step offers Add appointment, separate from contact import", () => {
   const onOpenImports = jest.fn();
-  render(<RetentionCommandCenter leads={[ana]} appointments={[]} user={{ timezone: "UTC" }} onOpenImports={onOpenImports} />);
-  const step = within(screen.getByRole("region", { name: "Service business setup" })).getByTestId("setup-step-bookings");
+  const onOpenAppointments = jest.fn();
+  render(<RetentionCommandCenter leads={[]} appointments={[]} user={{ timezone: "UTC" }} onOpenImports={onOpenImports} onOpenAppointments={onOpenAppointments} />);
+  const panel = screen.getByRole("region", { name: "Service business setup" });
+  const step = within(panel).getByTestId("setup-step-bookings");
   expect(step).not.toHaveClass("done");
-  fireEvent.click(within(step).getByRole("button", { name: "Open" }));
+  expect(within(step).queryByRole("button", { name: "Open" })).not.toBeInTheDocument();
+  fireEvent.click(within(step).getByRole("button", { name: "Add appointment" }));
+  expect(onOpenAppointments).toHaveBeenCalledTimes(1);
+  expect(onOpenImports).not.toHaveBeenCalled();
+  // Importing contacts keeps its own action.
+  fireEvent.click(within(panel).getByRole("button", { name: "Import" }));
   expect(onOpenImports).toHaveBeenCalledTimes(1);
+  expect(onOpenAppointments).toHaveBeenCalledTimes(1);
 });
 
 test("bookings synced from Calendly tick the booking step and are counted, not named", () => {

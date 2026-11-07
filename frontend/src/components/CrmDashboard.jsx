@@ -1038,6 +1038,12 @@ function CrmDashboard({ authenticatedUser }) {
     navigate(importSourcePath(source));
   }, [navigate]);
 
+  // The appointment list, where a RetainAI appointment can be added. Same route
+  // as the Calendar page's Appointments tab.
+  const openAppointments = useCallback(() => {
+    navigate("/app?section=calendar&view=appointments");
+  }, [navigate]);
+
   // Google Calendar prompts open Settings > Integrations, where the Google
   // Calendar connection lives (calendar scopes). The Contacts importer's Google
   // card only requests contacts access, so it can't connect a calendar. Opening
@@ -1261,6 +1267,7 @@ function CrmDashboard({ authenticatedUser }) {
             user={user}
             onUpdateLead={handleUpdateLead}
             onOpenImports={openImports}
+            onOpenAppointments={openAppointments}
             onOpenMessages={() => openSection("messages")}
             onOpenAutomations={(playbook) => {
               try {

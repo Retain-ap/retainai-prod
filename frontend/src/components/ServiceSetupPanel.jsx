@@ -67,7 +67,7 @@ const COPY = {
   },
 };
 
-export default function ServiceSetupPanel({ preset = "general", leads, appointments, rebooking, today, onOpenPlaybooks, onOpenImports }) {
+export default function ServiceSetupPanel({ preset = "general", leads, appointments, rebooking, today, onOpenPlaybooks, onOpenImports, onOpenAppointments }) {
   const copy = COPY[preset] || COPY.general;
   const reviewedKey = REVIEWED_KEYS[preset] || REVIEWED_KEYS.general;
   const [reviewed, setReviewed] = useState(() => {
@@ -85,8 +85,9 @@ export default function ServiceSetupPanel({ preset = "general", leads, appointme
       id: "bookings",
       label: "Bring in your bookings",
       done: appointments.length > 0,
-      action: onOpenImports,
-      actionLabel: "Open",
+      // Calendly may not be available, so the action adds a RetainAI appointment.
+      action: onOpenAppointments,
+      actionLabel: "Add appointment",
       hint: "Add appointments in RetainAI, or sync them from Calendly if it is available on the Import page.",
     },
     { label: "A visit is marked completed", done: anyCompleted, hint: "Rebooking dates come from completed visits." },
