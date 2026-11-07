@@ -1029,10 +1029,22 @@ function CrmDashboard({ authenticatedUser }) {
     }
   }, [effectiveEmail]);
 
+  // The contact importer: files from iPhone/Mac/iCloud, Google, Outlook, CRMs or
+  // spreadsheets, plus Google Contacts. Opens at the file importer.
   const openImports = useCallback(() => {
     setSettingsTab("imports");
     setSection("settings");
-    navigate("/app/import?source=google");
+    navigate("/app/import");
+  }, [navigate]);
+
+  // Google Calendar prompts open Settings > Integrations, where the Google
+  // Calendar connection lives (calendar scopes). The Contacts importer's Google
+  // card only requests contacts access, so it can't connect a calendar. Opening
+  // the tab authorizes nothing; connecting still needs the owner's click there.
+  const openCalendarSettings = useCallback(() => {
+    setSettingsTab("integrations");
+    setSection("settings");
+    navigate("/app?tab=integrations");
   }, [navigate]);
 
   // Fetch Google events
@@ -1381,7 +1393,7 @@ function CrmDashboard({ authenticatedUser }) {
                   } else {
                     setGcalStatus("disconnected");
                     setGoogleEvents([]);
-                    openImports();
+                    openCalendarSettings();
                   }
                 }}
               >
@@ -1412,7 +1424,7 @@ function CrmDashboard({ authenticatedUser }) {
                   {gcalStatus === "unavailable" && "service unavailable"}
                 </span>
                 <button
-                  onClick={openImports}
+                  onClick={openCalendarSettings}
                   style={{
                     background: "#f7cb53",
                     color: "#232323",

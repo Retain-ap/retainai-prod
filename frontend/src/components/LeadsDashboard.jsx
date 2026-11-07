@@ -1,7 +1,6 @@
 // src/components/LeadsDashboard.jsx
 import React, { useMemo, useState } from "react";
 import LeadDrawer from "./LeadDrawer";
-import { API_BASE } from "../apiBase";
 
 export default function LeadsDashboard({
   leads,
@@ -64,21 +63,9 @@ export default function LeadsDashboard({
       onImportLeads();
       return;
     }
-    const u = user || JSON.parse(localStorage.getItem("user") || "null");
-    const email = u?.email || "";
-
-    // After OAuth & import, come back to the dashboard
-    const redirectBack = `${window.location.origin}/app`;
-
-    // Support either env var name; fall back to same-origin (proxy) if unset
-
-    const base = API_BASE || ""; // empty => same-origin “/api/...”
-    const url =
-      `${base}/api/google/authorize` +
-      `?userEmail=${encodeURIComponent(email)}` +
-      `&redirect=${encodeURIComponent(redirectBack)}`;
-
-    window.location.href = url;
+    // Without the dashboard's handler, still open the contact importer
+    // rather than starting any provider authorization.
+    window.location.assign("/app/import");
   }
 
   return (
@@ -120,7 +107,8 @@ export default function LeadsDashboard({
             onMouseUp={(e) => (e.currentTarget.style.transform = "translateY(0)")}
             onClick={handleImportLeads}
             type="button"
-            title="Import from Google Contacts"
+            title="Import contacts from a CSV or vCard file (iPhone, Mac, Outlook, Google, HubSpot and other CRMs) or from Google Contacts"
+            aria-label="Import contacts from a file or Google Contacts"
           >
             Import Leads
           </button>

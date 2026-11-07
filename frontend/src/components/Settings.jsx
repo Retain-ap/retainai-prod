@@ -1074,7 +1074,9 @@ export default function Settings({
           </div>
         )}
 
-        {tab === "imports" && <ImportContacts user={user} focusGoogle />}
+        {tab === "imports" && (
+          <ImportContacts user={user} focusGoogle={new URLSearchParams(location.search).get("source") === "google"} />
+        )}
 
         {tab === "billing" && capabilities.canManageBilling && (
           <div className="integrations-page" style={{ maxWidth: MAX_W, margin: "0 auto" }}>

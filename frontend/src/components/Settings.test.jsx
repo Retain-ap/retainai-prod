@@ -180,3 +180,30 @@ test("the owner can choose the optional salon and barber preset; general is the 
   const [, options] = global.fetch.mock.calls.find(([, call]) => call?.method === "POST");
   expect(JSON.parse(options.body)).toMatchObject({ setup_preset: "salon_barber", businessType: "Salon" });
 });
+
+function googleCard() {
+  return screen.getByRole("heading", { name: "Google Contacts" }).closest("section");
+}
+
+function renderImports(path) {
+  localStorage.setItem("user", JSON.stringify(user));
+  global.fetch = jest.fn().mockResolvedValue(response(user));
+  render(
+    <MemoryRouter initialEntries={[path]}>
+      <Settings user={user} initialTab="imports" refreshUser={jest.fn().mockResolvedValue(undefined)} />
+    </MemoryRouter>
+  );
+}
+
+test("opening the importer from Contacts starts at the file importer, not the Google card", async () => {
+  renderImports("/app/import");
+  expect(await screen.findByText("Import contacts")).toBeInTheDocument();
+  expect(screen.getByRole("group", { name: "Contact sources" })).toBeInTheDocument();
+  expect(googleCard()).not.toHaveClass("google-import-focus");
+});
+
+test("only a Google prompt (?source=google) highlights the Google Contacts card", async () => {
+  renderImports("/app/import?source=google");
+  expect(await screen.findByText("Import contacts")).toBeInTheDocument();
+  expect(googleCard()).toHaveClass("google-import-focus");
+});
