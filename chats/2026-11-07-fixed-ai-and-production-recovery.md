@@ -21,8 +21,10 @@ Both services deployed `a514a8f7379da7e60c58ccf172969621d6427d8a` successfully,
 and all 15 anonymous production HTTP checks passed. Detailed evidence and
 limits are in [AI routing](../docs/AI_ROUTING.md). Public privacy text matches
 the fixed route and still does not claim zero retention. The final Google
-reply is prepared locally but **not sent**: a tested dedicated standard
-reviewer login remains required. No owner credentials will be supplied.
+reply is prepared locally but **not sent**. The dedicated standard reviewer
+account was subsequently created and tested; specific approval to send its
+privately saved credential to Google's verification team remains required.
+No owner credentials will be supplied.
 
 ## Actual production backup
 
@@ -50,9 +52,16 @@ and all three release gates passed. PR40 merged as
 `d5c990308f15721c9e45537077cca29cbabe28b7`. The frontend-only change went live
 at 02:30:24 UTC as `dep-dbn8q0nb9u1s73cf2hv0`. Codex reloaded the fresh Owner
 Console, opened the creator and verified the actual DOM pattern uses `[0-9]`.
-The non-secret reviewer details were refilled; password entry and submission
-remain with the owner. The backend remains on the validated PR39 release.
-The user's password was not read, copied or changed by Codex.
+The backend remains on the validated PR39 release. After the owner explicitly
+asked Codex to generate and privately save the initial password for this new
+review account, Codex created `owner+google-review-20261102@retainai.ca` with
+complimentary access, then verified an actual login and dashboard access.
+The owner API returned `platform_owner_required`, confirming that this is
+not a platform-admin account. Google Contacts and Calendar connection controls
+are reachable. The owner's Google account is not connected to this workspace.
+The new credential is current-user DPAPI-protected outside the repo; its
+temporary plaintext entry file was removed after login validation. The owner's
+previously attempted password was not read, copied or changed by Codex.
 
 ## Unchanged launch gates
 
