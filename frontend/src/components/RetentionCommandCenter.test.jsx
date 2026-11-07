@@ -59,18 +59,36 @@ test("the Value Receipt keeps estimates separate and makes no protected-value cl
   await waitFor(() => expect(screen.getByRole("alert")).toHaveTextContent("Only the workspace owner can see revenue."));
 });
 
-test("general mode is the default service-business setup, with Calendly as the booking step", () => {
+test("general mode is the default service-business setup; Calendly is optional for the booking step", () => {
   render(<RetentionCommandCenter leads={[ana]} appointments={appointments} user={{ timezone: "UTC" }} />);
   expect(screen.queryByRole("region", { name: "Salon and barber setup" })).not.toBeInTheDocument();
   const panel = screen.getByRole("region", { name: "Service business setup" });
   expect(within(panel).getByText("General service business setup chosen")).toBeInTheDocument();
-  expect(within(panel).getByText("Bring in bookings from Calendly")).toBeInTheDocument();
+  expect(within(panel).getByText("Bring in your bookings")).toBeInTheDocument();
+  expect(within(panel).getByText(/or sync them from Calendly if it is available/)).toBeInTheDocument();
   expect(within(panel).getByText(/Importing or syncing never records consent/)).toBeInTheDocument();
   expect(panel).toHaveTextContent(/No bookings imported from a booking platform yet/);
   expect(panel).not.toHaveTextContent(/connected to Calendly/i); // never claims a live connection
   fireEvent.click(screen.getByRole("tab", { name: "Playbooks" }));
   expect(screen.getByText("Recover unpaid invoices")).toBeInTheDocument();
   expect(screen.queryByText("Day-before appointment reminder")).not.toBeInTheDocument();
+});
+
+test("appointments added in RetainAI complete the booking step without Calendly", () => {
+  render(<RetentionCommandCenter leads={[ana]} appointments={appointments} user={{ timezone: "UTC" }} />);
+  const panel = screen.getByRole("region", { name: "Service business setup" });
+  const step = within(panel).getByTestId("setup-step-bookings");
+  expect(step).toHaveClass("done");
+  expect(within(step).queryByRole("button", { name: "Open" })).not.toBeInTheDocument();
+});
+
+test("with no bookings yet, the booking step stays open and points to adding or syncing them", () => {
+  const onOpenImports = jest.fn();
+  render(<RetentionCommandCenter leads={[ana]} appointments={[]} user={{ timezone: "UTC" }} onOpenImports={onOpenImports} />);
+  const step = within(screen.getByRole("region", { name: "Service business setup" })).getByTestId("setup-step-bookings");
+  expect(step).not.toHaveClass("done");
+  fireEvent.click(within(step).getByRole("button", { name: "Open" }));
+  expect(onOpenImports).toHaveBeenCalledTimes(1);
 });
 
 test("bookings synced from Calendly tick the booking step and are counted, not named", () => {
