@@ -8,7 +8,7 @@ export default function PrivacyPolicy() {
         <h1 className="text-3xl md:text-4xl font-bold text-yellow-400 mb-7">Privacy Policy</h1>
 
         <p className="text-sm text-gray-400 mb-8">
-          Effective August 21, 2026 · Updated November 6, 2026 (AI processing details)
+          Effective August 21, 2026 · Updated November 7, 2026 (AI processing details; optional booking connections)
         </p>
 
         <p className="mb-6">
@@ -25,7 +25,7 @@ export default function PrivacyPolicy() {
           <li><b>Lead & Customer Data:</b> names, emails, phone numbers, tags/notes you add, message history, and appointment info.</li>
           <li><b>Usage Data:</b> app interactions, device/browser info, IP address, and diagnostic logs to improve performance.</li>
           <li><b>Cookies & Similar Tech:</b> essential cookies for authentication and session management; optional analytics (if enabled).</li>
-          <li><b>Connected Services:</b> identifiers, authorization status, and event data needed for integrations you enable, such as WhatsApp, Google Calendar, email, and Stripe.</li>
+          <li><b>Connected Services:</b> identifiers, authorization status, and event data needed for integrations you enable, such as WhatsApp, Google Calendar, email, Stripe, and booking tools (Calendly or Square Appointments).</li>
         </ul>
 
         <h2 className="text-2xl font-bold text-yellow-300 mt-8 mb-2">2. How We Use Information</h2>
@@ -53,6 +53,12 @@ export default function PrivacyPolicy() {
           <li><b>Payments:</b> Stripe (subscription billing, invoices).</li>
           <li><b>Email:</b> SendGrid (transactional and notification emails).</li>
           <li><b>Calendars:</b> Google Calendar (optional user-connected feature).</li>
+          <li>
+            <b>Bookings:</b> Calendly or Square Appointments (optional, connected by the workspace owner, read-only). RetainAI
+            reads scheduled bookings and their status, and uses each booking's customer email (Square: email or phone) only to
+            match contacts the business already has. It does not store booking-form answers, create contacts, record consent or
+            write anything back to those services.
+          </li>
           <li><b>Messaging:</b> Meta/WhatsApp Cloud API (optional messaging feature).</li>
           <li>
             <b>AI drafting:</b> OpenRouter, which forwards each AI request to a model provider it selects automatically.

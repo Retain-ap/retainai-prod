@@ -59,12 +59,27 @@ test("the Value Receipt keeps estimates separate and makes no protected-value cl
   await waitFor(() => expect(screen.getByRole("alert")).toHaveTextContent("Only the workspace owner can see revenue."));
 });
 
-test("general mode keeps the general playbooks and shows no salon setup", () => {
+test("general mode is the default service-business setup, with Calendly as the booking step", () => {
   render(<RetentionCommandCenter leads={[ana]} appointments={appointments} user={{ timezone: "UTC" }} />);
   expect(screen.queryByRole("region", { name: "Salon and barber setup" })).not.toBeInTheDocument();
+  const panel = screen.getByRole("region", { name: "Service business setup" });
+  expect(within(panel).getByText("General service business setup chosen")).toBeInTheDocument();
+  expect(within(panel).getByText("Bring in bookings from Calendly")).toBeInTheDocument();
+  expect(within(panel).getByText(/Importing or syncing never records consent/)).toBeInTheDocument();
+  expect(panel).toHaveTextContent(/No bookings imported from a booking platform yet/);
+  expect(panel).not.toHaveTextContent(/connected to Calendly/i); // never claims a live connection
   fireEvent.click(screen.getByRole("tab", { name: "Playbooks" }));
   expect(screen.getByText("Recover unpaid invoices")).toBeInTheDocument();
   expect(screen.queryByText("Day-before appointment reminder")).not.toBeInTheDocument();
+});
+
+test("bookings synced from Calendly tick the booking step and are counted, not named", () => {
+  const synced = { ...appointments[0], source: "calendly", id: "calendly:E1:I1" };
+  render(<RetentionCommandCenter leads={[ana]} appointments={[synced, ...appointments.slice(1)]} user={{ timezone: "UTC" }} />);
+  const panel = screen.getByRole("region", { name: "Service business setup" });
+  expect(panel).toHaveTextContent("1 booking imported from Calendly, plus appointments added in RetainAI.");
+  expect(within(panel).queryByRole("button", { name: "Open" })).not.toBeInTheDocument();
+  expect(panel).not.toHaveTextContent("Ana Rivera");
 });
 
 test("the salon preset adds a checklist, count-only metrics and review-only playbooks", () => {
@@ -87,7 +102,7 @@ test("the salon preset adds a checklist, count-only metrics and review-only play
   expect(within(metrics).getByTestId("salon-metric-dueNow")).toHaveTextContent(/^1Due to rebook this week$/);
   expect(within(metrics).getByTestId("salon-metric-noShowRate30")).toHaveTextContent(/^100%No-show rate/);
   expect(panel).not.toHaveTextContent("Ana Rivera"); // counts only, no names
-  expect(panel).toHaveTextContent(/none connected yet/);
+  expect(panel).toHaveTextContent(/No bookings imported from a booking platform yet/);
 
   fireEvent.click(within(panel).getByRole("button", { name: "Review" }));
   expect(screen.getByText("Day-before appointment reminder")).toBeInTheDocument();

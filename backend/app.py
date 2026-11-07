@@ -10565,6 +10565,7 @@ from partner_commissions import partners_bp, signup_partner
 from app_wa_auto_appointments import WA_AUTO_BP
 from app_value import value_bp, record_followup
 from app_square import square_bp
+from app_calendly import calendly_bp
 
 app.register_blueprint(imports_bp)
 app.register_blueprint(team_bp)
@@ -10574,6 +10575,7 @@ app.register_blueprint(account_bp)
 app.register_blueprint(WA_AUTO_BP)
 app.register_blueprint(value_bp)
 app.register_blueprint(square_bp)
+app.register_blueprint(calendly_bp)
 
 
 # ----------------------------

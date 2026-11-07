@@ -171,7 +171,7 @@ test("the owner can choose the optional salon and barber preset; general is the 
     </MemoryRouter>
   );
 
-  expect(await screen.findByText("General")).toBeInTheDocument();
+  expect(await screen.findByText("General service business")).toBeInTheDocument();
   fireEvent.click(await screen.findByRole("button", { name: "Edit Profile" }));
   fireEvent.change(screen.getByLabelText("Setup preset"), { target: { value: "salon_barber" } });
   fireEvent.click(screen.getByRole("button", { name: "Save" }));

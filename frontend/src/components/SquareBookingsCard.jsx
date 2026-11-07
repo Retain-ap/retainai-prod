@@ -102,9 +102,9 @@ export default function SquareBookingsCard() {
     <section className="product-card" aria-label="Square Appointments">
       <div className="product-card-header">
         <div>
-          <h2>Square Appointments (read-only)</h2>
+          <h2>Square Appointments (optional, read-only)</h2>
           <p className="product-card-copy">
-            Imports your Square bookings so rebooking and the Value Receipt use real visits. RetainAI reads bookings and each
+            For businesses that book through Square instead of Calendly. Imports your Square bookings so rebooking and the Value Receipt use real visits. RetainAI reads bookings and each
             booking customer's email or phone only to match contacts you already have. It never changes Square, adds contacts,
             records consent or messages anyone.
           </p>

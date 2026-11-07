@@ -3,6 +3,7 @@ import { FaCloudUploadAlt, FaGoogle, FaHistory, FaUndo } from "react-icons/fa";
 import { apiUrl } from "../apiBase";
 import "./product-system.css";
 import "./ImportContacts.css";
+import CalendlyBookingsCard from "./CalendlyBookingsCard";
 import SquareBookingsCard from "./SquareBookingsCard";
 
 export const FIELDS = [
@@ -314,6 +315,8 @@ export default function ImportContacts({ user, focusGoogle = false }) {
           {google?.google_connected ? <button type="button" className="product-button danger" onClick={disconnectGoogle} disabled={Boolean(busy)}>{busy === "google-disconnect" ? "Disconnecting…" : "Disconnect"}</button> : null}
         </div>
       </section>
+
+      <CalendlyBookingsCard />
 
       <SquareBookingsCard />
 

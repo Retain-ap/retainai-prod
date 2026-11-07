@@ -890,11 +890,11 @@ export default function Settings({
                         setForm((f) => ({ ...f, preset: e.target.value }));
                       }}
                     >
-                      <option value="general">General (any business)</option>
-                      <option value="salon_barber">Salon and barber</option>
+                      <option value="general">General service business</option>
+                      <option value="salon_barber">Salon and barber (optional preset)</option>
                     </select>
                   ) : (
-                    <div className="field-value">{form.preset === "salon_barber" ? "Salon and barber" : "General"}</div>
+                    <div className="field-value">{form.preset === "salon_barber" ? "Salon and barber" : "General service business"}</div>
                   )}
                 </div>
 

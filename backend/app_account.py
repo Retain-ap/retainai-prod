@@ -34,6 +34,7 @@ _WORKSPACE_JSON_FILES = (
     "revenue_evidence.json",
     "followup_log.json",
     "square_connections.json",
+    "calendly_connections.json",
 )
 
 
@@ -167,11 +168,17 @@ def _purge_workspace(workspace, users):
     # storage helper ensures an owner exists while replacing contacts.
     save_user_leads(workspace, [])
     delete_users(removed)
+    # Tell Square and Calendly to forget RetainAI's authorization before the tokens go.
     try:
-        # Tell Square to forget RetainAI's authorization before the tokens go.
-        from app_square import revoke_workspace
+        from app_square import revoke_workspace as revoke_square
 
-        revoke_workspace(workspace)
+        revoke_square(workspace)
+    except Exception:
+        pass
+    try:
+        from app_calendly import revoke_workspace as revoke_calendly
+
+        revoke_calendly(workspace)
     except Exception:
         pass
     _purge_workspace_json(workspace)
@@ -301,10 +308,12 @@ def _workspace_records(workspace):
 
     revenue = read("revenue_evidence.json").get(workspace) or {}
     square = read("square_connections.json").get(workspace) or {}
+    calendly = read("calendly_connections.json").get(workspace) or {}
     return {
         "payments": list((revenue.get("records") or {}).values()),
         "follow_ups": read("followup_log.json").get(workspace) or [],
         "square": {key: value for key, value in square.items() if "token" not in key.lower() and key != "pending"} or None,
+        "calendly": {key: value for key, value in calendly.items() if "token" not in key.lower()} or None,
     }
 
 

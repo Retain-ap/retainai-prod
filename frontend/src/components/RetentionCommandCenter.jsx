@@ -19,7 +19,7 @@ import {
   parseAppointmentDateTime,
 } from "./appointmentDateTime";
 import ValueReceipt from "./ValueReceipt";
-import SalonSetupPanel, { SALON_PLAYBOOKS } from "./SalonSetupPanel";
+import ServiceSetupPanel, { SALON_PLAYBOOKS } from "./ServiceSetupPanel";
 import { dueForRebooking, rebookingSuggestions } from "../rebooking";
 import "./product-system.css";
 
@@ -192,16 +192,15 @@ export default function RetentionCommandCenter({ leads = [], appointments = [], 
 
       {tab === "briefing" && (
         <div className="product-grid">
-          {salonPreset && (
-            <SalonSetupPanel
-              leads={leads}
-              appointments={appointments}
-              rebooking={rebooking}
-              today={dayKeyNow(workspaceTimeZone)}
-              onOpenPlaybooks={() => setTab("playbooks")}
-              onOpenImports={onOpenImports}
-            />
-          )}
+          <ServiceSetupPanel
+            preset={salonPreset ? "salon_barber" : "general"}
+            leads={leads}
+            appointments={appointments}
+            rebooking={rebooking}
+            today={dayKeyNow(workspaceTimeZone)}
+            onOpenPlaybooks={() => setTab("playbooks")}
+            onOpenImports={onOpenImports}
+          />
           <section className="product-card">
             <div className="product-card-header"><div><h2>Today’s priorities</h2><p className="product-card-copy">The highest-impact actions to take now.</p></div></div>
             <div className="insight-list">
