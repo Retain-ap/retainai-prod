@@ -8,7 +8,7 @@ export default function PrivacyPolicy() {
         <h1 className="text-3xl md:text-4xl font-bold text-yellow-400 mb-7">Privacy Policy</h1>
 
         <p className="text-sm text-gray-400 mb-8">
-          Effective August 21, 2026 · Updated November 7, 2026 (AI processing details; optional booking connections)
+          Effective August 21, 2026 · Updated November 7, 2026 (one fixed AI model and provider; optional booking connections)
         </p>
 
         <p className="mb-6">
@@ -61,8 +61,8 @@ export default function PrivacyPolicy() {
           </li>
           <li><b>Messaging:</b> Meta/WhatsApp Cloud API (optional messaging feature).</li>
           <li>
-            <b>AI drafting:</b> OpenRouter, which forwards each AI request to a model provider it selects automatically.
-            The provider can differ from one request to the next. See “AI Features” below.
+            <b>AI drafting:</b> OpenRouter, which passes each AI request to one fixed model, OpenAI&apos;s GPT-4.1 mini, run only
+            by OpenAI. See “AI Features” below.
           </li>
           <li><b>Infrastructure/Analytics:</b> hosting, error logging, usage analytics (if enabled).</li>
         </ul>
@@ -73,11 +73,14 @@ export default function PrivacyPolicy() {
 
         <h2 className="text-2xl font-bold text-yellow-300 mt-8 mb-2">AI Features</h2>
         <p className="mb-3">
-          RetainAI&apos;s AI drafts and suggestions are produced by sending a request to{" "}
-          <a href="https://openrouter.ai/privacy" className="text-yellow-300 underline" target="_blank" rel="noreferrer">OpenRouter</a>.
-          RetainAI uses OpenRouter&apos;s automatic routing, so OpenRouter chooses the model and the company that processes each
-          request, and may use a different one if the first is unavailable. That provider receives the request and processes it
-          under OpenRouter&apos;s and its own policies.
+          RetainAI&apos;s AI drafts and suggestions are produced by sending a request through{" "}
+          <a href="https://openrouter.ai/privacy" className="text-yellow-300 underline" target="_blank" rel="noreferrer">OpenRouter</a>{" "}
+          to one fixed model, OpenAI&apos;s GPT-4.1 mini (<code>openai/gpt-4.1-mini</code>), processed only by{" "}
+          <a href="https://openai.com/policies/privacy-policy/" className="text-yellow-300 underline" target="_blank" rel="noreferrer">OpenAI</a>.
+          RetainAI does not use OpenRouter&apos;s automatic model selection, and fallback to other providers or models is turned
+          off. If OpenAI can&apos;t take a request, the AI feature says it is unavailable and the request is not sent anywhere
+          else; writing and sending messages yourself keeps working. OpenRouter and OpenAI process each request under their own
+          policies.
         </p>
         <p className="mb-3">Depending on the feature, a request can include:</p>
         <ul className="list-disc ml-6 mb-3 space-y-2">
@@ -97,9 +100,9 @@ export default function PrivacyPolicy() {
           written in them, including contact details.
         </p>
         <p className="mb-6">
-          RetainAI asks OpenRouter to use only providers that do not collect request data for training, and the training and
+          RetainAI asks OpenRouter to route only to providers that do not collect request data, and the training and
           data-sharing options on RetainAI&apos;s OpenRouter account are turned off. Zero-data-retention routing is not currently
-          enabled, so the provider that handles a request may keep it for a limited time under its own policy. RetainAI does not
+          enabled, so OpenAI may keep a request for a limited time under its own policy, for example to detect abuse. RetainAI does not
           use your data or Google user data to train AI models. You review AI drafts before you send them, except for messages
           sent by automations you turn on.
         </p>

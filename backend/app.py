@@ -120,6 +120,7 @@ PREVIOUS_DATA_ENCRYPTION_KEY = str(
 ).strip()
 from account_history import record_trial_start, trial_previously_used
 import rate_limit
+import ai_route
 _validate_production_secrets(
     IS_PRODUCTION,
     SESSION_SECRET,
@@ -1797,8 +1798,6 @@ def api_profile():
 # ----------------------------
 # OpenRouter helpers
 # ----------------------------
-AI_MODEL_ORDER_PROMPT = ["openrouter/auto"]
-
 AI_TONE_GUIDANCE = {
     "warm": "Warm and considerate, with calm confidence. Avoid gushiness and sales hype.",
     "professional": "Clear, polished, and courteous. Use plain language rather than corporate jargon.",
@@ -1878,75 +1877,20 @@ def _clean_ai_text(text: str, max_chars: int = 1800) -> str:
     return s
 
 
-def _safe_openrouter_error(status: Any = None, payload: Any = None) -> Dict[str, Any]:
-    summary: Dict[str, Any] = {"error": "ai_provider_unavailable"}
-    if status is not None:
-        try:
-            summary["status"] = int(status)
-        except (TypeError, ValueError):
-            pass
-    if isinstance(payload, dict):
-        error = payload.get("error")
-        if isinstance(error, dict):
-            code = error.get("code") or error.get("type")
-            if code:
-                summary["code"] = _bounded_ai_text(code, 80)
-    return summary
-
-
 def _complete_openrouter_prompt(messages, *, max_tokens=150, temperature=0.35, timeout=25):
-    key = OPENROUTER_API_KEY
-    if not key:
-        return False, "", {"error": "OPENROUTER_API_KEY missing"}
-
-    last_err = None
-    for model in AI_MODEL_ORDER_PROMPT:
-        attempt_tokens = max(40, min(int(max_tokens), 600))
-        for attempt in range(2):
-            try:
-                r = pyrequests.post(
-                    "https://openrouter.ai/api/v1/chat/completions",
-                    headers={
-                        "Authorization": f"Bearer {key}",
-                        "Content-Type": "application/json",
-                    },
-                    json={
-                        "model": model,
-                        "messages": messages,
-                        "max_tokens": attempt_tokens,
-                        "temperature": float(temperature),
-                        "provider": {
-                            "allow_fallbacks": True,
-                            "data_collection": "deny",
-                        },
-                    },
-                    timeout=timeout,
-                )
-                ct = r.headers.get("content-type", "")
-                j = r.json() if "application/json" in ct.lower() else {}
-
-                if r.ok and j.get("choices"):
-                    txt = j["choices"][0]["message"]["content"]
-                    return True, _clean_ai_text(txt), {
-                        "model": _bounded_ai_text(j.get("model") or model, 120),
-                        "status": r.status_code,
-                        "tokens": attempt_tokens,
-                    }
-
-                if r.status_code in (429,) or (500 <= r.status_code < 600):
-                    time.sleep(0.7 + attempt * 0.4)
-                    attempt_tokens = max(60, int(attempt_tokens * 0.9))
-                    continue
-
-                last_err = _safe_openrouter_error(r.status_code, j)
-                break
-
-            except Exception as e:
-                last_err = {"error": "ai_provider_unavailable", "kind": type(e).__name__}
-                time.sleep(0.4 + attempt * 0.3)
-                continue
-
-    return False, "", {"error": "all_models_failed", "last": last_err}
+    """Every AI request goes through the fixed route in ai_route: openai/gpt-4.1-mini
+    served only by OpenAI, no provider or model fallback, no data collection, and a
+    price ceiling. Returns (ok, text, meta); meta never holds prompts or keys."""
+    ok, text, meta = ai_route.complete(
+        messages,
+        api_key=OPENROUTER_API_KEY,
+        max_tokens=max_tokens,
+        temperature=temperature,
+        timeout=timeout,
+        post=pyrequests.post,
+        sleep=time.sleep,
+    )
+    return ok, (_clean_ai_text(text) if ok else ""), meta
 
 
 # ----------------------------
@@ -8214,7 +8158,7 @@ def ai_prompt():
         "",
     )
 
-    if not os.getenv("OPENROUTER_API_KEY"):
+    if not OPENROUTER_API_KEY:
         return jsonify({"error": "OPENROUTER_API_KEY is not configured"}), 500
 
     reference = {
