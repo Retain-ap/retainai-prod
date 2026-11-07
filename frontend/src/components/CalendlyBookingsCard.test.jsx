@@ -38,18 +38,31 @@ test("connect asks the server for the Calendly authorize address", async () => {
   window.location = original;
 });
 
-test("syncs on request and explains unmatched, cancelled and partial reads", async () => {
-  global.fetch = jest.fn(async (url, options = {}) => {
-    if (String(url).endsWith("/calendly/sync") && options.method === "POST") {
-      return respond(200, { events: 6, invitees: 6, imported: 5, updated: 0, unchanged: 0, unmatched: 1, cancelled: 2, rescheduled: 1, truncated: true });
-    }
-    return respond(200, { configured: true, connected: true, account: "…SER1", last_sync: null });
+function syncing(result, status = { configured: true, connected: true, account: "…SER1", last_sync: null }) {
+  return jest.fn(async (url, options = {}) => {
+    if (String(url).endsWith("/calendly/sync") && options.method === "POST") return respond(200, result);
+    return respond(200, status);
   });
+}
+
+test("syncs on request and explains unmatched, cancelled and capped reads", async () => {
+  global.fetch = syncing({ events: 6, invitees: 6, imported: 5, updated: 0, unchanged: 0, unmatched: 1, skipped: 0, cancelled: 2, rescheduled: 1, truncated: true, pass_complete: true, stopped: null });
   render(<CalendlyBookingsCard />);
   expect(await screen.findByText(/Connected to Calendly user …SER1/)).toBeInTheDocument();
   fireEvent.click(screen.getByRole("button", { name: "Sync now" }));
   expect(await screen.findByText(
-    "Read 6 Calendly events: 5 new, 0 updated, 0 unchanged. 1 invitee skipped because the email matches no single RetainAI contact; 2 cancelled, 1 of them rescheduled; only part of your Calendly history was read this time."
+    "Read 6 Calendly events: 5 new, 0 updated, 0 unchanged. 1 invitee skipped because the email matches no single RetainAI contact; 2 cancelled, 1 of them rescheduled. Calendly history beyond RetainAI's limit for one pass wasn't read."
+  )).toBeInTheDocument();
+});
+
+test("a bounded or rate-limited sync says progress is saved and how to continue", async () => {
+  global.fetch = syncing({ events: 3, invitees: 3, imported: 3, updated: 0, unchanged: 0, unmatched: 0, skipped: 1, cancelled: 0, rescheduled: 0, truncated: false, pass_complete: false, stopped: "rate_limited", retry_after: 37 },
+    { configured: true, connected: true, account: "…SER1", last_sync: null, sync_in_progress: true });
+  render(<CalendlyBookingsCard />);
+  expect(await screen.findByText(/A sync is partway through; press Sync now to continue it\./)).toBeInTheDocument();
+  fireEvent.click(screen.getByRole("button", { name: "Sync now" }));
+  expect(await screen.findByText(
+    "Read 3 Calendly events: 3 new, 0 updated, 0 unchanged. 1 booking skipped because Calendly sent an unknown status or no valid time. Calendly's rate limit was reached. Progress is saved; press Sync now again in about 37 seconds to continue."
   )).toBeInTheDocument();
 });
 

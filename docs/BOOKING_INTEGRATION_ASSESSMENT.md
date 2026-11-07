@@ -61,20 +61,44 @@ and the API reference for scheduled events and invitees.
     `auth.calendly.com/oauth/revoke` and deletes them. If Calendly can't confirm
     the revoke, the tokens are still deleted and the owner is told to remove
     RetainAI in Calendly's integrations settings too.
-- **Sync (manual "Sync now"; no webhooks):**
-  - Reads the owner's own events (`user=<owner uri>`) from 180 days back to 60
-    days ahead, sorted by start time, 100 per page, up to 1,000 events and
-    2,000 invitees. A capped read is reported as partial.
-  - On 429 it waits the `X-RateLimit-Reset` seconds (at most 65) and retries;
-    Calendly allows 50 requests/minute on free plans and 500 on paid ones.
+- **Sync (manual "Sync now"; no webhooks), bounded and resumable:**
+  - A pass reads the owner's own events (`user=<owner uri>`) in a fixed window,
+    from 180 days back to 60 days ahead, sorted by start time, 100 per page.
+    The caps per pass are exactly 1,000 events and 2,000 invitees, with at most
+    5 invitee pages per event. A repeated or looping page token ends the pass.
+    Hitting a cap is reported.
+  - **Each Sync is one bounded step:** at most 40 requests (under the free
+    plan's 50 per minute) and 20 seconds, so it finishes well inside the web
+    worker's timeout. On a 429 it **does not sleep**: it stops, saves its
+    progress and says how many seconds Calendly asked to wait
+    (`X-RateLimit-Reset`). Network and server errors get one 1-second retry. A
+    persistent error saves nothing from that step.
+  - **Progress lives in a server-side cursor** stored with the connection:
+    window, page, position and counts. It is bound to the connection
+    generation and the Calendly user, and expires after 24 hours. It holds no
+    OAuth credentials, and it is never shown in the UI or included in the
+    account export. The cursor advances past an event only once all its
+    invitees are read. The next Sync continues from it. When the window has
+    been read completely, the cursor is cleared and the following Sync starts a
+    fresh pass, so later cancellations and reschedules are picked up rather
+    than the earliest events being re-read forever.
+  - **Writes are safe across disconnects:** every connect gets a new
+    `connection_id`. A step's results are written in one commit that first
+    re-checks, under the connection lock and then the appointments lock, that
+    the same connection and Calendly user are still in place and the workspace
+    still exists. A sync that outlives a disconnect, reconnect or account
+    deletion writes nothing (409 or 401).
   - Imports only invitees whose email matches **exactly one** existing RetainAI
-    contact. **No contact is created**, no consent recorded or inferred, nothing
-    sent, no automation started. Booking-question answers, tracking data and
-    payment details are not stored.
+    contact. **No contact is created**, no consent is recorded or inferred,
+    nothing is sent and no automation is started. Booking-question answers,
+    tracking data and payment details are not stored.
   - Idempotent on `calendly:<event uuid>:<invitee uuid>`: a re-sync updates
-    status or time, and never duplicates or deletes. Appointments from other
+    status or time and never duplicates or deletes. Appointments from other
     sources are untouched.
 - **Status mapping:**
+  - Only documented statuses count: event `active`/`canceled` and invitee
+    `active`/`canceled`. Any other status, or a missing or invalid start time,
+    means the row is skipped and reported. Nothing unknown is treated as a visit.
   - Event or invitee `canceled` becomes cancelled; the canceler type is kept.
   - A reschedule in Calendly cancels the old invitee (`rescheduled: true`, with
     `new_invitee`) and creates a new one: the old booking is kept as cancelled

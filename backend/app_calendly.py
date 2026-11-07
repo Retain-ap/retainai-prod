@@ -8,6 +8,7 @@ reports only what is stored; there is no simulated connection.
 import datetime as dt
 import hashlib
 import os
+import uuid
 from urllib.parse import urlencode
 
 from flask import Blueprint, jsonify, redirect, request, session
@@ -96,6 +97,7 @@ def _public(connection, config):
         "account": _masked(connection.get("user_uri")),
         "connected_at": connection.get("connected_at") or "",
         "last_sync": connection.get("last_sync") or None,
+        "sync_in_progress": bool(connection.get("sync_cursor")),
         "scopes": list(cal.REQUIRED_SCOPES),
     }
 
@@ -181,7 +183,11 @@ def calendly_callback():
             return "different_account"
         connection = {**current, "user_uri": user_uri, "organization_uri": str(tokens.get("organization") or "")[:200],
                       "granted_scope": str(tokens.get("scope") or "")[:200],
+                      # A new generation on every connect: a sync started under an
+                      # earlier connection can never write after a reconnect.
+                      "connection_id": uuid.uuid4().hex,
                       "connected_by": actor, "connected_at": current.get("connected_at") or vr._iso(now)}
+        connection.pop("sync_cursor", None)
         _store_tokens(connection, tokens, now)
         data[workspace] = connection
         return ""
@@ -202,7 +208,11 @@ def calendly_callback():
     return _back(calendly="connected")
 
 
-def _access_token(workspace, config, *, guard=None, force_refresh=False):
+class ConnectionChanged(RuntimeError):
+    """Calendly was disconnected or reconnected while a sync was running."""
+
+
+def _access_token(workspace, config, *, guard=None, force_refresh=False, connection_id=None):
     """A valid access token. Renewal happens under the file lock so two syncs
     never spend the same single-use refresh token."""
     key, previous = _keys()
@@ -211,6 +221,8 @@ def _access_token(workspace, config, *, guard=None, force_refresh=False):
         connection = data.get(workspace) or {}
         if not connection.get("user_uri"):
             raise LookupError("not_connected")
+        if connection_id is not None and connection.get("connection_id") != connection_id:
+            raise ConnectionChanged()
         if connection.get("status") != "connected":
             raise cal.CalendlyAuthError("needs_reconnect")
         expires = vr._utc(connection.get("expires_at"))
@@ -235,6 +247,14 @@ def _access_token(workspace, config, *, guard=None, force_refresh=False):
 
 @calendly_bp.post("/api/calendly/sync")
 def calendly_sync():
+    """One bounded step of a pass over the owner's Calendly window.
+
+    Reads at most SYNC_REQUEST_BUDGET requests / SYNC_TIME_BUDGET_SECONDS,
+    never sleeps for a rate limit, and saves a server-side cursor so the next
+    Sync continues. Everything read in this step is written in one commit that
+    first re-checks, under the connection and appointment locks, that the same
+    Calendly connection is still in place.
+    """
     import app as core
 
     ctx, error = _owner()
@@ -245,29 +265,54 @@ def calendly_sync():
         return jsonify({"error": "Calendly isn't available: credentials are not configured."}), 503
     workspace, now = ctx["workspace"], _now()
     client = _client(config)
+    changed = (jsonify({"error": "Calendly was disconnected or reconnected during this sync. Nothing from it was saved."}), 409)
     try:
-        user_uri = _load(workspace).get("user_uri")
-        token = _access_token(workspace, config, guard=ctx["guard"])
+        connection = _load(workspace)
+    except vr.EvidenceStoreError:
+        return jsonify({"error": "Calendly connection details can't be read right now."}), 503
+    user_uri, connection_id = connection.get("user_uri"), connection.get("connection_id") or ""
+    if not user_uri:
+        return jsonify({"error": "Calendly isn't connected."}), 400
+    cursor, continuing = cal.cursor_for(connection.get("sync_cursor"), connection_id, user_uri, now)
+    budget = cal.Budget()
+    held = {"token": None, "renewed": False}
+
+    def call(request_with):
+        if held["token"] is None:
+            held["token"] = _access_token(workspace, config, guard=ctx["guard"], connection_id=connection_id)
         try:
-            events, pairs, truncated = cal.fetch(client, token, user_uri, now)
+            return request_with(held["token"])
         except cal.CalendlyAuthError:
-            token = _access_token(workspace, config, guard=ctx["guard"], force_refresh=True)
-            events, pairs, truncated = cal.fetch(client, token, user_uri, now)
+            if held["renewed"]:
+                raise
+            held["renewed"] = True  # one forced renewal per sync
+            held["token"] = _access_token(workspace, config, guard=ctx["guard"], connection_id=connection_id, force_refresh=True)
+            return request_with(held["token"])
+
+    try:
+        step = cal.fetch_step(client, call, cursor, budget)
+    except ConnectionChanged:
+        return changed
     except LookupError:
         return jsonify({"error": "Calendly isn't connected."}), 400
     except cal.CalendlyAuthError:
         return jsonify({"error": "Calendly no longer accepts RetainAI's access. Reconnect Calendly to continue."}), 409
     except cal.CalendlyError as exc:
-        return jsonify({"error": f"Calendly could not be read: {exc}"}), 502
+        return jsonify({"error": f"Calendly could not be read: {exc} Nothing from this sync was saved."}), 502
     except vr.EvidenceStoreError:
         return jsonify({"error": "Calendly connection details can't be read right now."}), 503
 
     index = cal.email_index(load_user_leads(workspace))
     timezone_name = ctx["owner"].get("timezone") or "UTC"
-    results = {"events": len(events), "invitees": len(pairs), "imported": 0, "updated": 0, "unchanged": 0,
-               "unmatched": 0, "skipped": 0, "cancelled": 0, "rescheduled": 0, "truncated": truncated}
+    finished = step["state"] in ("complete", "truncated")
+    results = {"events": step["events"], "invitees": len(step["pairs"]), "imported": 0, "updated": 0, "unchanged": 0,
+               "unmatched": 0, "skipped": 0, "cancelled": 0, "rescheduled": 0,
+               "pass_complete": finished, "continued": continuing,
+               "truncated": step["state"] == "truncated", "notes": step["notes"],
+               "stopped": step["state"] if not finished else None, "retry_after": step["retry_after"],
+               "pass_events": step["cursor"]["events_seen"]}
     mapped = []
-    for event, invitee in pairs:
+    for event, invitee in step["pairs"]:
         status, rescheduled = cal.map_status(event, invitee, now)
         if not status:
             results["skipped"] += 1
@@ -281,36 +326,48 @@ def calendly_sync():
         results["rescheduled"] += rescheduled
         mapped.append(cal.to_appointment(event, invitee, matches[0], workspace=workspace, timezone_name=timezone_name,
                                          status=status, rescheduled=rescheduled))
-
-    appointments_path = os.path.join(DATA_ROOT, "appointments.json")
-    with vr._locked(appointments_path):
-        ctx["guard"]()  # deleted while Calendly was being read: write nothing
-        all_appointments = core.load_appointments() or {}
-        rows = list(all_appointments.get(workspace) or [])
-        index_by_id = {str(row.get("id")): i for i, row in enumerate(rows) if isinstance(row, dict) and str(row.get("id") or "").startswith("calendly:")}
-        fields = ("status", "appointment_time", "duration", "calendly_status", "calendly_invitee_status",
-                  "calendly_rescheduled", "lead_id", "title", "timezone")
-        for appointment in mapped:
-            position = index_by_id.get(appointment["id"])
-            if position is None:
-                rows.append(appointment)
-                index_by_id[appointment["id"]] = len(rows) - 1
-                results["imported"] += 1
-            elif all(rows[position].get(field) == appointment.get(field) for field in fields):
-                results["unchanged"] += 1
-            else:
-                rows[position] = {**rows[position], **appointment}
-                results["updated"] += 1
-        all_appointments[workspace] = rows
-        core.save_appointments(all_appointments)
-
     results["at"] = vr._iso(now)
+    appointments_path = os.path.join(DATA_ROOT, "appointments.json")
+    fields = ("status", "appointment_time", "duration", "calendly_status", "calendly_invitee_status",
+              "calendly_rescheduled", "lead_id", "title", "timezone")
 
-    def remember(data):
-        if (data.get(workspace) or {}).get("user_uri"):
-            data[workspace]["last_sync"] = results
+    def commit(data):
+        current = data.get(workspace) or {}
+        if current.get("connection_id", "") != connection_id or current.get("user_uri") != user_uri:
+            raise ConnectionChanged()
+        with vr._locked(appointments_path):
+            ctx["guard"]()  # deleted while Calendly was being read: write nothing
+            all_appointments = core.load_appointments() or {}
+            rows = list(all_appointments.get(workspace) or [])
+            positions = {str(row.get("id")): i for i, row in enumerate(rows)
+                         if isinstance(row, dict) and str(row.get("id") or "").startswith("calendly:")}
+            for appointment in mapped:
+                position = positions.get(appointment["id"])
+                if position is None:
+                    rows.append(appointment)
+                    positions[appointment["id"]] = len(rows) - 1
+                    results["imported"] += 1
+                elif all(rows[position].get(field) == appointment.get(field) for field in fields):
+                    results["unchanged"] += 1
+                else:
+                    rows[position] = {**rows[position], **appointment}
+                    results["updated"] += 1
+            if mapped:
+                all_appointments[workspace] = rows
+                core.save_appointments(all_appointments)
+        if finished:
+            current.pop("sync_cursor", None)  # the next Sync starts a fresh pass
+        else:
+            current["sync_cursor"] = step["cursor"]
+        current["last_sync"] = results
+        data[workspace] = current
 
-    _update(remember, ctx["guard"])
+    try:
+        _update(commit, ctx["guard"])
+    except ConnectionChanged:
+        return changed
+    except vr.EvidenceStoreError:
+        return jsonify({"error": "Calendly connection details can't be read right now."}), 503
     return jsonify({"ok": True, **results}), 200
 
 

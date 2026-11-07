@@ -75,11 +75,21 @@ export default function CalendlyBookingsCard() {
       const r = await call("calendly/sync", { method: "POST" });
       const notes = [];
       if (r.unmatched) notes.push(`${plural(r.unmatched, "invitee")} skipped because the email matches no single RetainAI contact`);
+      if (r.skipped) notes.push(`${plural(r.skipped, "booking")} skipped because Calendly sent an unknown status or no valid time`);
       if (r.cancelled) notes.push(`${r.cancelled} cancelled${r.rescheduled ? `, ${r.rescheduled} of them rescheduled` : ""}`);
-      if (r.truncated) notes.push("only part of your Calendly history was read this time");
+      let next = "";
+      if (r.stopped === "rate_limited") {
+        next = ` Calendly's rate limit was reached. Progress is saved; press Sync now again in about ${r.retry_after || 60} seconds to continue.`;
+      } else if (r.stopped) {
+        next = " This sync read as much as it can at once. Progress is saved; press Sync now again to continue.";
+      } else if (r.truncated) {
+        next = " Calendly history beyond RetainAI's limit for one pass wasn't read.";
+      } else if (r.pass_complete) {
+        next = " Your Calendly window is fully read; the next sync starts again from the beginning to pick up changes.";
+      }
       setMessage({
         ok: true,
-        text: `Read ${plural(r.events, "Calendly event")}: ${r.imported} new, ${r.updated} updated, ${r.unchanged} unchanged.${notes.length ? ` ${notes.join("; ")}.` : ""}`,
+        text: `Read ${plural(r.events, "Calendly event")}: ${r.imported} new, ${r.updated} updated, ${r.unchanged} unchanged.${notes.length ? ` ${notes.join("; ")}.` : ""}${next}`,
       });
       await load();
     } catch (error) {
@@ -135,6 +145,7 @@ export default function CalendlyBookingsCard() {
           <p className="product-card-copy" style={{ width: "100%" }}>
             {status.needs_reconnect ? "Calendly no longer accepts RetainAI's access. Disconnect, then connect again to keep importing." : `Connected to Calendly user ${status.account}.`}
             {" "}Last sync: {when(status.last_sync?.at)}.
+            {status.sync_in_progress && status.connected ? " A sync is partway through; press Sync now to continue it." : ""}
           </p>
           {status.connected && <button type="button" className="product-button primary" onClick={sync} disabled={Boolean(busy)}>{busy === "sync" ? "Syncing…" : "Sync now"}</button>}
           <button type="button" className="product-button danger" onClick={disconnect} disabled={Boolean(busy)}>{busy === "disconnect" ? "Disconnecting…" : "Disconnect"}</button>

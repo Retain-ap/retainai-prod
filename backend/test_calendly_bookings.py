@@ -65,6 +65,7 @@ class FakeCalendly:
         self.owner_uri = f"{API}/users/USER1"
         self.scope = "scheduled_events:read"
         self.refresh_count = 0
+        self.loop_events = self.loop_invitees = False
 
     def push(self, path, *responses):
         self.queue.setdefault(path, []).extend(responses)
@@ -86,14 +87,18 @@ class FakeCalendly:
                                   "owner": self.owner_uri, "organization": f"{API}/organizations/ORG1", "scope": self.scope})
         if path == "/oauth/revoke":
             return Response(200, {})
+        if path == "/scheduled_events" and self.loop_events:
+            return Response(200, {"collection": self.events[:1], "pagination": {"next_page_token": "same"}})
         if path == "/scheduled_events":
-            ordered = sorted(self.events, key=lambda e: e["start_time"])
+            ordered = sorted(self.events, key=lambda e: str(e.get("start_time") or ""))
             start = int((params or {}).get("page_token") or 0)
             size = int(params["count"])
             page = ordered[start:start + size]
             nxt = str(start + size) if start + size < len(ordered) else None
             return Response(200, {"collection": page, "pagination": {"next_page_token": nxt}})
         if path.startswith("/scheduled_events/") and path.endswith("/invitees"):
+            if self.loop_invitees:
+                return Response(200, {"collection": self.invitees.get(path.split("/")[2], [])[:1], "pagination": {"next_page_token": "again"}})
             return Response(200, {"collection": self.invitees.get(path.split("/")[2], []), "pagination": {"next_page_token": None}})
         return Response(404, {"title": "Resource Not Found"})
 
@@ -327,31 +332,153 @@ class CalendlyTests(unittest.TestCase):
         self.assertEqual(self.sync(client).status_code, 409)
         self.assertEqual(len(self.token_calls()), before)  # a dead refresh token is not retried
 
-    def test_rate_limit_waits_for_the_reset_header_and_persistent_failure_changes_nothing(self):
-        self.fake.events = [event("PAST", -20)]
-        self.fake.invitees = {"PAST": [invitee("PAST", "I1")]}
+    def invitee_calls(self):
+        return [c for c in self.fake.calls if c["path"].endswith("/invitees")]
+
+    def many(self, count, per_event=1, start=-100):
+        self.fake.events = [event(f"E{i:03d}", start + i) for i in range(count)]
+        self.fake.invitees = {f"E{i:03d}": [invitee(f"E{i:03d}", f"I{i}x{j}") for j in range(per_event)] for i in range(count)}
+
+    def test_the_event_cap_is_exact_and_every_capped_event_keeps_all_its_invitees(self):
+        self.many(5, per_event=2)
         client, _, _ = self.connect()
-        self.fake.push("/scheduled_events", Response(429, {}, {"X-RateLimit-Reset": "7"}))
-        retried = self.sync(client)
-        self.assertEqual((retried.status_code, retried.get_json()["imported"]), (200, 1))
-        self.sleep.assert_any_call(7)
-        self.fake.push("/scheduled_events", Response(500, {}), Response(500, {}), Response(500, {}))
+        with patch.object(cal, "MAX_EVENTS", 3):
+            result = self.sync(client).get_json()
+        self.assertEqual((result["events"], result["invitees"], result["imported"]), (3, 6, 6))
+        self.assertEqual((result["truncated"], result["pass_complete"], result["notes"]), (True, True, ["event_limit"]))
+        self.assertEqual(len(self.invitee_calls()), 3)
+
+    def test_the_event_cap_holds_across_pages_and_a_full_page_at_the_cap(self):
+        self.many(6)
+        client, _, _ = self.connect()
+        with patch.object(cal, "MAX_EVENTS", 4), patch.object(cal, "PAGE_SIZE", 2), patch.object(cal, "SYNC_REQUEST_BUDGET", 100):
+            result = self.sync(client).get_json()
+        self.assertEqual((result["events"], result["imported"], result["truncated"]), (4, 4, True))
+        self.assertEqual(sorted(r["calendly_event_id"] for r in self.appointments()), ["E000", "E001", "E002", "E003"])
+
+    def test_the_invitee_cap_is_exact(self):
+        self.many(3, per_event=2)
+        client, _, _ = self.connect()
+        with patch.object(cal, "MAX_INVITEES", 3):
+            result = self.sync(client).get_json()
+        self.assertEqual((result["invitees"], result["imported"], result["truncated"]), (3, 3, True))
+
+    def test_repeating_page_tokens_end_the_pass_instead_of_looping(self):
+        self.many(1, per_event=2)
+        client, _, _ = self.connect()
+        self.fake.loop_events = self.fake.loop_invitees = True
+        result = self.sync(client).get_json()
+        self.assertTrue(result["truncated"])
+        self.assertIn("pagination_loop", result["notes"])
+        self.assertLessEqual(len([c for c in self.fake.calls if c["host"] == "api.calendly.com"]), 6)
+
+    def test_each_sync_is_bounded_and_resumes_until_the_pass_completes_then_rereads_for_cancellations(self):
+        self.many(6)
+        client, _, _ = self.connect()
+        with patch.object(cal, "PAGE_SIZE", 2), patch.object(cal, "SYNC_REQUEST_BUDGET", 4):
+            first = self.sync(client).get_json()
+            self.assertEqual((first["stopped"], first["pass_complete"], first["imported"]), ("budget", False, 2))
+            self.assertEqual(len([c for c in self.fake.calls if c["host"] == "api.calendly.com"]), 4)
+            with patch.dict(os.environ, CONFIG):
+                status = client.get("/api/calendly/status").get_json()
+            self.assertTrue(status["sync_in_progress"])
+            self.assertNotIn("seen_pages", json.dumps(status))  # the cursor stays on the server
+            import app_account
+            self.assertNotIn("sync_cursor", json.dumps(app_account._workspace_records(self.owner)))
+            seen, rounds = first["imported"], 1
+            while True:
+                step = self.sync(client).get_json()
+                rounds += 1
+                seen += step["imported"]
+                self.assertTrue(step["continued"])
+                if step["pass_complete"]:
+                    break
+                self.assertLess(rounds, 10)
+            self.assertEqual((seen, len(self.appointments())), (6, 6))
+            # A cancellation on the last page is picked up by the next pass.
+            self.fake.events[-1] = event("E005", -95, "canceled")
+            for _ in range(10):
+                step = self.sync(client).get_json()
+                if step["pass_complete"]:
+                    break
+        self.assertEqual({r["calendly_event_id"]: r["status"] for r in self.appointments()}["E005"], "cancelled")
+        self.assertEqual(len(self.appointments()), 6)
+        self.assertFalse([c for c in self.sleep.call_args_list if c.args and c.args[0] > 1])
+
+    def test_a_rate_limit_stops_without_waiting_saves_progress_and_the_next_sync_continues(self):
+        self.many(2)
+        client, _, _ = self.connect()
+        self.fake.push("/scheduled_events/E001/invitees", Response(429, {}, {"X-RateLimit-Reset": "37"}))
+        limited = self.sync(client)
+        body = limited.get_json()
+        self.assertEqual(limited.status_code, 200)
+        self.assertEqual((body["stopped"], body["retry_after"], body["imported"]), ("rate_limited", 37, 1))
+        self.sleep.assert_not_called()
+        after = self.sync(client).get_json()
+        self.assertEqual((after["continued"], after["imported"], after["pass_complete"]), (True, 1, True))
+        self.assertEqual(len(self.appointments()), 2)
+
+    def test_a_persistent_server_error_saves_nothing(self):
+        self.many(1)
+        client, _, _ = self.connect()
+        self.fake.push("/scheduled_events", Response(500, {}), Response(500, {}))
         failed = self.sync(client)
         self.assertEqual(failed.status_code, 502)
-        self.assertEqual(len(self.appointments()), 1)
+        self.assertEqual(self.appointments(), [])
 
-    def test_paging_is_followed_and_large_histories_are_bounded_and_disclosed(self):
-        self.fake.events = [event(f"E{i:03d}", -100 + i) for i in range(150)]
-        self.fake.invitees = {f"E{i:03d}": [invitee(f"E{i:03d}", f"I{i}")] for i in range(150)}
+    def test_malformed_events_and_unknown_statuses_are_skipped_not_counted(self):
+        no_time = {**event("NOTIME", -3, "canceled"), "start_time": None}
+        bad_time = {**event("BADTIME", -3), "start_time": "yesterday"}
+        self.fake.events = [event("PENDING", -2, "pending"), event("ODD", -1), no_time, bad_time]
+        self.fake.invitees = {"PENDING": [invitee("PENDING", "I1")], "ODD": [invitee("ODD", "I2", status="weird")],
+                              "NOTIME": [invitee("NOTIME", "I3", no_show={"uri": "x"})], "BADTIME": [invitee("BADTIME", "I4")]}
         client, _, _ = self.connect()
-        full = self.sync(client).get_json()
-        self.assertEqual((full["events"], full["imported"], full["truncated"]), (150, 150, False))
-        self.assertEqual(len([c for c in self.fake.calls if c["path"] == "/scheduled_events"]), 2)
-        with patch.object(cal, "MAX_EVENTS", 120):
-            capped = self.sync(client).get_json()
-        self.assertEqual((capped["events"], capped["truncated"]), (120, True))
+        result = self.sync(client)
+        self.assertEqual(result.status_code, 200)
+        self.assertEqual((result.get_json()["skipped"], result.get_json()["imported"]), (4, 0))
+        self.assertEqual(self.appointments(), [])
+
+    def test_a_sync_that_outlives_a_disconnect_writes_nothing(self):
+        self.many(2)
+        client, _, _ = self.connect()
+        real = self.fake.request
+
+        def disconnect_mid_read(method, url, **kwargs):
+            if url.endswith("/E001/invitees") and self.owner in self.stored():
+                app_calendly.revoke_workspace(self.owner)
+            return real(method, url, **kwargs)
+
+        self.fake.request = disconnect_mid_read
         with patch.dict(os.environ, CONFIG):
-            self.assertTrue(client.get("/api/calendly/status").get_json()["last_sync"]["truncated"])
+            response = client.post("/api/calendly/sync", headers=ORIGIN)
+        self.assertEqual(response.status_code, 409)
+        self.assertEqual(self.appointments(), [])
+        self.assertNotIn(self.owner, self.stored())
+
+    def test_a_sync_that_outlives_a_reconnect_writes_nothing_and_its_cursor_is_not_reused(self):
+        self.many(2)
+        client, _, _ = self.connect()
+        real = self.fake.request
+
+        def reconnect_mid_read(method, url, **kwargs):
+            if url.endswith("/E001/invitees"):
+                data = self.stored()
+                data[self.owner]["connection_id"] = "a-newer-connection"
+                self.save(data)
+            return real(method, url, **kwargs)
+
+        self.fake.request = reconnect_mid_read
+        self.assertEqual(self.sync(client).status_code, 409)
+        self.assertEqual(self.appointments(), [])
+        self.fake.request = real
+        with patch.object(cal, "SYNC_REQUEST_BUDGET", 2):
+            partial = self.sync(client).get_json()
+        self.assertEqual(partial["stopped"], "budget")
+        data = self.stored()
+        data[self.owner]["connection_id"] = "yet-another"
+        self.save(data)
+        fresh = self.sync(client).get_json()
+        self.assertFalse(fresh["continued"])  # a cursor from another connection starts over
 
     def test_workspaces_never_touch_each_others_calendly_data(self):
         self.fake.events = [event("PAST", -20)]
@@ -467,6 +594,11 @@ class StatusMappingTests(unittest.TestCase):
             (event("A", 1), {"status": "canceled", "rescheduled": True}, ("cancelled", True)),
             (event("A", -1), {"status": "active", "no_show": {"uri": "x"}}, ("no-show", False)),
             ({"uri": "x", "status": "active", "start_time": "not a date"}, {"status": "active"}, (None, False)),
+            ({"uri": "x", "status": "canceled", "start_time": None}, {"status": "canceled"}, (None, False)),
+            ({"uri": "x", "status": "active", "start_time": None}, {"status": "active", "no_show": {"uri": "x"}}, (None, False)),
+            (event("A", -1, "pending"), {"status": "active"}, (None, False)),
+            (event("A", -1), {"status": "unknown"}, (None, False)),
+            (event("A", -1), {}, (None, False)),
         ]
         for ev, inv, expected in cases:
             self.assertEqual(cal.map_status(ev, inv, now), expected)

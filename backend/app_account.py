@@ -313,7 +313,7 @@ def _workspace_records(workspace):
         "payments": list((revenue.get("records") or {}).values()),
         "follow_ups": read("followup_log.json").get(workspace) or [],
         "square": {key: value for key, value in square.items() if "token" not in key.lower() and key != "pending"} or None,
-        "calendly": {key: value for key, value in calendly.items() if "token" not in key.lower()} or None,
+        "calendly": {key: value for key, value in calendly.items() if "token" not in key.lower() and key != "sync_cursor"} or None,
     }
 
 

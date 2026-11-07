@@ -24,7 +24,15 @@ Follows Calendly's official developer docs (read November 6, 2026):
   gives each invitee's ``email``, ``status``, ``timezone``, ``rescheduled``,
   ``new_invitee``, ``cancellation`` and ``no_show``.
 * Rate limits: 50 requests/minute (free plans), 500 (paid). A 429 says to wait
-  ``X-RateLimit-Reset`` seconds.
+  ``X-RateLimit-Reset`` seconds. RetainAI never sleeps for that inside a web
+  request: a sync stops, saves where it got to, and reports when to try again.
+
+Sync is incremental: each "Sync now" makes at most ``SYNC_REQUEST_BUDGET``
+requests in ``SYNC_TIME_BUDGET_SECONDS`` and saves a server-side cursor (window,
+page and position, bound to the connection and Calendly user; no credentials).
+The next Sync continues from it. When the whole window has been read the cursor
+is cleared, so the following Sync starts a fresh pass and picks up later
+cancellations and reschedules.
 
 Only an invitee's email is used, to match a contact the business already has.
 No answers to booking questions, tracking parameters or payment details are
@@ -47,12 +55,16 @@ API_BASE = "https://api.calendly.com"
 REQUIRED_SCOPES = ("scheduled_events:read",)
 USER_URI_PREFIX = "https://api.calendly.com/users/"
 LOOKBACK_DAYS, LOOKAHEAD_DAYS = 180, 60
-MAX_EVENTS = 1000
-MAX_INVITEES = 2000
+MAX_EVENTS = 1000                 # per full pass over the window
+MAX_INVITEES = 2000               # per full pass over the window
+MAX_INVITEE_PAGES_PER_EVENT = 5
 PAGE_SIZE = 100
 REFRESH_MARGIN = dt.timedelta(minutes=5)
-TIMEOUT_SECONDS = 15
-MAX_RATE_LIMIT_WAIT = 65
+TIMEOUT_SECONDS = 10
+SYNC_REQUEST_BUDGET = 40          # under the free plan's 50 requests/minute
+SYNC_TIME_BUDGET_SECONDS = 20     # well inside the web worker's timeout
+CURSOR_MAX_AGE = dt.timedelta(hours=24)
+MAX_PAGES_PER_PASS = MAX_EVENTS // PAGE_SIZE + 5
 
 
 class CalendlyError(RuntimeError):
@@ -64,6 +76,30 @@ class CalendlyError(RuntimeError):
 
 class CalendlyAuthError(CalendlyError):
     """The stored authorization no longer works; the owner must reconnect."""
+
+
+class RateLimited(CalendlyError):
+    def __init__(self, retry_after):
+        super().__init__("Calendly's rate limit was reached.", status=429, code="rate_limited")
+        self.retry_after = retry_after
+
+
+class BudgetExhausted(CalendlyError):
+    """This sync has used its request or time allowance; the next one continues."""
+
+
+class Budget:
+    def __init__(self, requests=None, seconds=None, clock=time.monotonic):
+        self.clock = clock
+        self.left = SYNC_REQUEST_BUDGET if requests is None else requests
+        self.deadline = clock() + (SYNC_TIME_BUDGET_SECONDS if seconds is None else seconds)
+        self.used = 0
+
+    def spend(self):
+        if self.left <= 0 or self.clock() >= self.deadline:
+            raise BudgetExhausted("This sync reached its request or time limit.", code="budget")
+        self.left -= 1
+        self.used += 1
 
 
 def pkce_pair():
@@ -118,34 +154,39 @@ class CalendlyClient:
         self.http = session or requests.Session()
         self.sleep = sleep or (lambda seconds: time.sleep(seconds))
 
-    def _send(self, method, url, *, token=None, data=None, params=None, basic=False, attempts=3):
+    def _send(self, method, url, *, token=None, data=None, params=None, basic=False, attempts=2, budget=None):
+        """One request, plus one short retry for a network or server error.
+        A 429 is never waited out here: it is raised with Calendly's reset time."""
         headers = {"Accept": "application/json"}
         if token:
             headers["Authorization"] = f"Bearer {token}"
         auth = (self.client_id, self.client_secret) if basic else None
         for attempt in range(attempts):
+            if budget is not None:
+                budget.spend()
             try:
                 response = self.http.request(method, url, headers=headers, data=data, params=params, auth=auth, timeout=TIMEOUT_SECONDS)
             except requests.RequestException:
                 if attempt == attempts - 1:
                     raise CalendlyError("Calendly could not be reached.", code="network") from None
-                self.sleep(2 ** attempt)
+                self.sleep(1)
                 continue
-            if response.status_code == 429 or response.status_code >= 500:
+            if response.status_code == 429:
+                try:
+                    reset = max(1, int((response.headers or {}).get("X-RateLimit-Reset") or 60))
+                except (TypeError, ValueError):
+                    reset = 60
+                raise RateLimited(min(reset, 3600))
+            if response.status_code >= 500:
                 if attempt == attempts - 1:
                     raise CalendlyError("Calendly is busy; try again in a minute.", status=response.status_code, code="unavailable")
-                wait = 2 ** attempt
-                if response.status_code == 429:
-                    try:
-                        wait = min(MAX_RATE_LIMIT_WAIT, max(1, int((response.headers or {}).get("X-RateLimit-Reset") or 60)))
-                    except (TypeError, ValueError):
-                        wait = 60
-                self.sleep(wait)
+                self.sleep(1)
                 continue
             try:
                 body = response.json()
             except ValueError:
                 body = {}
+            body = body if isinstance(body, dict) else {}
             if response.status_code == 401:
                 raise CalendlyAuthError("Calendly no longer accepts RetainAI's authorization.", status=401, code=str(body.get("title") or "unauthorized"))
             if response.status_code >= 400:
@@ -178,65 +219,152 @@ class CalendlyClient:
         })
 
     # API (GET only) ----------------------------------------------------------
-    def events(self, token, user_uri, start, end, page_token=None):
+    def events(self, token, user_uri, start, end, page_token=None, budget=None):
         params = {"user": user_uri, "min_start_time": _iso(start), "max_start_time": _iso(end),
                   "count": PAGE_SIZE, "sort": "start_time:asc"}
         if page_token:
             params["page_token"] = page_token
-        return self._send("GET", f"{API_BASE}/scheduled_events", token=token, params=params)
+        return self._send("GET", f"{API_BASE}/scheduled_events", token=token, params=params, budget=budget)
 
-    def invitees(self, token, event_uuid, page_token=None):
+    def invitees(self, token, event_uuid, page_token=None, budget=None):
         params = {"count": PAGE_SIZE}
         if page_token:
             params["page_token"] = page_token
-        return self._send("GET", f"{API_BASE}/scheduled_events/{event_uuid}/invitees", token=token, params=params)
+        return self._send("GET", f"{API_BASE}/scheduled_events/{event_uuid}/invitees", token=token, params=params, budget=budget)
 
 
-def fetch(client, token, user_uri, now):
-    """The user's events from LOOKBACK_DAYS ago to LOOKAHEAD_DAYS ahead, with invitees, bounded."""
-    start, end = now - dt.timedelta(days=LOOKBACK_DAYS), now + dt.timedelta(days=LOOKAHEAD_DAYS)
-    events, truncated, page = [], False, None
-    while True:
-        body = client.events(token, user_uri, start, end, page)
-        for event in body.get("collection") or []:
-            if isinstance(event, dict) and event.get("uri"):
-                events.append(event)
-                if len(events) >= MAX_EVENTS:
-                    truncated = True
-                    break
-        page = (body.get("pagination") or {}).get("next_page_token")
-        if truncated or not page:
-            break
-    pairs, invitee_count = [], 0
-    for event in events:
-        page = None
+def _token_key(token):
+    return hashlib.sha256(str(token).encode("utf-8")).hexdigest()[:16]
+
+
+def new_cursor(connection_id, user_uri, now):
+    """A pass over a fixed window, so page tokens stay consistent across syncs."""
+    return {
+        "connection_id": connection_id, "user_uri": user_uri,
+        "window_start": _iso(now - dt.timedelta(days=LOOKBACK_DAYS)),
+        "window_end": _iso(now + dt.timedelta(days=LOOKAHEAD_DAYS)),
+        "started_at": _iso(now), "page": None, "skip": 0,
+        "events_seen": 0, "invitees_seen": 0, "seen_pages": [],
+    }
+
+
+def cursor_for(stored, connection_id, user_uri, now):
+    """Continue a saved pass only if it belongs to this connection and user and is recent."""
+    started = _utc((stored or {}).get("started_at")) if isinstance(stored, dict) else None
+    if (started and stored.get("connection_id") == connection_id and stored.get("user_uri") == user_uri
+            and now - started <= CURSOR_MAX_AGE and _utc(stored.get("window_start")) and _utc(stored.get("window_end"))
+            and isinstance(stored.get("seen_pages"), list) and isinstance(stored.get("skip"), int)):
+        return dict(stored), True
+    return new_cursor(connection_id, user_uri, now), False
+
+
+def _collection(body):
+    return [item for item in (body.get("collection") or []) if isinstance(item, dict) and item.get("uri")]
+
+
+def _next_page(body):
+    token = (body.get("pagination") or {}).get("next_page_token") if isinstance(body.get("pagination"), dict) else None
+    return str(token) if token else None
+
+
+def _event_invitees(client, call, event, remaining, budget):
+    """All of one event's invitees, at most ``remaining``. Returns (invitees, partial)."""
+    out, page, seen = [], None, set()
+    for _ in range(MAX_INVITEE_PAGES_PER_EVENT):
+        body = call(lambda token: client.invitees(token, uuid_from_uri(event["uri"]), page, budget=budget))
+        for invitee in _collection(body):
+            out.append(invitee)
+            if len(out) >= remaining:
+                return out, True
+        nxt = _next_page(body)
+        if not nxt:
+            return out, False
+        if nxt == page or nxt in seen:  # a repeating page token would never end
+            return out, True
+        seen.add(nxt)
+        page = nxt
+    return out, True
+
+
+def fetch_step(client, call, cursor, budget):
+    """Read as far as this sync's budget allows, from ``cursor``.
+
+    ``call(fn)`` runs ``fn(access_token)`` and renews the token once on a 401.
+    Returns a dict: ``pairs`` (event, invitee) for every event read completely
+    in this step, ``events``, the advanced ``cursor``, and ``state``:
+    ``complete`` / ``truncated`` (pass finished), or ``budget`` /
+    ``rate_limited`` (stopped early; the cursor says where to continue).
+    """
+    cur = dict(cursor)
+    cur["seen_pages"] = list(cur.get("seen_pages") or [])
+    start, end = _utc(cur["window_start"]), _utc(cur["window_end"])
+    pairs, events, notes = [], 0, set()
+
+    def result(state, retry_after=None):
+        return {"pairs": pairs, "events": events, "cursor": cur, "state": state,
+                "retry_after": retry_after, "notes": sorted(notes)}
+
+    try:
         while True:
-            body = client.invitees(token, uuid_from_uri(event["uri"]), page)
-            for invitee in body.get("collection") or []:
-                if isinstance(invitee, dict) and invitee.get("uri"):
-                    pairs.append((event, invitee))
-                    invitee_count += 1
-            page = (body.get("pagination") or {}).get("next_page_token")
-            if invitee_count >= MAX_INVITEES:
-                truncated = True
-                break
-            if not page:
-                break
-        if truncated:
-            break
-    return events, pairs, truncated
+            page = cur.get("page")
+            body = call(lambda token: client.events(token, cur["user_uri"], start, end, page, budget=budget))
+            collection = _collection(body)
+            for index in range(int(cur.get("skip") or 0), len(collection)):
+                if cur["events_seen"] >= MAX_EVENTS:
+                    notes.add("event_limit")
+                    return result("truncated")
+                event = collection[index]
+                remaining = MAX_INVITEES - cur["invitees_seen"]
+                invitees, partial = _event_invitees(client, call, event, remaining, budget)
+                # Only now, with the whole event read, does the cursor move past it.
+                pairs.extend((event, invitee) for invitee in invitees)
+                events += 1
+                cur["skip"] = index + 1
+                cur["events_seen"] += 1
+                cur["invitees_seen"] += len(invitees)
+                if partial:
+                    notes.add("invitee_limit" if cur["invitees_seen"] >= MAX_INVITEES else "event_invitees_capped")
+                if cur["invitees_seen"] >= MAX_INVITEES:
+                    return result("truncated")
+            nxt = _next_page(body)
+            if not nxt:
+                return result("complete")
+            key = _token_key(nxt)
+            if nxt == page or key in cur["seen_pages"]:
+                notes.add("pagination_loop")
+                return result("truncated")
+            if len(cur["seen_pages"]) >= MAX_PAGES_PER_PASS:
+                notes.add("event_limit")
+                return result("truncated")
+            cur["seen_pages"].append(key)
+            cur["page"], cur["skip"] = nxt, 0
+    except BudgetExhausted:
+        return result("budget")
+    except RateLimited as exc:
+        return result("rate_limited", exc.retry_after)
+
+
+EVENT_STATUSES = {"active", "canceled"}
+INVITEE_STATUSES = {"active", "canceled"}
 
 
 def map_status(event, invitee, now):
-    """Calendly event + invitee -> (RetainAI status, rescheduled)."""
+    """Calendly event + invitee -> (RetainAI status, rescheduled), or (None, False) to skip.
+
+    Malformed rows (no valid start time) and statuses Calendly doesn't
+    document are skipped whatever else they say, so nothing unknown is ever
+    counted as a visit.
+    """
+    start = _utc(event.get("start_time"))
+    event_status = str(event.get("status") or "").lower()
+    invitee_status = str(invitee.get("status") or "").lower()
+    if not start or event_status not in EVENT_STATUSES or invitee_status not in INVITEE_STATUSES:
+        return None, False
     rescheduled = bool(invitee.get("rescheduled"))
-    if str(event.get("status") or "").lower() == "canceled" or str(invitee.get("status") or "").lower() == "canceled":
+    if "canceled" in (event_status, invitee_status):
         return "cancelled", rescheduled
     if invitee.get("no_show"):
         return "no-show", False
-    start = _utc(event.get("start_time"))
-    if not start:
-        return None, False
     # Calendly has no "completed" status: an active booking whose start time has
     # passed, not canceled and not marked no-show, is treated as completed.
     return ("completed" if start <= now else "scheduled"), False
@@ -255,6 +383,8 @@ def to_appointment(event, invitee, lead, *, workspace, timezone_name, status, re
     from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
     start, end = _utc(event.get("start_time")), _utc(event.get("end_time"))
+    if not start:
+        raise ValueError("A Calendly event without a valid start time can't be imported.")
     try:
         zone = ZoneInfo(timezone_name or "UTC")
     except (ZoneInfoNotFoundError, ValueError):
@@ -263,6 +393,7 @@ def to_appointment(event, invitee, lead, *, workspace, timezone_name, status, re
     terminal = status in ("completed", "cancelled", "no-show")
     event_id, invitee_id = uuid_from_uri(event["uri"]), uuid_from_uri(invitee["uri"])
     cancellation = invitee.get("cancellation") or event.get("cancellation") or {}
+    cancellation = cancellation if isinstance(cancellation, dict) else {}
     return {
         "id": f"calendly:{event_id}:{invitee_id}",
         "source": "calendly",
