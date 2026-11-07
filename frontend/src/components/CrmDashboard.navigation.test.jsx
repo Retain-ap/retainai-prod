@@ -1,5 +1,5 @@
 import React from "react";
-import { act, fireEvent, render, screen } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { MemoryRouter, useLocation, useNavigate } from "react-router";
 import CrmDashboard from "./CrmDashboard";
 
@@ -125,4 +125,28 @@ test("navigation events cannot open a privileged page for a standard team member
     expect(screen.getByText("Retention overview")).toBeInTheDocument();
     expect(screen.queryByText("Platform owner console")).not.toBeInTheDocument();
   }
+});
+
+test("Google Calendar prompts open Settings > Integrations, not the Contacts importer, and authorize nothing", async () => {
+  await mount("/app?section=calendar");
+  fireEvent.click(screen.getByRole("button", { name: "Refresh Google events" }));
+  await waitFor(() => expect(screen.getByTestId("location")).toHaveTextContent("/app?tab=integrations"));
+  expect(screen.getByText("Settings integrations")).toBeInTheDocument();
+  expect(screen.getByTestId("location")).not.toHaveTextContent("/app/import");
+
+  fireEvent.click(screen.getByRole("button", { name: "Browser back" }));
+  expect(await screen.findByText("Calendar grid")).toBeInTheDocument();
+  fireEvent.click(await screen.findByRole("button", { name: "Connect Calendar" }));
+  await waitFor(() => expect(screen.getByTestId("location")).toHaveTextContent("/app?tab=integrations"));
+  expect(screen.getByText("Settings integrations")).toBeInTheDocument();
+
+  const requested = global.fetch.mock.calls.map(([url]) => String(url));
+  expect(requested.some((url) => /authorize|oauth/i.test(url))).toBe(false);
+});
+
+test("contact import shortcuts open the multi-source importer without the Google-only deep link", async () => {
+  await mount("/app?section=dashboard");
+  act(() => window.RetainAI.openImports());
+  expect(screen.getByText("Settings imports")).toBeInTheDocument();
+  expect(screen.getByTestId("location")).toHaveTextContent(/^\/app\/import$/);
 });

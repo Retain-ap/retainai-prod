@@ -1037,11 +1037,14 @@ function CrmDashboard({ authenticatedUser }) {
     navigate("/app/import");
   }, [navigate]);
 
-  // Google Calendar prompts jump to the Google connection card on the same page.
-  const openGoogleImport = useCallback(() => {
-    setSettingsTab("imports");
+  // Google Calendar prompts open Settings > Integrations, where the Google
+  // Calendar connection lives (calendar scopes). The Contacts importer's Google
+  // card only requests contacts access, so it can't connect a calendar. Opening
+  // the tab authorizes nothing; connecting still needs the owner's click there.
+  const openCalendarSettings = useCallback(() => {
+    setSettingsTab("integrations");
     setSection("settings");
-    navigate("/app/import?source=google");
+    navigate("/app?tab=integrations");
   }, [navigate]);
 
   // Fetch Google events
@@ -1390,7 +1393,7 @@ function CrmDashboard({ authenticatedUser }) {
                   } else {
                     setGcalStatus("disconnected");
                     setGoogleEvents([]);
-                    openGoogleImport();
+                    openCalendarSettings();
                   }
                 }}
               >
@@ -1421,7 +1424,7 @@ function CrmDashboard({ authenticatedUser }) {
                   {gcalStatus === "unavailable" && "service unavailable"}
                 </span>
                 <button
-                  onClick={openGoogleImport}
+                  onClick={openCalendarSettings}
                   style={{
                     background: "#f7cb53",
                     color: "#232323",
