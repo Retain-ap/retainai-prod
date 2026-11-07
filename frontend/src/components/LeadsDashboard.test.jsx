@@ -1,36 +1,55 @@
 import React from "react";
-import { fireEvent, render, screen } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import LeadsDashboard from "./LeadsDashboard";
 
-function importButton() {
-  return screen.getByRole("button", { name: "Import contacts from a file or Google Contacts" });
+const originalResizeObserver = global.ResizeObserver;
+beforeAll(() => {
+  global.ResizeObserver = class { observe() {} unobserve() {} disconnect() {} };
+});
+afterAll(() => { global.ResizeObserver = originalResizeObserver; });
+
+async function openChooser(onImportLeads) {
+  render(<LeadsDashboard leads={[]} onImportLeads={onImportLeads} />);
+  const trigger = screen.getByRole("button", { name: "Import Leads" });
+  trigger.focus();
+  fireEvent.click(trigger);
+  return screen.findByRole("dialog", { name: "Where are your contacts?" });
 }
 
-test("the Import Leads button describes every supported import source, not only Google", () => {
-  render(<LeadsDashboard leads={[]} onImportLeads={jest.fn()} />);
-  const button = importButton();
-  expect(button).toHaveTextContent("Import Leads");
-  expect(button.getAttribute("title")).toMatch(/CSV or vCard file \(iPhone, Mac, Outlook, Google, HubSpot and other CRMs\) or from Google Contacts/);
-  expect(button.getAttribute("title")).not.toBe("Import from Google Contacts");
-});
-
-test("it opens the dashboard's contact importer", () => {
+test("Import Leads asks for a source before navigating or authorizing", async () => {
   const onImportLeads = jest.fn();
-  render(<LeadsDashboard leads={[]} onImportLeads={onImportLeads} />);
-  fireEvent.click(importButton());
-  expect(onImportLeads).toHaveBeenCalledTimes(1);
+  const dialog = await openChooser(onImportLeads);
+  for (const label of ["Apple Contacts", "Google Contacts", "WhatsApp contacts", "Android Contacts", "Outlook / Microsoft People", "Google Sheets", "Microsoft Excel", "HubSpot", "Salesforce", "Pipedrive", "Zoho CRM", "Another service or file"]) {
+    expect(within(dialog).getByRole("button", { name: label, exact: true })).toBeInTheDocument();
+  }
+  expect(onImportLeads).not.toHaveBeenCalled();
+  expect(within(dialog).getByText(/From your phone's address book/)).toBeInTheDocument();
+  fireEvent.click(within(dialog).getByRole("button", { name: "Google Sheets", exact: true }));
+  expect(onImportLeads).toHaveBeenCalledWith("sheets");
+  await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
 });
 
-test("without a handler it still opens the importer and never starts Google authorization", () => {
+test("Escape cancels without navigating and returns focus to Import Leads", async () => {
+  const onImportLeads = jest.fn();
+  const dialog = await openChooser(onImportLeads);
+  fireEvent.keyDown(dialog, { key: "Escape", code: "Escape" });
+  await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+  expect(onImportLeads).not.toHaveBeenCalled();
+  await waitFor(() => expect(screen.getByRole("button", { name: "Import Leads" })).toHaveFocus());
+});
+
+test("without a handler a choice still opens its import guide, never OAuth", async () => {
   const original = window.location;
   const assign = jest.fn();
   delete window.location;
   window.location = { ...original, assign, href: original.href };
   try {
-    render(<LeadsDashboard leads={[]} />);
-    fireEvent.click(importButton());
-    expect(assign).toHaveBeenCalledWith("/app/import");
+    const dialog = await openChooser();
+    expect(assign).not.toHaveBeenCalled();
+    fireEvent.click(within(dialog).getByRole("button", { name: "Google Contacts", exact: true }));
+    expect(assign).toHaveBeenCalledWith("/app/import?source=google");
     expect(window.location.href).not.toMatch(/google\/authorize/);
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
   } finally {
     window.location = original;
   }

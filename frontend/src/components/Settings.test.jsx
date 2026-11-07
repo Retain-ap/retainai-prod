@@ -207,3 +207,10 @@ test("only a Google prompt (?source=google) highlights the Google Contacts card"
   expect(await screen.findByText("Import contacts")).toBeInTheDocument();
   expect(googleCard()).toHaveClass("google-import-focus");
 });
+
+test("a source chosen before navigation opens its matching file guide", async () => {
+  renderImports("/app/import?source=excel");
+  expect(await screen.findByRole("button", { name: "Microsoft Excel" })).toHaveAttribute("aria-pressed", "true");
+  expect(screen.getByText(/Upload the CSV, not the .xlsx workbook/)).toBeInTheDocument();
+  expect(googleCard()).not.toHaveClass("google-import-focus");
+});

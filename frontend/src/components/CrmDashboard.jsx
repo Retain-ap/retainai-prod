@@ -2,6 +2,7 @@
 import React, { useState, useEffect, useCallback, useMemo, useRef } from "react";
 import Sidebar from "./Sidebar";
 import LeadsDashboard from "./LeadsDashboard";
+import { importSourcePath } from "./contactImportSources";
 import LeadModal from "./LeadModal";
 import Calendar from "./Calendar";
 import Appointments from "./Appointments";
@@ -1031,10 +1032,10 @@ function CrmDashboard({ authenticatedUser }) {
 
   // The contact importer: files from iPhone/Mac/iCloud, Google, Outlook, CRMs or
   // spreadsheets, plus Google Contacts. Opens at the file importer.
-  const openImports = useCallback(() => {
+  const openImports = useCallback((source) => {
     setSettingsTab("imports");
     setSection("settings");
-    navigate("/app/import");
+    navigate(importSourcePath(source));
   }, [navigate]);
 
   // Google Calendar prompts open Settings > Integrations, where the Google

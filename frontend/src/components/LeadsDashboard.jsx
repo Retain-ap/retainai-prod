@@ -1,6 +1,8 @@
 // src/components/LeadsDashboard.jsx
 import React, { useMemo, useState } from "react";
 import LeadDrawer from "./LeadDrawer";
+import ImportSourceChooser from "./ImportSourceChooser";
+import { importSourcePath } from "./contactImportSources";
 
 export default function LeadsDashboard({
   leads,
@@ -16,6 +18,7 @@ export default function LeadsDashboard({
   onImportLeads,
 }) {
   const [search, setSearch] = useState("");
+  const [choosingImportSource, setChoosingImportSource] = useState(false);
 
   // --- THEME ---
   const UI = {
@@ -58,14 +61,15 @@ export default function LeadsDashboard({
     transition: "transform .05s ease, background .15s ease, border-color .15s ease",
   };
 
-  function handleImportLeads() {
+  function handleImportSource(source) {
+    setChoosingImportSource(false);
     if (typeof onImportLeads === "function") {
-      onImportLeads();
+      onImportLeads(source);
       return;
     }
     // Without the dashboard's handler, still open the contact importer
     // rather than starting any provider authorization.
-    window.location.assign("/app/import");
+    window.location.assign(importSourcePath(source));
   }
 
   return (
@@ -105,10 +109,11 @@ export default function LeadsDashboard({
             onMouseLeave={(e) => (e.currentTarget.style.borderColor = "#2e2e2e")}
             onMouseDown={(e) => (e.currentTarget.style.transform = "translateY(1px)")}
             onMouseUp={(e) => (e.currentTarget.style.transform = "translateY(0)")}
-            onClick={handleImportLeads}
+            onClick={() => setChoosingImportSource(true)}
             type="button"
-            title="Import contacts from a CSV or vCard file (iPhone, Mac, Outlook, Google, HubSpot and other CRMs) or from Google Contacts"
-            aria-label="Import contacts from a file or Google Contacts"
+            title="Choose where to import your contacts from"
+            aria-haspopup="dialog"
+            aria-expanded={choosingImportSource}
           >
             Import Leads
           </button>
@@ -273,6 +278,8 @@ export default function LeadsDashboard({
             );
           })}
       </div>
+
+      <ImportSourceChooser open={choosingImportSource} onClose={() => setChoosingImportSource(false)} onSelect={handleImportSource} />
 
       {/* Drawer */}
       {drawerLead && (

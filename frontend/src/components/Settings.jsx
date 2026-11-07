@@ -1075,7 +1075,7 @@ export default function Settings({
         )}
 
         {tab === "imports" && (
-          <ImportContacts user={user} focusGoogle={new URLSearchParams(location.search).get("source") === "google"} />
+          <ImportContacts user={user} initialSource={new URLSearchParams(location.search).get("source")} focusGoogle={new URLSearchParams(location.search).get("source") === "google"} />
         )}
 
         {tab === "billing" && capabilities.canManageBilling && (

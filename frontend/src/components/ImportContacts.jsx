@@ -5,24 +5,12 @@ import "./product-system.css";
 import "./ImportContacts.css";
 import CalendlyBookingsCard from "./CalendlyBookingsCard";
 import SquareBookingsCard from "./SquareBookingsCard";
+import { SOURCES } from "./contactImportSources";
 
 export const FIELDS = [
   ["name", "Full name"], ["first_name", "First name"], ["last_name", "Last name"],
   ["email", "Email"], ["phone", "Phone / WhatsApp"], ["company", "Company"],
   ["title", "Job title"], ["notes", "Notes"], ["birthday", "Birthday"],
-];
-
-// Where each export lives. Menus move between app versions, so the steps stay short.
-export const SOURCES = [
-  { key: "apple", label: "iPhone, Mac or iCloud", file: ".vcf", steps: "iPhone: Contacts → Lists → touch and hold a list → Export, then save to Files. Mac: Contacts → select contacts → File → Export → Export vCard. iCloud.com: Contacts → select contacts → ⋯ → Export vCard." },
-  { key: "android", label: "Android or WhatsApp", file: ".vcf", steps: "WhatsApp uses your phone's address book and has no contact export of its own. Export your phone contacts (Android: Contacts → Settings → Export → .vcf file), or share one contact card from WhatsApp as a .vcf. Chats and messages are never imported." },
-  { key: "google", label: "Google Contacts", file: ".csv or .vcf", steps: "contacts.google.com → Export → Google CSV or vCard. Or connect Google below to import directly." },
-  { key: "outlook", label: "Outlook", file: ".csv or .vcf", steps: "Outlook.com: People → Manage contacts → Export contacts. Outlook desktop: File → Open & Export → Import/Export → Export to a file → CSV." },
-  { key: "hubspot", label: "HubSpot", file: ".csv", steps: "Contacts → choose a view → Export → CSV." },
-  { key: "salesforce", label: "Salesforce", file: ".csv", steps: "Run a Contacts report → Export → Details only → CSV. Admins can also use Data Export." },
-  { key: "pipedrive", label: "Pipedrive", file: ".csv", steps: "Contacts → People → ⋯ → Export filter results → CSV." },
-  { key: "zoho", label: "Zoho CRM", file: ".csv", steps: "Setup → Data Administration → Export → Contacts → CSV." },
-  { key: "other", label: "Any spreadsheet", file: ".csv", steps: "Save the sheet as CSV with column names in the first row. Each contact needs an email or a phone number." },
 ];
 
 const STATUS = {
@@ -57,7 +45,7 @@ function reasonText(reasons, code) {
   return code ? (reasons?.[code] || REASONS[code] || code) : "";
 }
 
-export default function ImportContacts({ user, focusGoogle = false }) {
+export default function ImportContacts({ user, focusGoogle = false, initialSource = "apple" }) {
   const userEmail = useMemo(() => String(user?.org_id || user?.email || "").toLowerCase(), [user]);
   const inputRef = useRef(null);
   const popupRef = useRef(null);
@@ -83,6 +71,10 @@ export default function ImportContacts({ user, focusGoogle = false }) {
   const [google, setGoogle] = useState(null);
   const [busy, setBusy] = useState("");
   const [error, setError] = useState("");
+
+  useEffect(() => {
+    setGuide(SOURCES.some(item => item.key === initialSource) ? initialSource : "apple");
+  }, [initialSource]);
 
   const refresh = useCallback(async () => {
     if (!userEmail) return;
