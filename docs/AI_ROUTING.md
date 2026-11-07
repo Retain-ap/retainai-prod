@@ -1,8 +1,9 @@
 # AI routing: one fixed model and provider
 
-Status, November 7, 2026: implemented in code and tests. **Not validated with a
-live request.** No AI generation was run, and no credits or credentials were
-used, when this was written.
+Status, November 7, 2026 UTC: PR39 is deployed to both production services.
+The exact routing constraints passed a synthetic live request from the real
+backend using its existing OpenRouter account: HTTP 200, provider `OpenAI`,
+model `openai/gpt-4.1-mini`, cost USD 0.00002. No customer data was used.
 
 ## The route
 
@@ -74,13 +75,22 @@ message drafts, AI Studio prompts, `/api/ai-prompt` and automation drafts:
     endpoints.
   - RetainAI therefore does **not** request or claim ZDR.
 
-## Open compatibility point (check in the live validation)
+## Live compatibility validation
 
-The public docs do not say whether OpenAI's first-party endpoint counts as a
-"provider which does not collect user data" for `data_collection: "deny"`.
-If it doesn't, the fixed route matches nothing, every AI request gets a 503,
-and the features say AI is unavailable. That is safe, but AI drafting would
-not work.
+The pre-release question about `data_collection: "deny"` is resolved for the
+current endpoint and account configuration. A synthetic request at
+2026-11-07 02:21:17 UTC used the exact fixed request shape, including the
+provider allowlist, disabled fallback, parameter requirements and price caps.
+It returned HTTP 200 with provider `OpenAI`, model `openai/gpt-4.1-mini` and
+a nonempty text response. Generation reference:
+`gen-1794018077-6L78quFydHOdfhh9PJ1W`. The reported cost was USD 0.00002.
+This proves compatibility for that request, not permanent availability or
+an independent audit of third-party retention.
+
+PR39 merged as `a514a8f7379da7e60c58ccf172969621d6427d8a` after all three
+release gates passed. Both Render deploys went live at 02:24 UTC:
+backend `dep-dbn8n40ae00c738gs930`, frontend `dep-dbn8n40ae00c738gs9t0`.
+All 15 anonymous production HTTP checks passed afterward.
 
 Account-level OpenRouter settings can also remove the route:
 - an allowed-providers list that excludes OpenAI;
@@ -99,9 +109,9 @@ of a cent):
 3. Check the activity log entry on the OpenRouter dashboard: provider OpenAI,
    no fallback.
 
-If the result is a 503 with a data-policy message, decide whether to drop
-`data_collection: "deny"`. With `only: ["openai"]` the recipient stays fixed
-either way, but the disclosure must then change too.
+If a future validation returns a data-policy 503, investigate the endpoint
+and account configuration before making any routing change. Do not silently
+relax the data policy or enable another provider to make the error disappear.
 
 ## Google review
 
