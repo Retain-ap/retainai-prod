@@ -1,5 +1,12 @@
 # RetainAI Google review: AI-service facts — November 6, 2026
 
+> Update: the factual public AI disclosure is now live through PR37 at
+> `cbcb7b79ed5c59205335711f267e4ac114c5a902`. See
+> [the later release handoff](2026-11-06-value-calendly-and-inspired-looks.md).
+> Routing has not changed; dedicated reviewer access and the final Google reply
+> remain pending. Historical statements below about unpublished policy text are
+> superseded by this update.
+
 Read-only follow-up by Claude, independently checked and corrected by Codex.
 No provider/model/privacy setting changed, no AI request was made, and no message
 was sent to Google. A final reply remains pending dedicated reviewer access.
