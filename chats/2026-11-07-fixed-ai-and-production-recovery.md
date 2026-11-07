@@ -96,6 +96,26 @@ Leads opens `/app/import` at the file importer, and both Calendar prompts open
 `/app?tab=integrations` with the Google Calendar card. No authorization was
 started. Backend runtime remains the separately validated PR39 release.
 
+### Source chooser follow-up
+
+The owner clarified that **Import Leads** should first ask which service holds
+the contacts. [PR44](https://github.com/Retain-ap/retainai-prod/pull/44) adds that
+popup with 12 choices: Apple Contacts, Google Contacts, WhatsApp contacts, Android
+Contacts, Outlook/Microsoft People, Google Sheets, Excel, HubSpot, Salesforce,
+Pipedrive, Zoho and other CSV/vCard files. Each opens its selected guide; Google
+opens the existing connection card without authorizing automatically. File-based
+sources are labeled as exports, and WhatsApp imports address-book contacts only.
+
+The existing Headless UI dialog manages focus trapping, Escape, outside-click
+dismissal and focus restoration. Each source's import method is exposed as its
+accessible description. All 122 frontend tests passed before final CI; the build
+and changed-file lint passed. Local production-build browser checks verified all
+12 routes, focus wrapping/restoration and the 390px phone layout without overflow.
+Claude independently reviewed the change and found no blocking issues. Its one
+accessibility suggestion was incorporated. A pre-existing rebooking test fixture
+now generates UTC dates to match its UTC workspace instead of depending on the
+developer machine's date near midnight. No backend or provider-scope change.
+
 ## Calendly owner setup
 
 The account menu's **Developer** link currently opens the developer docs. The

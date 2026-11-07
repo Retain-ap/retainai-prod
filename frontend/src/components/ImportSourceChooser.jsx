@@ -1,4 +1,4 @@
-import React from "react";
+import React, { useId } from "react";
 import { Description, Dialog, DialogBackdrop, DialogPanel, DialogTitle } from "@headlessui/react";
 import { FaApple, FaAndroid, FaGoogle, FaWhatsapp, FaMicrosoft, FaFileCsv, FaFileExcel, FaTable, FaAddressBook, FaArrowRight, FaTimes } from "react-icons/fa";
 import { SOURCES } from "./contactImportSources";
@@ -7,6 +7,7 @@ import "./ImportSourceChooser.css";
 const ICONS = { apple: FaApple, android: FaAndroid, google: FaGoogle, whatsapp: FaWhatsapp, outlook: FaMicrosoft, sheets: FaTable, excel: FaFileExcel, other: FaFileCsv };
 
 export default function ImportSourceChooser({ open, onClose, onSelect }) {
+  const descriptionId = useId();
   return (
     <Dialog open={open} onClose={onClose} className="import-chooser">
       <DialogBackdrop className="import-chooser-backdrop" />
@@ -27,9 +28,9 @@ export default function ImportSourceChooser({ open, onClose, onSelect }) {
                 {SOURCES.filter(source => source.group === group).map(source => {
                   const Icon = ICONS[source.key] || FaAddressBook;
                   return (
-                    <button type="button" className="import-chooser-option" key={source.key} onClick={() => onSelect(source.key)} aria-label={source.label}>
+                    <button type="button" className="import-chooser-option" key={source.key} onClick={() => onSelect(source.key)} aria-label={source.label} aria-describedby={`${descriptionId}-${source.key}`}>
                       <span className={`import-chooser-icon import-chooser-icon-${source.key}`}><Icon aria-hidden="true" /></span>
-                      <span className="import-chooser-copy"><strong>{source.label}</strong><small>{source.detail}</small></span>
+                      <span className="import-chooser-copy"><strong>{source.label}</strong><small id={`${descriptionId}-${source.key}`}>{source.detail}</small></span>
                       <FaArrowRight className="import-chooser-arrow" aria-hidden="true" />
                     </button>
                   );

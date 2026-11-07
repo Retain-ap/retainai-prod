@@ -24,6 +24,7 @@ test("Import Leads asks for a source before navigating or authorizing", async ()
   }
   expect(onImportLeads).not.toHaveBeenCalled();
   expect(within(dialog).getByText(/From your phone's address book/)).toBeInTheDocument();
+  expect(within(dialog).getByRole("button", { name: "Google Sheets", exact: true })).toHaveAccessibleDescription("Download your sheet as CSV");
   fireEvent.click(within(dialog).getByRole("button", { name: "Google Sheets", exact: true }));
   expect(onImportLeads).toHaveBeenCalledWith("sheets");
   await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
