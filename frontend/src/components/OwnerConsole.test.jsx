@@ -10,6 +10,22 @@ function response(body, status = 200) {
   };
 }
 
+test("accepts a strong tester password and rejects passwords missing a required character class", async () => {
+  global.fetch = jest.fn().mockResolvedValue(response({ accounts: [], recorded_mrr: {}, integrations: {} }));
+  render(<OwnerConsole />);
+  fireEvent.click(await screen.findByRole("tab", { name: "Customer Accounts" }));
+  fireEvent.click(screen.getByRole("button", { name: "Add complimentary account" }));
+  const password = screen.getByLabelText("Temporary password");
+
+  // Exercise the rendered input's browser validation, including JSX attribute escaping.
+  fireEvent.change(password, { target: { value: "LaunchReview7!" } });
+  expect(password.checkValidity()).toBe(true);
+  for (const invalid of ["Short7!", "launchreview7!", "LAUNCHREVIEW7!", "LaunchReview!!", "LaunchReview77", "LaunchReview\\d!"]) {
+    fireEvent.change(password, { target: { value: invalid } });
+    expect(password.checkValidity()).toBe(false);
+  }
+});
+
 test("keeps available owner-console data visible when one section fails", async () => {
   global.fetch = jest.fn().mockImplementation((url) => {
     const value = String(url);
