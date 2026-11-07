@@ -188,5 +188,25 @@ revised **Add appointment** button opens `/app?section=calendar&view=appointment
 the contact-import action stays separate. Regression tests cover completion,
 both actions, the exact navigation route and browser Back. Claude reported all
 125 frontend tests, lint and build passing, with mutation checks detecting the
-old completion rule and broken navigation. Release CI and production navigation
-must be verified on the final PR head before calling this live.
+old completion rule and broken navigation. All three required checks passed on
+final head `206fb69` in run `42343292276`. PR46 merged as
+`bda9e67d1f38169773169248665ef504720c46c6`; frontend deploy
+`dep-dbnbhjq9lscs73bsnblg` became live at 05:37:19 UTC. After the CDN served the
+new bundle, Codex verified the actual standard reviewer workspace: the setup
+button opened the Appointments list, its Add Appointment form was usable without
+Google/Calendly, Cancel closed it and browser Back returned to the checklist.
+No production appointment was created. Both apps' public health endpoints
+returned 200; no backend error logs appeared during this check.
+
+### Short-window appointment form
+
+The live check exposed a pre-existing layout defect: at 1280x720 the centered
+appointment card extended past the viewport because its height/scroll limit was
+only applied below 700px wide. A base border-box, dynamic viewport height limit
+and vertical scrolling keep the whole card inside desktop and short windows;
+the existing phone padding and 24px margin remain. The production build passed.
+Real built-app checks with fictional data verified 1280x720, 1280x540 and 390x844:
+card bounds fit, the Add button can be reached by keyboard, Cancel works, and the
+phone page has no horizontal overflow. Claude independently reviewed the CSS
+and found no blocker. These local layout checks do not claim an additional
+production release; verify the follow-up PR and Render deployment separately.

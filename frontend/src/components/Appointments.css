@@ -1,4 +1,9 @@
 .appointments-page { overflow-x: hidden; }
+.appointments-modal-card {
+  box-sizing: border-box;
+  max-height: calc(100dvh - 32px);
+  overflow-y: auto;
+}
 .appointments-error,
 .appointments-loading {
   display: flex;
