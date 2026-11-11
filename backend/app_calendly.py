@@ -359,11 +359,14 @@ def calendly_sync():
                     rows.append(appointment)
                     positions[appointment["id"]] = len(rows) - 1
                     results["imported"] += 1
-                elif all(rows[position].get(field) == appointment.get(field) for field in fields):
-                    results["unchanged"] += 1
                 else:
-                    rows[position] = {**rows[position], **appointment}
-                    results["updated"] += 1
+                    existing = rows[position]
+                    merged = _merge_owner_edits(existing, appointment)
+                    if all(existing.get(field) == merged.get(field) for field in fields):
+                        results["unchanged"] += 1
+                    else:
+                        rows[position] = merged
+                        results["updated"] += 1
             if mapped:
                 all_appointments[workspace] = rows
                 core.save_appointments(all_appointments)
@@ -385,6 +388,25 @@ def calendly_sync():
     except vr.EvidenceStoreError:
         return jsonify({"error": "Calendly connection details can't be read right now."}), 503
     return jsonify({"ok": True, **results}), 200
+
+
+def _merge_owner_edits(existing, synced):
+    """Refresh an imported booking from Calendly without undoing the owner's work.
+
+    Calendly never supplies notes, so the owner's notes are kept. A status the
+    owner set in RetainAI (one that differs from the status this sync last
+    wrote, e.g. a no-show or a manual completion) is kept too, unless Calendly
+    now reports the booking cancelled. Time, duration and title still follow
+    Calendly, which is the booking's source of truth.
+    """
+    merged = {**existing, **synced}
+    merged["notes"] = existing.get("notes") or ""
+    last_synced = existing.get("calendly_synced_status", existing.get("status"))
+    owner_status = existing.get("status")
+    if owner_status and owner_status != last_synced and synced.get("status") != "cancelled":
+        terminal = owner_status in ("completed", "cancelled", "no-show")
+        merged.update(status=owner_status, done=terminal, is_done=terminal, completed=owner_status == "completed")
+    return merged
 
 
 def revoke_workspace(workspace):
