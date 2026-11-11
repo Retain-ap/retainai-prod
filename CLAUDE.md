@@ -39,8 +39,13 @@ or the diff becomes the whole file.
 
 ## Live status
 
-- `.github/workflows/uptime.yml` checks RetainAI and Closet Muse every 15 minutes;
-  a failure emails the owner.
+- `.github/workflows/uptime.yml` checks RetainAI and Closet Muse readiness; a
+  failure emails the owner. Its cron asks for every 15 minutes, but GitHub runs
+  schedules best-effort: from Oct 24 to Nov 11, 2026 it ran 3–6 times a day, with
+  gaps of 3–8 hours. Treat it as an occasional check, not 15-minute coverage.
+  Render separately alerts on "a running service becomes unhealthy" (backend
+  `/healthz`, Closet Muse `/api/health`) if the workspace notification default is
+  on; that covers process health only, not readiness or the static frontend.
 - Launch checks done 2026-11-02: `retainai.ca` redirects to www; SendGrid
   birthday and AI follow-up templates carry `{{unsubscribe_url}}`; real test
   signups passed on both apps (renewals cancelled, Closet Muse CA$9.99 refunded).
