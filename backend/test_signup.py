@@ -192,6 +192,17 @@ class SignupTests(unittest.TestCase):
         self.assertEqual(result.status_code, 401)
         self.save.assert_not_called()
 
+    def test_google_created_account_can_sign_in_after_billing_unlocks_it(self):
+        self.assertEqual(self.google().status_code, 200)
+        self.users["new@example.com"]["status"] = "active"
+        result = self.client.post("/api/oauth/google", json={"credential": "test-signed-token"})
+        self.assertEqual(result.status_code, 200)
+        self.assertEqual(result.get_json()["user"]["email"], "new@example.com")
+        with self.client.session_transaction() as session:
+            self.assertEqual(session["user_email"], "new@example.com")
+            self.assertNotIn("recovery_only", session)
+        self.assertTrue(self.client.get("/api/session").get_json()["authenticated"])
+
 
 if __name__ == "__main__":
     unittest.main()
