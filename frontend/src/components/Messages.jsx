@@ -3,6 +3,7 @@ import React, { useEffect, useLayoutEffect, useMemo, useRef, useState } from "re
 import { SiWhatsapp } from "react-icons/si";
 import { API_BASE } from "../config";
 import { getWorkspaceEmail } from "../workspaceIdentity";
+import { BUSINESS_SETTINGS_PATH, holdDraft, isBusinessProfileRequired, takeHeldDraft } from "../businessProfile";
 import {
   addDaysToDateKey,
   buildAppointmentTimestamp,
@@ -739,7 +740,7 @@ function buildSmartAutofillValues(expectedParams, paramKinds, context) {
 }
 
 /** ===== COMPONENT ===== */
-export default function Messages({ user, leads = [], defaultTemplate = "", language = "en" }) {
+export default function Messages({ user, leads = [], defaultTemplate = "", language = "en", onOpenBusinessSettings }) {
   const API = (() => {
     const env = (v) => (v && v.trim()) || "";
     const fromEnv =
@@ -827,7 +828,9 @@ export default function Messages({ user, leads = [], defaultTemplate = "", langu
 
   useEffect(() => {
     setThread([]);
-    setInput("");
+    // A reply held while the owner added a business name comes back to its thread.
+    const held = takeHeldDraft(`messages:${activeThreadKey}`);
+    setInput(typeof held?.text === "string" ? held.text : "");
     if (pollTimer.current) {
       clearTimeout(pollTimer.current);
       pollTimer.current = null;
@@ -842,7 +845,7 @@ export default function Messages({ user, leads = [], defaultTemplate = "", langu
       setAutoLog([]);
     }
     setShowAutoLog(false);
-  }, [activeLeadId, workspaceEmail, lead?.id]);
+  }, [activeLeadId, activeThreadKey, workspaceEmail, lead?.id]);
 
   useEffect(() => {
     if (!API || !workspaceEmail || !lead?.id) return;
@@ -1581,7 +1584,6 @@ export default function Messages({ user, leads = [], defaultTemplate = "", langu
         },
         last_message: lastInbound || "",
         conversation_history: conversationHistory,
-        user_business: user?.business || user?.businessType || "business",
         user_name: user?.name || "",
       };
 
@@ -1593,6 +1595,29 @@ export default function Messages({ user, leads = [], defaultTemplate = "", langu
       });
 
       const j = await r.json();
+      if (isBusinessProfileRequired(j)) {
+        // No local template either: the owner adds their business name first.
+        // The typed reply stays in the box and is held while Settings is open.
+        setBanner(
+          <span role="alert">
+            {j.error}{" "}
+            <a
+              href={BUSINESS_SETTINGS_PATH}
+              style={{ color: "#f7cb53", fontWeight: 700 }}
+              onClick={(event) => {
+                holdDraft(`messages:${activeThreadKey}`, { text: input });
+                if (typeof onOpenBusinessSettings === "function") {
+                  event.preventDefault();
+                  onOpenBusinessSettings();
+                }
+              }}
+            >
+              Add business name in Settings
+            </a>
+          </span>
+        );
+        return;
+      }
       const rawDraft = j?.reply ? cleanAIText(j.reply) : fallback;
       const softened = stripGreetingIfNeeded(rawDraft, recentBusinessText);
       const finalDraft = softened || rawDraft || fallback;

@@ -12,10 +12,10 @@ jest.mock("./LeadsDashboard", () => () => <div>Contact records</div>);
 jest.mock("./LeadModal", () => () => null);
 jest.mock("./Calendar", () => () => <div>Calendar grid</div>);
 jest.mock("./Appointments", () => () => <div>Appointment list</div>);
-jest.mock("./Messages", () => () => <div>Message inbox</div>);
+jest.mock("./Messages", () => ({ onOpenBusinessSettings }) => <div>Message inbox<button onClick={onOpenBusinessSettings}>Inbox business settings</button></div>);
 jest.mock("./NotificationsCenter", () => () => null);
 jest.mock("./Notifications", () => () => null);
-jest.mock("./AiPromptsDashboard", () => () => null);
+jest.mock("./AiPromptsDashboard", () => ({ onOpenBusinessSettings }) => <div>AI Studio<button onClick={onOpenBusinessSettings}>Studio business settings</button></div>);
 jest.mock("./Settings", () => ({ initialTab }) => <div>Settings {initialTab || "profile"}</div>);
 jest.mock("./Insights", () => () => null);
 jest.mock("./Invoices", () => () => null);
@@ -169,4 +169,16 @@ test("the setup checklist's Add appointment opens the appointment list; contact 
   fireEvent.click(screen.getByRole("button", { name: "Setup import contacts" }));
   expect(screen.getByText("Settings imports")).toBeInTheDocument();
   expect(screen.getByTestId("location")).toHaveTextContent(/^\/app\/import$/);
+});
+
+test.each([
+  ["/app?section=ai-prompts", "Studio business settings"],
+  ["/app?section=messages", "Inbox business settings"],
+])("a business-name prompt in %s opens Settings > Profile", async (start, action) => {
+  await mount(start);
+  fireEvent.click(screen.getByRole("button", { name: action }));
+  expect(screen.getByText("Settings profile")).toBeInTheDocument();
+  expect(screen.getByTestId("location")).toHaveTextContent("/app?tab=profile");
+  fireEvent.click(screen.getByRole("button", { name: "Browser back" }));
+  expect(screen.getByRole("button", { name: action })).toBeInTheDocument();
 });
