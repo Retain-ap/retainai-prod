@@ -359,11 +359,19 @@ def calendly_sync():
                     rows.append(appointment)
                     positions[appointment["id"]] = len(rows) - 1
                     results["imported"] += 1
-                elif all(rows[position].get(field) == appointment.get(field) for field in fields):
-                    results["unchanged"] += 1
                 else:
-                    rows[position] = {**rows[position], **appointment}
-                    results["updated"] += 1
+                    existing = rows[position]
+                    merged = _merge_owner_edits(existing, appointment)
+                    if all(existing.get(field) == merged.get(field) for field in fields):
+                        results["unchanged"] += 1
+                        # Nothing the owner sees changed, but Calendly's status may
+                        # have (the baseline owner edits are measured against), or
+                        # an older row may be getting its first baseline: save it.
+                        if existing.get("calendly_synced_status") != merged.get("calendly_synced_status"):
+                            rows[position] = merged
+                    else:
+                        rows[position] = merged
+                        results["updated"] += 1
             if mapped:
                 all_appointments[workspace] = rows
                 core.save_appointments(all_appointments)
@@ -387,25 +395,63 @@ def calendly_sync():
     return jsonify({"ok": True, **results}), 200
 
 
+def _merge_owner_edits(existing, synced):
+    """Refresh an imported booking from Calendly without undoing the owner's work.
+
+    Calendly never supplies notes, so the owner's notes are kept. A status the
+    owner set in RetainAI (one that differs from calendly_synced_status, the
+    status the sync last wrote, e.g. a no-show or a manual completion) is kept
+    too, unless Calendly now reports the booking cancelled. Time, duration and
+    title still follow Calendly, which is the booking's source of truth. The
+    merged row always carries Calendly's current status as the new baseline.
+    """
+    merged = {**existing, **synced}
+    merged["notes"] = existing.get("notes") or ""
+    owner_status = existing.get("status")
+    baseline = existing.get("calendly_synced_status")
+    if baseline is None:
+        # Imported before baselines were recorded: we can't tell an owner edit
+        # from an older sync's status, so a stored status that differs from
+        # Calendly's is treated as the owner's and kept (cancellation still
+        # wins). The merged row records the baseline from now on.
+        baseline = synced.get("status")
+    if owner_status and owner_status != baseline and synced.get("status") != "cancelled":
+        terminal = owner_status in ("completed", "cancelled", "no-show")
+        merged.update(status=owner_status, done=terminal, is_done=terminal, completed=owner_status == "completed")
+    return merged
+
+
 def revoke_workspace(workspace):
-    """Revoke at Calendly (best effort) and delete the stored tokens."""
+    """Delete the stored tokens, then revoke them at Calendly (best effort).
+
+    The tokens are taken out of the store under the connection lock before any
+    revoke call. A token refresh running at the same time holds that lock, so it
+    either finishes first (and its new tokens are the ones revoked here) or
+    finds no connection and issues none; no rotated refresh token is left live.
+
+    Returns True only when Calendly confirmed revoking the refresh token, the
+    long-lived credential. Revoking just the access token is not reported as
+    revoked, so the caller tells the owner to remove RetainAI in Calendly too.
+    """
     config = _config()
-    connection = _load(workspace)
-    revoked = False
-    if config["configured"] and connection.get("user_uri"):
-        key, previous = _keys()
-        client = _client(config)
-        for field in ("refresh_token_enc", "access_token_enc"):
-            token = decrypt_secret(connection.get(field), key, previous)
-            if not token:
-                continue
-            try:
-                client.revoke(token)
-                revoked = True
-            except cal.CalendlyError:
-                pass
-    _update(lambda data: data.pop(workspace, None))
-    return revoked
+    taken = _update(lambda data: data.pop(workspace, None))
+    if not isinstance(taken, dict) or not taken.get("user_uri") or not config["configured"]:
+        return False
+    key, previous = _keys()
+    client = _client(config)
+    confirmed = {}
+    for field in ("refresh_token_enc", "access_token_enc"):
+        token = decrypt_secret(taken.get(field), key, previous)
+        if not token:
+            continue
+        try:
+            client.revoke(token)
+            confirmed[field] = True
+        except cal.CalendlyError:
+            confirmed[field] = False
+    if "refresh_token_enc" in confirmed:
+        return confirmed["refresh_token_enc"]
+    return confirmed.get("access_token_enc", False)
 
 
 @calendly_bp.post("/api/calendly/disconnect")

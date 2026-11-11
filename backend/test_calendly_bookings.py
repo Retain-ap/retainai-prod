@@ -291,6 +291,105 @@ class CalendlyTests(unittest.TestCase):
         self.assertTrue(api_calls and all(c["method"] == "GET" for c in api_calls))
         self.assertTrue(all(c["params"]["user"] == f"{API}/users/USER1" for c in api_calls if c["path"] == "/scheduled_events"))
 
+    def edit_imported(self, **changes):
+        data = retainai.load_appointments()
+        data[self.owner][0].update(changes)
+        retainai.save_appointments(data)
+
+    def test_owner_status_and_notes_on_an_imported_booking_survive_re_sync(self):
+        self.fake.events = [event("PAST", -2)]
+        self.fake.invitees = {"PAST": [invitee("PAST", "I1")]}
+        client, _, _ = self.connect()
+        self.sync(client)
+        self.edit_imported(status="no-show", done=True, completed=False, notes="Did not arrive")
+        for _ in range(2):  # stable: later syncs neither revert nor keep "updating" it
+            result = self.sync(client).get_json()
+            self.assertEqual((result["updated"], result["unchanged"]), (0, 1))
+        row = self.appointments()[0]
+        self.assertEqual((row["status"], row["completed"], row["notes"]), ("no-show", False, "Did not arrive"))
+
+    def test_a_calendly_cancellation_overrides_the_owner_status_but_keeps_notes(self):
+        self.fake.events = [event("SOON", 3)]
+        self.fake.invitees = {"SOON": [invitee("SOON", "I1")]}
+        client, _, _ = self.connect()
+        self.sync(client)
+        self.edit_imported(status="completed", done=True, completed=True, notes="Prepaid deposit")
+        self.fake.events = [event("SOON", 3, "canceled")]
+        self.assertEqual(self.sync(client).get_json()["updated"], 1)
+        row = self.appointments()[0]
+        self.assertEqual((row["status"], row["done"], row["notes"]), ("cancelled", True, "Prepaid deposit"))
+
+    def stored_row(self):
+        return self.appointments()[0]
+
+    def test_a_calendly_status_change_updates_the_baseline_even_when_nothing_visible_changes(self):
+        # The reviewer's sequence: import scheduled -> owner marks completed ->
+        # Calendly's status becomes completed (time passed) -> owner resets to
+        # scheduled -> the next sync must keep the owner's scheduled.
+        self.fake.events = [event("SOON", 1)]
+        self.fake.invitees = {"SOON": [invitee("SOON", "I1")]}
+        client, _, _ = self.connect()
+        self.sync(client)
+        self.assertEqual((self.stored_row()["status"], self.stored_row()["calendly_synced_status"]), ("scheduled", "scheduled"))
+        self.edit_imported(status="completed", done=True, completed=True)
+        later = NOW + dt.timedelta(days=2)
+        with patch.object(app_calendly, "_now", return_value=later):
+            result = self.sync(client).get_json()
+            self.assertEqual((result["updated"], result["unchanged"]), (0, 1))
+            self.assertEqual((self.stored_row()["status"], self.stored_row()["calendly_synced_status"]), ("completed", "completed"))
+            self.edit_imported(status="scheduled", done=False, completed=False)
+            self.sync(client)
+        self.assertEqual(self.stored_row()["status"], "scheduled")
+
+    def strip_baseline(self, **changes):
+        data = retainai.load_appointments()
+        row = data[self.owner][0]
+        row.pop("calendly_synced_status", None)
+        row.update(changes)
+        retainai.save_appointments(data)
+
+    def test_legacy_rows_keep_a_differing_status_and_gain_a_baseline(self):
+        self.fake.events = [event("PAST", -2)]
+        self.fake.invitees = {"PAST": [invitee("PAST", "I1")]}
+        client, _, _ = self.connect()
+        self.sync(client)
+        self.strip_baseline(status="no-show", done=True, completed=False, notes="Did not arrive")
+        result = self.sync(client).get_json()
+        self.assertEqual((result["updated"], result["unchanged"]), (0, 1))
+        row = self.stored_row()
+        self.assertEqual((row["status"], row["notes"], row["calendly_synced_status"]), ("no-show", "Did not arrive", "completed"))
+        self.sync(client)
+        self.assertEqual(self.stored_row()["status"], "no-show")
+
+    def test_legacy_rows_with_the_same_status_gain_a_baseline_on_an_unchanged_sync(self):
+        self.fake.events = [event("PAST", -2)]
+        self.fake.invitees = {"PAST": [invitee("PAST", "I1")]}
+        client, _, _ = self.connect()
+        self.sync(client)
+        self.strip_baseline()
+        self.assertEqual(self.sync(client).get_json()["unchanged"], 1)
+        self.assertEqual(self.stored_row()["calendly_synced_status"], "completed")
+
+    def test_legacy_rows_still_follow_a_calendly_cancellation(self):
+        self.fake.events = [event("PAST", -2)]
+        self.fake.invitees = {"PAST": [invitee("PAST", "I1")]}
+        client, _, _ = self.connect()
+        self.sync(client)
+        self.strip_baseline(status="no-show", done=True, completed=False, notes="Did not arrive")
+        self.fake.events = [event("PAST", -2, "canceled")]
+        self.sync(client)
+        row = self.stored_row()
+        self.assertEqual((row["status"], row["notes"], row["calendly_synced_status"]), ("cancelled", "Did not arrive", "cancelled"))
+
+    def test_unedited_imported_bookings_still_follow_calendly(self):
+        self.fake.events = [event("SOON", 3)]
+        self.fake.invitees = {"SOON": [invitee("SOON", "I1")]}
+        client, _, _ = self.connect()
+        self.sync(client)
+        self.fake.events = [event("SOON", 3, "canceled")]
+        self.sync(client)
+        self.assertEqual(self.appointments()[0]["status"], "cancelled")
+
     def test_sync_leaves_appointments_from_other_sources_alone(self):
         manual = {"id": "manual-1", "lead_id": "ana", "status": "scheduled", "appointment_time": "2026-12-01T10:00:00"}
         retainai.save_appointments({self.owner: [manual]})
@@ -571,6 +670,46 @@ class CalendlyTests(unittest.TestCase):
         revokes = [c for c in self.fake.calls if c["path"] == "/oauth/revoke"]
         self.assertEqual([c["data"]["token"] for c in revokes], ["refresh-1", "access-1"])
         self.assertEqual({(c["data"]["client_id"], c["data"]["client_secret"]) for c in revokes}, {("cal-client", "cal-secret")})
+        self.assertNotIn(self.owner, self.stored())
+
+    def live_refresh_tokens(self):
+        """Refresh tokens Calendly issued that were neither spent nor revoked."""
+        issued = {"refresh-1"} | {f"refresh-{n + 1}" for n in range(1, self.fake.refresh_count + 1)}
+        spent = {c["data"]["refresh_token"] for c in self.token_calls() if c["data"]["grant_type"] == "refresh_token"}
+        revoked = {c["data"]["token"] for c in self.fake.calls if c["path"] == "/oauth/revoke"}
+        return issued - spent - revoked
+
+    def test_disconnect_reports_revoked_only_when_the_refresh_token_was_revoked(self):
+        client, _, _ = self.connect()
+        self.fake.push("/oauth/revoke", Response(500, {}), Response(500, {}))  # refresh token: both attempts fail
+        with patch.dict(os.environ, CONFIG):
+            result = client.post("/api/calendly/disconnect", headers=ORIGIN).get_json()
+        revoked = [(c["data"]["token"]) for c in self.fake.calls if c["path"] == "/oauth/revoke"]
+        self.assertEqual(revoked, ["refresh-1", "refresh-1", "access-1"])  # access token's revoke succeeded
+        self.assertFalse(result["revoked"])
+        self.assertIn("integrations", result["message"])
+        self.assertNotIn(self.owner, self.stored())
+
+    def test_a_refresh_racing_a_disconnect_leaves_no_live_refresh_token(self):
+        client, _, _ = self.connect()
+        real = self.fake.request
+        raced = {}
+
+        def refresh_during_revoke(method, url, **kwargs):
+            if url.endswith("/oauth/revoke") and not raced:
+                raced["done"] = True
+                try:  # a sync renewing its token at this exact moment
+                    app_calendly._access_token(self.owner, app_calendly._config(), force_refresh=True)
+                    raced["outcome"] = "refreshed"
+                except LookupError:
+                    raced["outcome"] = "not_connected"
+            return real(method, url, **kwargs)
+
+        self.fake.request = refresh_during_revoke
+        with patch.dict(os.environ, CONFIG):
+            client.post("/api/calendly/disconnect", headers=ORIGIN)
+        self.assertEqual(raced["outcome"], "not_connected")
+        self.assertEqual(self.live_refresh_tokens(), set())
         self.assertNotIn(self.owner, self.stored())
 
     def test_a_failed_revoke_still_deletes_the_tokens_and_says_so(self):
