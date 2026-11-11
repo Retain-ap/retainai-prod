@@ -178,6 +178,9 @@ class ImportApiTests(unittest.TestCase):
         self.assertTrue(retainai.trig_new_lead({"createdAt": datetime.now(timezone.utc).isoformat()}))
 
     def test_imported_contacts_get_no_automated_email_until_consent_is_recorded(self):
+        # Consent is the variable under test; the workspace must also have a
+        # real sender name before any customer birthday email is eligible.
+        self.users[self.owner]["businessName"] = "Sample Studio"
         old = "2020-01-01T00:00:00Z"
         today = datetime.utcnow().strftime("%m-%d")
         imported = {"id": "i1", "name": "Imported", "email": "imp@example.com", "birthday": f"1990-{today}",
@@ -197,6 +200,7 @@ class ImportApiTests(unittest.TestCase):
                 patch.object(retainai, "_email_unsubscribe_url", return_value="https://example.test/u"):
             retainai.send_birthday_greetings()
             greet.assert_called_once()
+            self.assertEqual(greet.call_args.args[:3], ("imp@example.com", "Imported", "Sample Studio"))
 
     def test_duplicate_modes_and_dry_run(self):
         first = self._preview("a.csv", _csv(["Name", "Email", "Company"], ["Sam", "sam@example.com", ""])).get_json()
