@@ -46,14 +46,18 @@ Audit hypotheses are not results. Compare homepage-to-trial and walkthrough comp
 | D3.4 | 2/4 | Names Stripe beside trial CTA, repeats cancel/export controls and preserves honest card requirement; no new refund guarantee. |
 | D3.5 | 0/3 | Dated third-party link slot is gated off until a real mention exists. |
 | D5.3 | 3/4 | Indexable service-business category page, site navigation links and sitemap entry. |
-| D2.5 | 1/4 | Reachable phone navigation, compact category kicker and existing stacked pricing; parent must record actual375×812 pass on home and integrated signup. |
+| D2.5 | 1/4 | Reachable phone navigation, compact category kicker and stacked pricing. Root verified the homepage at 375×812: no horizontal overflow and the trial CTA visible within the first screen. Final combined signup UI verification remains with root. |
 | D1.5 | 2/3 | Actual Contacts screenshot replaces the hand-built mock; six fictional contacts, clear example-data caption, descriptive alt, no private production data. |
 | D1.4 | 2/3 | All FAQ answers remain in DOM, trial answer expanded by default with cancellation/card/eligibility details. Signup shortening is a separate integration. |
 | D4.2 | 3/4 | Trial gating stated on home and pricing; existing monthly model preserved. |
 | D2.B | +0/2 | Category page explicitly identifies large enterprise sales rollouts as outside the intended fit. |
 | D2.3 | 3/5 | Existing page flow retained; clearer billing text contrast and native FAQ controls. Parent visual review pending. |
-| D2.4 | 3/4 | Separate signup workstream owns shortening onboarding; not changed by this public-page commit. |
+| D2.4 | 3/4 | Combined frontend includes four-step email signup (Google skips the password step), with business details deferred until after login. See HEYCATCH_SIGNUP_20261111.md. Deploy the compatible backend first. |
 | D4.B | +0/1 | No change: audit itself says comparison table is not required for the one-tier product. |
 | Brief fit | 8/10 | Category/buyer and trial framing addressed through mapped findings above; no invented finding code. |
 
 Local verification before integration: all 32 frontend suites / 160 tests passed; changed-file ESLint passed; production build and prerender succeeded. The extra route-metadata lifecycle regression added afterward passed (7-test targeted suite). Screenshot replacement then passed a 36-test targeted suite and a production build/prerender. The local asset remains the original 79 KB capture; no new runtime dependencies were added. Parent is responsible for combined-branch tests, actual responsive review, hosting configuration and post-deploy URLs.
+
+## Combined frontend release
+
+Prepared on `codex/heycatch-frontend-release-20261111` from GitHub's `b3313a3` deploy head and rebased onto the merged backward-compatible backend release `a31bbb7` (PR51). It combines public-site commits `c8330d9` and `611fd5a` with frontend signup commit `e3f1d82`. The frontend must not be deployed before the backward-compatible signup backend from PR51 is live. Root owns merging, deploying, final combined signup UI checks, route rewrite configuration and live URL verification. Combined local verification passed: 33 frontend suites / 168 tests, full-source ESLint with zero warnings, production build and prerender for every public route. The rebase changes backend files only; the tested frontend tree is unchanged. Final 375×812 signup UI and live release checks remain with root.
