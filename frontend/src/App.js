@@ -2,6 +2,8 @@
 import React, { Suspense, lazy, useEffect } from "react";
 import { BrowserRouter as Router, Routes, Route, Navigate, useLocation, useNavigate } from "react-router";
 import LandingPage from "./components/LandingPage";
+import MarketingPage from "./pages/MarketingPage";
+import publicContent from "./publicContent.json";
 import Login from "./components/Login";
 import Signup from "./components/Signup";
 import ProtectedRoute from "./components/ProtectedRoute";
@@ -126,6 +128,19 @@ export function RouteMetadata() {
     setMeta('meta[name="twitter:title"]', "content", meta.title);
     setMeta('meta[name="twitter:description"]', "content", meta.description);
     setMeta('link[rel="canonical"]', "href", canonicalUrl);
+    // Keep one FAQ schema, only on routes that visibly include these answers.
+    let faqScript = document.head.querySelector("#retainai-faq-schema");
+    if (pathname === "/" || pathname === "/pricing") {
+      if (!faqScript) {
+        faqScript = document.createElement("script");
+        faqScript.id = "retainai-faq-schema";
+        faqScript.type = "application/ld+json";
+        document.head.appendChild(faqScript);
+      }
+      faqScript.textContent = JSON.stringify({ "@context": "https://schema.org", "@type": "FAQPage", mainEntity: publicContent.faqs.map(([question, answer]) => ({ "@type": "Question", name: question, acceptedAnswer: { "@type": "Answer", text: answer } })) });
+    } else {
+      faqScript?.remove();
+    }
   }, [pathname]);
 
   return null;
@@ -140,6 +155,7 @@ function App() {
         <OAuthPopupBridge />
         <Routes>
           <Route path="/" element={<LandingPage />} />
+          {Object.keys(publicContent.pages).map((path) => <Route key={path} path={path} element={<MarketingPage path={path} />} />)}
           <Route path="/partners" element={<Partners />} />
           <Route path="/r/:code" element={<ReferralRedirect />} />
           <Route path="/login" element={<Login />} />

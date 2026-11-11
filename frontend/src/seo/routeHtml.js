@@ -5,9 +5,10 @@
 // can both load it. Every replacement must match exactly once, or the build fails.
 
 const SITE = "https://www.retainai.ca";
+const publicContent = require("../publicContent.json");
 
 // Indexable public pages, and pages that must never be indexed.
-const PUBLIC_ROUTES = ["/partners", "/signup", "/privacy-policy", "/terms-of-service", "/refund-policy"];
+const PUBLIC_ROUTES = ["/partners", "/signup", "/privacy-policy", "/terms-of-service", "/refund-policy", ...Object.keys(publicContent.pages)];
 const PRIVATE_ROUTES = ["/login", "/accept-invite"];
 
 function escapeHtml(value) {
@@ -38,8 +39,9 @@ function setAttribute(html, tagPattern, attribute, value, label) {
 }
 
 function fallbackContent(meta, path) {
-  const title = escapeHtml(meta.title);
-  const description = escapeHtml(meta.description);
+  const page = publicContent.pages[path];
+  const title = escapeHtml(page?.heading || meta.title);
+  const description = escapeHtml(page?.intro || meta.description);
   const action = path === "/signup"
     ? '<a href="/signup" style="color:#f5d87e">Start a 14-day trial</a>'
     : '<a href="/" style="color:#f5d87e">RetainAI home</a>';
@@ -47,8 +49,21 @@ function fallbackContent(meta, path) {
     '<main style="min-height:100vh;background:#0b0c0e;color:#fff;padding:64px 7%;font-family:Arial,sans-serif">' +
     `<h1 style="font-size:40px;line-height:1.1">${title}</h1>` +
     `<p style="font-size:19px;line-height:1.6;color:#c8cad0;max-width:760px">${description}</p>` +
+    (page ? page.sections.map((section) => `<section><h2>${escapeHtml(section.heading)}</h2><p>${escapeHtml(section.copy)}</p></section>`).join("") : "") +
+    (path === "/about" ? '<p>Mateo Zufic — Owner, RetainAI. <a href="mailto:owner@retainai.ca">Contact Mateo</a>.</p>' : "") +
+    (path === "/pricing" ? faqFallback() : "") +
+    (page ? `<p><a href="/signup">Start your 14-day trial</a> · <a href="${escapeHtml(publicContent.bookingUrl)}">Book a 10-minute walkthrough</a></p><nav aria-label="Explore RetainAI"><a href="/features">Features</a> · <a href="/pricing">Pricing</a> · <a href="/about">About</a> · <a href="/retention-crm-for-service-businesses">Retention CRM for service businesses</a></nav>` : "") +
     `<p>${action}</p></main>`
   );
+}
+
+function faqFallback() {
+  return '<section aria-label="Questions, answered"><h2>Know exactly what you’re signing up for.</h2>' +
+    publicContent.faqs.map(([question, answer], index) => `<details${index === 0 ? " open" : ""}><summary>${escapeHtml(question)}</summary><p>${escapeHtml(answer)}</p></details>`).join("") + "</section>";
+}
+
+function faqSchema() {
+  return { "@context": "https://schema.org", "@type": "FAQPage", mainEntity: publicContent.faqs.map(([question, answer]) => ({ "@type": "Question", name: question, acceptedAnswer: { "@type": "Answer", text: answer } })) };
 }
 
 /**
@@ -82,6 +97,11 @@ function renderRouteHtml(html, path, meta, { indexable }) {
       (_match, bodyClose) => `<div id="root">${fallbackContent(meta, path)}</div>${bodyClose}`,
       "root fallback"
     );
+  } else {
+    out = replaceOnce(out, /<\/main>/, () => `${faqFallback()}<p><a href="/retention-crm-for-service-businesses">Customer retention CRM for Canadian service businesses</a> · <a href="/pricing">Pricing</a> · <a href="/about">About Mateo &amp; RetainAI</a></p></main>`, "homepage summary");
+  }
+  if (path === "/" || path === "/pricing") {
+    out = replaceOnce(out, /<\/head>/, () => `<script id="retainai-faq-schema" type="application/ld+json">${JSON.stringify(faqSchema()).replace(/</g, "\\u003c")}</script></head>`, "head close");
   }
   return out;
 }

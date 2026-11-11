@@ -1,6 +1,7 @@
 import fs from "fs";
 import path from "path";
 import routeMeta from "../routeMeta.json";
+import publicContent from "../publicContent.json";
 import { PRIVATE_ROUTES, PUBLIC_ROUTES, renderRouteHtml as buildRouteHtml } from "./routeHtml";
 
 const homepage = fs.readFileSync(path.resolve(__dirname, "../../public/index.html"), "utf8");
@@ -32,7 +33,7 @@ test.each(PUBLIC_ROUTES)("%s gets its own indexable title, description and canon
     ogUrl: `https://www.retainai.ca${route}`,
     ogTitle: meta.title,
     twitterDescription: meta.description,
-    h1: meta.title,
+    h1: publicContent.pages[route]?.heading || meta.title,
     canonicals: 1,
   });
 });
@@ -71,4 +72,27 @@ test("the install manifests do not advertise placeholder screenshots", () => {
     const manifest = JSON.parse(fs.readFileSync(path.resolve(__dirname, `../../public/${name}`), "utf8"));
     expect(manifest.screenshots).toBeUndefined();
   }
+});
+
+test.each(["/", "/pricing"])("%s serves the exact visible FAQ answers and schema before JavaScript", (route) => {
+  const html = buildRouteHtml(homepage, route, routeMeta[route], { indexable: true });
+  const doc = new DOMParser().parseFromString(html, "text/html");
+  const schema = JSON.parse(doc.querySelector("#retainai-faq-schema").textContent);
+  expect(doc.querySelectorAll("h1")).toHaveLength(1);
+  expect(doc.querySelectorAll("details")).toHaveLength(6);
+  expect(doc.querySelector("details").hasAttribute("open")).toBe(true);
+  expect(schema.mainEntity).toHaveLength(6);
+  publicContent.faqs.forEach(([question, answer], index) => {
+    expect(schema.mainEntity[index]).toMatchObject({ name: question, acceptedAnswer: { text: answer } });
+    expect(doc.body.textContent).toContain(answer);
+  });
+});
+
+test("category content and internal links are present before JavaScript", () => {
+  const route = "/retention-crm-for-service-businesses";
+  const doc = new DOMParser().parseFromString(buildRouteHtml(homepage, route, routeMeta[route], { indexable: true }), "text/html");
+  expect(doc.body.textContent).toContain("From memory to a shared next step");
+  expect(doc.body.textContent).toContain("It is not built for large sales organizations");
+  expect(doc.querySelector('a[href="/pricing"]')).not.toBeNull();
+  expect(doc.querySelector("#retainai-faq-schema")).toBeNull();
 });
