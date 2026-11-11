@@ -16,8 +16,10 @@ export function isBusinessProfileRequired(value) {
 
 // Held drafts live in this tab's session storage only, under a key naming the
 // workspace and the signed-in person, so another account in the same tab never
-// sees them. Text is bounded and a draft older than HELD_DRAFT_MAX_AGE_MS is ignored.
-export const HELD_DRAFT_MAX_CHARS = 4000;
+// sees them. A draft older than HELD_DRAFT_MAX_AGE_MS is ignored.
+// The longest text the app can send: send-ai-message accepts 5000 characters.
+// Messages replies are capped lower (2000) by their own box.
+export const HELD_DRAFT_MAX_CHARS = 5000;
 const HELD_DRAFT_MAX_AGE_MS = 12 * 60 * 60 * 1000;
 const PREFIX = "retainai:held-draft";
 
@@ -33,13 +35,14 @@ export function heldDraftScope(kind, user, ...parts) {
   return [PREFIX, kind, workspace, actor, ...values].map(encodeURIComponent).join(":");
 }
 
-const bounded = (value) => (typeof value === "string" ? value.slice(0, HELD_DRAFT_MAX_CHARS) : value);
-
+// Text longer than the limit is refused, never cut short: a held draft comes
+// back exactly as it was or not at all.
 export function holdDraft(scope, fields) {
   if (!scope || !fields || typeof fields !== "object") return false;
   const value = { savedAt: Date.now(), nonce: Math.random().toString(36).slice(2) };
   for (const [key, field] of Object.entries(fields)) {
-    if (typeof field === "string" || typeof field === "number") value[key] = bounded(field);
+    if (typeof field === "string" && field.length > HELD_DRAFT_MAX_CHARS) return false;
+    if (typeof field === "string" || typeof field === "number") value[key] = field;
   }
   try {
     sessionStorage.setItem(scope, JSON.stringify(value));

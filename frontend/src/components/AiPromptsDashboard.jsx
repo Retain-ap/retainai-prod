@@ -1,7 +1,7 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { FaCheck, FaCopy, FaMagic, FaPaperPlane, FaSearch, FaShieldAlt } from "react-icons/fa";
 import { apiUrl } from "../apiBase";
-import { BUSINESS_SETTINGS_PATH, consumeHeldDraft, heldDraftScope, holdDraft, isBusinessProfileRequired, peekHeldDraft } from "../businessProfile";
+import { BUSINESS_SETTINGS_PATH, HELD_DRAFT_MAX_CHARS, consumeHeldDraft, heldDraftScope, holdDraft, isBusinessProfileRequired, peekHeldDraft } from "../businessProfile";
 import "./AiPrompts.css";
 
 const PLAYBOOKS = [
@@ -12,6 +12,8 @@ const PLAYBOOKS = [
   { key: "upsell", label: "Recommendation", description: "Suggest an option only when customer context supports it.", instruction: "Make a low-pressure recommendation without inventing products, prices, benefits, or preferences." },
 ];
 
+// send-ai-message accepts up to 5000 characters; the box and held draft match it.
+const DRAFT_MAX_CHARS = HELD_DRAFT_MAX_CHARS;
 const TONES = ["Warm", "Professional", "Friendly", "Concise"];
 const LENGTHS = ["Short", "Standard", "Detailed"];
 const firstName = (name) => String(name || "").trim().split(/\s+/)[0] || "";
@@ -141,6 +143,7 @@ export default function AiPromptsDashboard({ leads = [], user = {}, onSendAIProm
   const sendDraft = async () => {
     if (!focusedLead?.email) return showError({ message: "This customer needs an email address before you can send." });
     if (!draft.trim()) return showError({ message: "Create or write a message before sending." });
+    if (draft.trim().length > DRAFT_MAX_CHARS) return showError({ message: `Shorten the message to ${DRAFT_MAX_CHARS} characters or fewer before sending.` });
     setLoading(true);
     setError("");
     setNeedsBusinessName(false);
@@ -196,7 +199,7 @@ export default function AiPromptsDashboard({ leads = [], user = {}, onSendAIProm
               <div className="ai-selected-customer"><span className="ai-avatar">{(focusedLead.name || "C").charAt(0).toUpperCase()}</span><div><small>Writing for</small><strong>{focusedLead.name || "Unnamed customer"}</strong><span>{focusedLead.email || "No email address"}</span></div></div>
               <div className="ai-step"><div className="ai-step-title"><span>2</span><div><strong>Select a playbook</strong><small>Start with a proven relationship moment.</small></div></div><div className="ai-playbooks">{PLAYBOOKS.map((playbook) => <button key={playbook.key} type="button" className={activePlaybook === playbook.key ? "active" : ""} onClick={() => selectPlaybook(playbook.key)}><strong>{playbook.label}</strong><small>{playbook.description}</small></button>)}</div></div>
               <div className="ai-step"><div className="ai-step-title"><span>3</span><div><strong>Shape the message</strong><small>Control the voice and add only details you know are accurate.</small></div></div><div className="ai-control-grid"><label>Tone<select value={tone} onChange={(event) => setTone(event.target.value)}>{TONES.map((item) => <option key={item}>{item}</option>)}</select></label><label>Length<select value={length} onChange={(event) => setLength(event.target.value)}>{LENGTHS.map((item) => <option key={item}>{item}</option>)}</select></label></div><label className="ai-context">Extra context <span>optional</span><textarea value={context} onChange={(event) => setContext(event.target.value)} placeholder="Example: They asked about booking again next month." maxLength={800} /><small>{context.length}/800</small></label><button type="button" className="ai-generate" onClick={generateDraft} disabled={loading}><FaMagic /> {loading ? "Creating your draft…" : draft ? "Generate another version" : "Create message"}</button></div>
-              <div className="ai-step ai-draft-step"><div className="ai-step-title"><span>4</span><div><strong>Review and send</strong><small>Edit anything you like. You remain in control.</small></div></div><textarea className="ai-draft" value={draft} onChange={(event) => setDraft(event.target.value)} placeholder="Your generated message will appear here. You can also write your own." />{error && <div className="ai-feedback error" role="alert">{error}{needsBusinessName && <> <a className="ai-settings-link" href={BUSINESS_SETTINGS_PATH} onClick={openBusinessSettings}>Add business name in Settings</a></>}</div>}{status && !error && <div className="ai-feedback success">{status}</div>}<div className="ai-actions"><button type="button" className="ai-secondary" onClick={copyDraft} disabled={!draft.trim()}><FaCopy /> Copy</button><button type="button" className="ai-send" onClick={sendDraft} disabled={loading || !draft.trim()}><FaPaperPlane /> Send email</button></div><p className="ai-compliance"><FaShieldAlt /> Confirm the message is accurate and appropriate before sending. Avoid sensitive personal or medical details.</p></div>
+              <div className="ai-step ai-draft-step"><div className="ai-step-title"><span>4</span><div><strong>Review and send</strong><small>Edit anything you like. You remain in control.</small></div></div><textarea className="ai-draft" value={draft} onChange={(event) => setDraft(event.target.value)} placeholder="Your generated message will appear here. You can also write your own." maxLength={DRAFT_MAX_CHARS} aria-describedby="ai-draft-count" /><small id="ai-draft-count" className="ai-draft-count">{draft.length}/{DRAFT_MAX_CHARS}</small>{error && <div className="ai-feedback error" role="alert">{error}{needsBusinessName && <> <a className="ai-settings-link" href={BUSINESS_SETTINGS_PATH} onClick={openBusinessSettings}>Add business name in Settings</a></>}</div>}{status && !error && <div className="ai-feedback success">{status}</div>}<div className="ai-actions"><button type="button" className="ai-secondary" onClick={copyDraft} disabled={!draft.trim()}><FaCopy /> Copy</button><button type="button" className="ai-send" onClick={sendDraft} disabled={loading || !draft.trim()}><FaPaperPlane /> Send email</button></div><p className="ai-compliance"><FaShieldAlt /> Confirm the message is accurate and appropriate before sending. Avoid sensitive personal or medical details.</p></div>
             </>
           )}
         </main>

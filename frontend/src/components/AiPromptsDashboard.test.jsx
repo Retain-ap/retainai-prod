@@ -95,6 +95,36 @@ describe("business name required before customer messages", () => {
     expect(send).toHaveBeenCalledTimes(1);
   });
 
+  test("a 4500-character draft survives Settings whole, and the box allows the 5000 the send accepts", async () => {
+    const long = "Thank you for visiting. ".repeat(187) + "Thanks again";
+    expect(long).toHaveLength(4500);
+    const send = jest.fn().mockRejectedValue(Object.assign(new Error(refusal.error), { code: refusal.code }));
+    const { unmount } = render(<AiPromptsDashboard leads={[lead]} user={owner} onSendAIPromptEmail={send} onOpenBusinessSettings={jest.fn()} />);
+    fireEvent.click(screen.getByRole("button", { name: /Jordan/ }));
+    expect(draftBox()).toHaveAttribute("maxLength", "5000");
+    fireEvent.change(draftBox(), { target: { value: long } });
+    expect(screen.getByText("4500/5000")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: /Send email/ }));
+    fireEvent.click(await screen.findByRole("link", { name: "Add business name in Settings" }));
+    expect(send).toHaveBeenCalledWith(lead, long.trim(), "Checking in, Jordan", "followup");
+    unmount();
+
+    render(<AiPromptsDashboard leads={[lead]} user={owner} />);
+    expect((await screen.findByText("Writing for")) && draftBox()).toHaveValue(long);
+    expect(sessionStorage.getItem(ownerScope())).toBeNull();
+  });
+
+  test("a draft over the send limit is refused visibly instead of being cut short", async () => {
+    const send = jest.fn();
+    render(<AiPromptsDashboard leads={[lead]} user={owner} onSendAIPromptEmail={send} />);
+    fireEvent.click(screen.getByRole("button", { name: /Jordan/ }));
+    fireEvent.change(draftBox(), { target: { value: "x".repeat(5001) } });
+    fireEvent.click(screen.getByRole("button", { name: /Send email/ }));
+    expect(await screen.findByText("Shorten the message to 5000 characters or fewer before sending.")).toBeInTheDocument();
+    expect(send).not.toHaveBeenCalled();
+    expect(draftBox().value).toHaveLength(5001);
+  });
+
   test("a refused draft request shows the Settings action and leaves an existing draft alone", async () => {
     global.fetch = jest.fn().mockResolvedValue({ ok: false, status: 409, json: async () => refusal });
     render(<AiPromptsDashboard leads={[lead]} user={owner} />);

@@ -17,11 +17,20 @@ test("scopes name the workspace and the signed-in person, and refuse unknown par
   expect(sessionStorage.length).toBe(0);
 });
 
-test("held text is bounded, peeking keeps it, and consuming leaves a newer draft alone", () => {
+test("held text is kept whole up to the send limit and refused beyond it, never cut short", () => {
   const scope = heldDraftScope("ai-studio", { email: "owner@example.com" });
-  holdDraft(scope, { draft: "x".repeat(HELD_DRAFT_MAX_CHARS + 50), nested: { ignored: true } });
+  expect(HELD_DRAFT_MAX_CHARS).toBe(5000);
+  expect(holdDraft(scope, { draft: "x".repeat(HELD_DRAFT_MAX_CHARS + 1) })).toBe(false);
+  expect(sessionStorage.getItem(scope)).toBeNull();
+  expect(holdDraft(scope, { draft: "y".repeat(HELD_DRAFT_MAX_CHARS) })).toBe(true);
+  expect(peekHeldDraft(scope).draft).toHaveLength(HELD_DRAFT_MAX_CHARS);
+});
+
+test("peeking keeps a held draft, and consuming leaves a newer draft alone", () => {
+  const scope = heldDraftScope("ai-studio", { email: "owner@example.com" });
+  holdDraft(scope, { draft: "first", nested: { ignored: true } });
   const first = peekHeldDraft(scope);
-  expect(first.draft).toHaveLength(HELD_DRAFT_MAX_CHARS);
+  expect(first.draft).toBe("first");
   expect(first.nested).toBeUndefined();
   expect(peekHeldDraft(scope)).toEqual(first);
 
