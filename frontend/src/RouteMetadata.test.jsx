@@ -45,10 +45,23 @@ test.each(["/login", "/login/"])("%s stays noindex with its own title", (path) =
   expect(metadataAt(path)).toMatchObject({ title: routeMeta["/login"].title, robots: "noindex,nofollow", canonical: "https://www.retainai.ca/" });
 });
 
-test("the homepage and unknown paths still use the homepage canonical", () => {
-  expect(metadataAt("/")).toMatchObject({ title: routeMeta["/"].title, canonical: "https://www.retainai.ca/" });
-  expect(metadataAt("/not-a-page/")).toMatchObject({ title: routeMeta["/"].title, canonical: "https://www.retainai.ca/" });
+test("the homepage keeps its canonical and the workspace stays noindex", () => {
+  expect(metadataAt("/")).toMatchObject({ title: routeMeta["/"].title, robots: "index,follow,max-image-preview:large", canonical: "https://www.retainai.ca/" });
   expect(metadataAt("/app/")).toMatchObject({ robots: "noindex,nofollow" });
+});
+
+// The static host answers every URL with the app, so an unknown path that kept
+// the homepage's indexable metadata looked like a duplicate homepage (soft 404).
+test.each(["/not-a-page", "/not-a-page/", "/pricing/extra", "/r/code/extra"])("unknown path %s is noindex, not a copy of the homepage", (path) => {
+  expect(metadataAt(path)).toMatchObject({ title: "Page not found — RetainAI", robots: "noindex" });
+});
+
+test.each(Object.keys(routeMeta).filter((path) => !["/login", "/accept-invite"].includes(path)))("known public route %s stays indexable", (path) => {
+  expect(metadataAt(path).robots).toBe("index,follow,max-image-preview:large");
+});
+
+test("partner referral links are not treated as missing pages", () => {
+  expect(metadataAt("/r/salon-coach")).toMatchObject({ title: routeMeta["/"].title, robots: "index,follow,max-image-preview:large" });
 });
 
 test("FAQ schema is reused on pricing and removed when its answers are not on the page", () => {
