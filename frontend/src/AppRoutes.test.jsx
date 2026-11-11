@@ -2,6 +2,7 @@ import React from "react";
 import { render, screen } from "@testing-library/react";
 import { MemoryRouter, useLocation } from "react-router";
 import { AppRoutes } from "./App";
+import publicContent from "./publicContent.json";
 
 function CurrentPath() {
   const { pathname } = useLocation();
@@ -18,6 +19,17 @@ test("an unknown address shows a not-found page and keeps its URL instead of bec
   expect(screen.getByLabelText("Current path")).toHaveTextContent(/^\/no-such-page$/);
   expect(screen.getByRole("link", { name: "RetainAI home" })).toHaveAttribute("href", "/");
   expect(screen.getByRole("link", { name: "Log in" })).toHaveAttribute("href", "/login");
+});
+
+test.each(["/PRICING", "/%70ricing", "/Pricing/"])("%s shows the pricing page, as its metadata expects", (path) => {
+  renderAt(path);
+  expect(screen.getByRole("heading", { level: 1, name: publicContent.pages["/pricing"].heading })).toBeInTheDocument();
+  expect(screen.queryByRole("heading", { name: "Page not found" })).not.toBeInTheDocument();
+});
+
+test("an encoded slash is part of one segment, so /pricing%2Fextra is not the pricing page", () => {
+  renderAt("/pricing%2Fextra");
+  expect(screen.getByRole("heading", { level: 1, name: "Page not found" })).toBeInTheDocument();
 });
 
 test.each([

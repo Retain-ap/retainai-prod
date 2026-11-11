@@ -60,8 +60,36 @@ test.each(Object.keys(routeMeta).filter((path) => !["/login", "/accept-invite"].
   expect(metadataAt(path).robots).toBe("index,follow,max-image-preview:large");
 });
 
-test("partner referral links are not treated as missing pages", () => {
-  expect(metadataAt("/r/salon-coach")).toMatchObject({ title: routeMeta["/"].title, robots: "index,follow,max-image-preview:large" });
+test.each(["/r/salon-coach", "/r/SalonCoach", "/R/SalonCoach"])("partner referral link %s is not treated as a missing page", (path) => {
+  expect(metadataAt(path)).toMatchObject({ title: routeMeta["/"].title, robots: "index,follow,max-image-preview:large" });
+});
+
+// React Router matches case-insensitively against the percent-decoded path, so
+// these addresses show the real page and must carry its metadata, with the
+// canonical in lowercase.
+test.each([
+  ["/PRICING", "/pricing"],
+  ["/Pricing/", "/pricing"],
+  ["/%70ricing", "/pricing"],
+  ["/%50RICING", "/pricing"],
+  ["/Privacy-Policy", "/privacy-policy"],
+  ["/retention%2Dcrm%2Dfor%2Dservice%2Dbusinesses", "/retention-crm-for-service-businesses"],
+])("%s gets %s metadata and its lowercase canonical", (path, route) => {
+  expect(metadataAt(path)).toEqual({
+    title: routeMeta[route].title,
+    description: routeMeta[route].description,
+    robots: "index,follow,max-image-preview:large",
+    canonical: `https://www.retainai.ca${route}`,
+    ogUrl: `https://www.retainai.ca${route}`,
+  });
+});
+
+test.each(["/LOGIN", "/%6Cogin", "/APP/settings", "/Accept-Invite"])("private route %s stays noindex whatever its case or encoding", (path) => {
+  expect(metadataAt(path)).toMatchObject({ robots: "noindex,nofollow", canonical: "https://www.retainai.ca/" });
+});
+
+test.each(["/pricing%2Fextra", "/%E0%A4%A", "/pricing%"])("%s, which the router does not match, is a noindex missing page", (path) => {
+  expect(metadataAt(path)).toMatchObject({ title: "Page not found — RetainAI", robots: "noindex" });
 });
 
 test("FAQ schema is reused on pricing and removed when its answers are not on the page", () => {

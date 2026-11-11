@@ -105,11 +105,27 @@ function isKnownPath(pathname) {
   return Boolean(ROUTE_META[pathname]) || /^\/app(\/|$)/.test(pathname) || /^\/r\/[^/]+$/.test(pathname);
 }
 
+// The key metadata is looked up by, matched the way React Router matches routes:
+// percent-decoded per segment (an encoded "/" stays inside its segment; if any
+// escape is malformed the path is used as typed, like the router's decodePath)
+// and compared case-insensitively, so /PRICING and /%70ricing are /pricing.
+// A static host may also redirect /partners to /partners/, so trailing slashes
+// are dropped; "/" stays "/". Only this lookup key is lowercased: the URL
+// itself, including a referral code, is never rewritten.
+function routeKey(rawPathname) {
+  let decoded = rawPathname;
+  try {
+    decoded = rawPathname
+      .split("/")
+      .map((segment) => decodeURIComponent(segment).replace(/\//g, "%2F"))
+      .join("/");
+  } catch {}
+  return decoded.replace(/\/+$/, "").toLowerCase() || "/";
+}
+
 export function RouteMetadata() {
   const { pathname: rawPathname } = useLocation();
-  // A static host may redirect /partners to /partners/; the router matches both,
-  // so metadata must too. "/" itself stays "/".
-  const pathname = rawPathname.replace(/\/+$/, "") || "/";
+  const pathname = routeKey(rawPathname);
 
   useEffect(() => {
     const privateRoute =
