@@ -3,6 +3,7 @@ import React, { useEffect, useLayoutEffect, useMemo, useRef, useState } from "re
 import { SiWhatsapp } from "react-icons/si";
 import { API_BASE } from "../config";
 import { getWorkspaceEmail } from "../workspaceIdentity";
+import { BUSINESS_PROFILE_MESSAGE, BUSINESS_PROFILE_REQUIRED, BUSINESS_SETTINGS_PATH, consumeHeldDraft, heldDraftScope, holdDraft, isBusinessProfileRequired, peekHeldDraft } from "../businessProfile";
 import {
   addDaysToDateKey,
   buildAppointmentTimestamp,
@@ -739,7 +740,7 @@ function buildSmartAutofillValues(expectedParams, paramKinds, context) {
 }
 
 /** ===== COMPONENT ===== */
-export default function Messages({ user, leads = [], defaultTemplate = "", language = "en" }) {
+export default function Messages({ user, leads = [], defaultTemplate = "", language = "en", onOpenBusinessSettings }) {
   const API = (() => {
     const env = (v) => (v && v.trim()) || "";
     const fromEnv =
@@ -824,10 +825,24 @@ export default function Messages({ user, leads = [], defaultTemplate = "", langu
 
   const [autoLog, setAutoLog] = useState([]);
   const [showAutoLog, setShowAutoLog] = useState(false);
+  // Held replies are keyed to this workspace, the signed-in person and the thread's
+  // customer; "" (nothing held) until all three are known.
+  const heldScope = heldDraftScope("messages", user, lead?.id);
+  const restoredReplyRef = useRef(null);
 
   useEffect(() => {
     setThread([]);
-    setInput("");
+    // A reply held while the owner added a business name comes back to its
+    // thread; it is removed only once it is back in the box. The ref keeps it
+    // through a repeated run of this effect for the same thread.
+    const held = peekHeldDraft(heldScope);
+    if (held && typeof held.text === "string") {
+      restoredReplyRef.current = { scope: heldScope, text: held.text };
+      consumeHeldDraft(heldScope, held);
+    } else if (restoredReplyRef.current?.scope !== heldScope) {
+      restoredReplyRef.current = null;
+    }
+    setInput(restoredReplyRef.current?.text || "");
     if (pollTimer.current) {
       clearTimeout(pollTimer.current);
       pollTimer.current = null;
@@ -842,7 +857,7 @@ export default function Messages({ user, leads = [], defaultTemplate = "", langu
       setAutoLog([]);
     }
     setShowAutoLog(false);
-  }, [activeLeadId, workspaceEmail, lead?.id]);
+  }, [activeLeadId, heldScope, workspaceEmail, lead?.id]);
 
   useEffect(() => {
     if (!API || !workspaceEmail || !lead?.id) return;
@@ -1581,7 +1596,6 @@ export default function Messages({ user, leads = [], defaultTemplate = "", langu
         },
         last_message: lastInbound || "",
         conversation_history: conversationHistory,
-        user_business: user?.business || user?.businessType || "business",
         user_name: user?.name || "",
       };
 
@@ -1593,6 +1607,14 @@ export default function Messages({ user, leads = [], defaultTemplate = "", langu
       });
 
       const j = await r.json();
+      if (isBusinessProfileRequired(j)) {
+        // No local template either: the owner adds their business name first.
+        // The typed reply stays in the box and is held while Settings is open.
+        // A marker, not markup: the Settings link is rendered from current state,
+        // so it holds the reply as it is when clicked, edits included.
+        setBanner({ kind: BUSINESS_PROFILE_REQUIRED, message: String(j.error || BUSINESS_PROFILE_MESSAGE) });
+        return;
+      }
       const rawDraft = j?.reply ? cleanAIText(j.reply) : fallback;
       const softened = stripGreetingIfNeeded(rawDraft, recentBusinessText);
       const finalDraft = softened || rawDraft || fallback;
@@ -2311,7 +2333,24 @@ export default function Messages({ user, leads = [], defaultTemplate = "", langu
                   borderBottom: `1px solid ${C.border}`,
                 }}
               >
-                {banner}
+                {banner?.kind === BUSINESS_PROFILE_REQUIRED ? (
+                  <span role="alert">
+                    {banner.message}{" "}
+                    <a
+                      href={BUSINESS_SETTINGS_PATH}
+                      style={{ color: "#f7cb53", fontWeight: 700 }}
+                      onClick={(event) => {
+                        holdDraft(heldScope, { text: input });
+                        if (typeof onOpenBusinessSettings === "function") {
+                          event.preventDefault();
+                          onOpenBusinessSettings();
+                        }
+                      }}
+                    >
+                      Add business name in Settings
+                    </a>
+                  </span>
+                ) : banner}
               </div>
             )}
 

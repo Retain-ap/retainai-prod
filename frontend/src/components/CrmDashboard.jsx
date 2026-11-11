@@ -28,6 +28,7 @@ import TrialCommandBar from "./TrialCommandBar";
 import OnboardingGuide from "./OnboardingGuide";
 import "./AppSectionShell.css";
 import { getWorkspaceCapabilities } from "../workspaceIdentity";
+import { BUSINESS_SETTINGS_PATH } from "../businessProfile";
 import {
   appointmentDateTimeParts,
   buildAppointmentTimestamp,
@@ -916,7 +917,9 @@ function CrmDashboard({ authenticatedUser }) {
     });
     const data = await response.json().catch(() => ({}));
     if (!response.ok || data?.ok === false) {
-      throw new Error(data?.error || `Message could not be sent (HTTP ${response.status}).`);
+      const error = new Error(data?.error || `Message could not be sent (HTTP ${response.status}).`);
+      error.code = data?.code;
+      throw error;
     }
     setHighlightLeadIds([lead.id]);
     return true;
@@ -1052,6 +1055,13 @@ function CrmDashboard({ authenticatedUser }) {
     setSettingsTab("integrations");
     setSection("settings");
     navigate("/app?tab=integrations");
+  }, [navigate]);
+
+  // Customer drafts and sends need a business name; it lives in Settings > Profile.
+  const openBusinessSettings = useCallback(() => {
+    setSettingsTab("profile");
+    setSection("settings");
+    navigate(BUSINESS_SETTINGS_PATH);
   }, [navigate]);
 
   // Fetch Google events
@@ -1535,7 +1545,7 @@ function CrmDashboard({ authenticatedUser }) {
         )}
 
         {section === "messages" && (
-          <Messages leads={leads} highlightLeadIds={highlightLeadIds} user={user} />
+          <Messages leads={leads} highlightLeadIds={highlightLeadIds} user={user} onOpenBusinessSettings={openBusinessSettings} />
         )}
 
         {section === "notifications" && <NotificationsCenter user={user} />}
@@ -1556,6 +1566,7 @@ function CrmDashboard({ authenticatedUser }) {
             leads={leads}
             user={user}
             onSendAIPromptEmail={handleSendAIPromptEmail}
+            onOpenBusinessSettings={openBusinessSettings}
           />
         )}
 

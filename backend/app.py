@@ -1838,6 +1838,29 @@ def _bounded_ai_text(value: Any, max_chars: int) -> str:
     return text[:max(0, int(max_chars))]
 
 
+def _workspace_business_name(record: Any) -> str:
+    """The owner's real, nonblank business name, or "" when none is set.
+
+    Business type is not a name, and no placeholder is invented: customer
+    drafts and sends require the owner to add a name (business_profile_required).
+    """
+    if not isinstance(record, dict):
+        return ""
+    name = str(record.get("businessName") or "").strip() or str(record.get("business") or "").strip()
+    return _bounded_ai_text(name, 160)
+
+
+def _business_profile_required(*, with_ok: bool = False):
+    body = {
+        "error": "Add your business name in Settings before creating or sending customer messages.",
+        "code": "business_profile_required",
+        "settings_path": "/app?tab=profile",
+    }
+    if with_ok:
+        body["ok"] = False
+    return jsonify(body), 409
+
+
 def _conversation_reference(rows: Any, *, max_items: int = 8, max_chars: int = 500) -> List[Dict[str, str]]:
     """Return a small, role-labelled transcript for AI reference only."""
     cleaned: List[Dict[str, str]] = []
@@ -6573,13 +6596,9 @@ def generate_message():
     users = load_users() or {}
     workspace = users.get(workspace_email, {}) if isinstance(users, dict) else {}
     actor = users.get(_session_email(), {}) if isinstance(users, dict) else {}
-    business_name = _bounded_ai_text(
-        workspace.get("businessName")
-        or workspace.get("business")
-        or workspace.get("businessType")
-        or "this business",
-        120,
-    )
+    business_name = _workspace_business_name(workspace)
+    if not business_name:
+        return _business_profile_required()
     user_name = _bounded_ai_text(actor.get("name") or workspace.get("name") or "the business owner", 120)
     lead_name = _bounded_ai_text(lead.get("name") or "Customer", 120)
     lead_tags = lead.get("tags") or []
@@ -8066,12 +8085,9 @@ def generate_prompt():
     workspace = users.get(workspace_email, {}) if isinstance(users, dict) else {}
     actor = users.get(actor_email, {}) if isinstance(users, dict) else {}
     lead_name = str(lead.get("name") or "").strip()
-    business_name = str(
-        workspace.get("businessName")
-        or workspace.get("business")
-        or workspace.get("businessType")
-        or ""
-    ).strip()
+    business_name = _workspace_business_name(workspace)
+    if not business_name:
+        return _business_profile_required()
     prompt_type = str(data.get("promptType") or "").strip().lower()
     prompt_type = AI_PLAYBOOK_ALIASES.get(prompt_type, prompt_type)
     if prompt_type not in AI_PLAYBOOK_RULES:
@@ -8118,7 +8134,7 @@ def generate_prompt():
     birthday_context = birthday_timing.get("description") if birthday_timing else "No verified birthday timing supplied."
     reference = {
         "current_date_utc": datetime.datetime.now(datetime.timezone.utc).date().isoformat(),
-        "business_name": _bounded_ai_text(business_name or "this business", 120),
+        "business_name": business_name,
         "sender_name": _bounded_ai_text(user_name or "Business Owner", 120),
         "customer_name": _bounded_ai_text(lead_name or "Customer", 120),
         "relationship_status": relationship_status,
@@ -8176,7 +8192,7 @@ def ai_prompt():
 
     user = users.get(user_email, {}) or {}
     user_name = _bounded_ai_text(user.get("name"), 120)
-    business = _bounded_ai_text(user.get("business") or user.get("businessType") or "this business", 120)
+    business = _workspace_business_name(user)
 
     lead = None
     for ld in (leads_by_user.get(user_email, []) or []):
@@ -8198,6 +8214,8 @@ def ai_prompt():
         "",
     )
 
+    if not business:
+        return _business_profile_required()
     if not OPENROUTER_API_KEY:
         return jsonify({"error": "OPENROUTER_API_KEY is not configured"}), 500
 
@@ -8292,11 +8310,9 @@ def send_ai_message():
     if not isinstance(user_profile, dict):
         user_profile = {}
 
-    business_name = (
-        str(user_profile.get("businessName") or user_profile.get("business") or "").strip()
-        or str(user_profile.get("businessType") or "").strip()
-        or "Your Business"
-    )[:160]
+    business_name = _workspace_business_name(user_profile)
+    if not business_name:
+        return _business_profile_required(with_ok=True)
     user_name = _bounded_ai_text(user_profile.get("name"), 120)
     lead_name = _bounded_ai_text(lead.get("name"), 120)
 
