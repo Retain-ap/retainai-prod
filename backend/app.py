@@ -2293,7 +2293,9 @@ def send_birthday_greetings():
 
     for user_email, leads in (leads_by_user.items() if isinstance(leads_by_user, dict) else []):
         user = users_by_email.get(user_email, {}) if isinstance(users_by_email, dict) else {}
-        business = user.get("business", "")
+        if not _account_has_access(user):
+            continue
+        business = _workspace_business_name(user)
         user_name = user.get("name", "")
 
         for lead in (leads or []):
@@ -2301,7 +2303,7 @@ def send_birthday_greetings():
             if bday and len(bday.split("-")) >= 3:
                 mmdd = "-".join(bday.split("-")[1:3])
                 if (
-                    mmdd == today and lead.get("email") and not bool(lead.get("email_opt_out"))
+                    mmdd == today and business and lead.get("email") and not bool(lead.get("email_opt_out"))
                     and not imported_without_consent(lead)
                 ):
                     sent = send_birthday_email(
@@ -3242,6 +3244,12 @@ def get_appointments(user_email):
 
 def send_appointment_confirmation_email(appt):
     try:
+        users = load_users() or {}
+        workspace = users.get(appt.get("user_email"), {}) if isinstance(users, dict) else {}
+        business_name = _workspace_business_name(workspace)
+        if not _account_has_access(workspace) or not business_name:
+            return False
+        appt = {**appt, "business_name": business_name}
         create_ics_file(appt)
 
         display_time = _parse_appointment_datetime(
@@ -3340,9 +3348,9 @@ def create_appointment(user_email):
     parsed_appointment_time = _parse_appointment_datetime(
         raw_appointment_time, appointment_timezone
     )
-    business_name = str(
-        workspace.get("business") or workspace.get("businessName") or "Your Business"
-    ).strip()
+    business_name = _workspace_business_name(workspace)
+    if lead_email and not business_name:
+        return _business_profile_required()
     user_name = str(
         actor.get("name") or workspace.get("name") or "Your team"
     ).strip()

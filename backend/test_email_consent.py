@@ -142,6 +142,57 @@ class EmailConsentTests(unittest.TestCase):
             self.assertFalse(saved["email_opt_out"])
             self.assertEqual(saved["email_consent_status"], "confirmed")
 
+    def test_birthday_customer_mail_waits_for_a_real_business_name(self):
+        user = {**self._active_user(self.owner), "business": "", "businessName": "   ", "businessType": "Salon"}
+        today = retainai.datetime.datetime(2026, 1, 2, 9, 0)
+        lead = {"id": "a", "name": "Avery", "email": "avery@example.com", "birthday": "1990-01-02"}
+        with patch.object(retainai, "load_leads", return_value={self.owner: [lead]}), patch.object(
+            retainai, "load_users", return_value={self.owner: user}
+        ), patch.object(retainai.datetime, "datetime", wraps=retainai.datetime.datetime) as dt, patch.object(
+            retainai, "send_birthday_email", return_value=True
+        ) as send, patch.object(retainai, "log_notification"):
+            dt.utcnow.return_value = today
+            retainai.send_birthday_greetings()
+        send.assert_not_called()
+
+    def test_birthday_mail_uses_business_name_alias_and_keeps_import_consent_gate(self):
+        user = {**self._active_user(self.owner), "business": "", "businessName": "New Studio"}
+        today = retainai.datetime.datetime(2026, 1, 2, 9, 0)
+        leads = [
+            {"id": "a", "name": "Avery", "email": "avery@example.com", "birthday": "1990-01-02"},
+            {"id": "b", "name": "Imported", "email": "imported@example.com", "birthday": "1990-01-02", "source": "csv", "imported_at": "2026-01-01T00:00:00Z", "email_consent_status": "unknown"},
+        ]
+        with patch.object(retainai, "load_leads", return_value={self.owner: leads}), patch.object(
+            retainai, "load_users", return_value={self.owner: user}
+        ), patch.object(retainai.datetime, "datetime", wraps=retainai.datetime.datetime) as dt, patch.object(
+            retainai, "send_birthday_email", return_value=True
+        ) as send, patch.object(retainai, "log_notification"):
+            dt.utcnow.return_value = today
+            retainai.send_birthday_greetings()
+        self.assertEqual(send.call_count, 1)
+        self.assertEqual(send.call_args.args[:3], ("avery@example.com", "Avery", "New Studio"))
+
+    def test_birthday_scheduler_skips_accounts_without_access(self):
+        today = retainai.datetime.datetime(2026, 1, 2, 9, 0)
+        lead = {"id": "a", "name": "Avery", "email": "avery@example.com", "birthday": "1990-01-02"}
+        for changes in ({"status": "cancelled"}, {"status": "pending_payment"}, {"access_status": "suspended"}, {"status": "trial", "trial_start": "2000-01-01T00:00:00Z"}):
+            with self.subTest(changes=changes), patch.object(retainai, "load_leads", return_value={self.owner: [lead]}), patch.object(
+                retainai, "load_users", return_value={self.owner: {**self._active_user(self.owner), **changes}}
+            ), patch.object(retainai.datetime, "datetime", wraps=retainai.datetime.datetime) as dt, patch.object(
+                retainai, "send_birthday_email"
+            ) as send:
+                dt.utcnow.return_value = today
+                retainai.send_birthday_greetings()
+                send.assert_not_called()
+
+    def test_confirmation_helper_does_not_send_legacy_placeholder_without_current_business(self):
+        user = {**self._active_user(self.owner), "business": ""}
+        appointment = {"id": "old", "user_email": self.owner, "lead_email": "avery@example.com", "business_name": "Your Business"}
+        with patch.object(retainai, "load_users", return_value={self.owner: user}), patch.object(retainai, "send_email_with_template") as send, patch.object(retainai, "create_ics_file") as create_ics:
+            self.assertFalse(retainai.send_appointment_confirmation_email(appointment))
+        send.assert_not_called()
+        create_ics.assert_not_called()
+
     def test_signup_requires_server_verified_terms_acceptance(self):
         client = retainai.app.test_client()
         with patch.object(retainai, "_signup_rate_limited", return_value=False):
