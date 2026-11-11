@@ -6,10 +6,11 @@ import publicContent from "../publicContent.json";
 import { CustomerProof, OwnerBlock, SourcedProof } from "./MarketingProof";
 import MarketingPage from "../pages/MarketingPage";
 
-test("the product preview is labelled as example data, not live data", () => {
+test("the actual product capture is labelled as example data, not customer proof", () => {
   render(<MemoryRouter><LandingPage /></MemoryRouter>);
-  const preview = screen.getByRole("img", { name: "RetainAI product preview with example data" });
-  expect(within(preview).getByText("Example")).toBeInTheDocument();
+  const preview = screen.getByRole("figure", { name: "RetainAI workspace with example data" });
+  expect(within(preview).getByText("Actual RetainAI workspace · example data")).toBeInTheDocument();
+  expect(within(preview).getByRole("img", { name: /Contacts screen with six fictional customer records/ })).toHaveAttribute("src", "/images/retainai-contacts-example.jpg");
   expect(within(preview).queryByText(/^\s*Live\s*$/)).not.toBeInTheDocument();
 });
 

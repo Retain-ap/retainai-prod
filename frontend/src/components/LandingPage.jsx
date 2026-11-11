@@ -63,57 +63,6 @@ export const useCases = [
 
 export const faqs = publicContent.faqs;
 
-function AppPreview() {
-  return (
-    <div className="lp-preview" role="img" aria-label="RetainAI product preview with example data">
-      <div className="lp-preview-top">
-        <div className="lp-window-dots"><i /><i /><i /></div>
-        <span>Today’s retention briefing</span>
-        <b className="lp-preview-badge"><i /> Example</b>
-      </div>
-      <div className="lp-preview-grid">
-        <aside className="lp-preview-sidebar">
-          <div className="lp-mini-brand"><img src={brandLogo} alt="RetainAI logo" /> RetainAI</div>
-          {["Overview", "Contacts", "Calendar", "Messages", "Insights"].map((item, index) => (
-            <span className={index === 0 ? "active" : ""} key={item}>{item}</span>
-          ))}
-        </aside>
-        <div className="lp-preview-main">
-          <div className="lp-preview-heading">
-            <div><small>GOOD MORNING</small><strong>Your relationships, prioritized.</strong></div>
-            <span className="lp-preview-action">Open actions</span>
-          </div>
-          <div className="lp-preview-stats">
-            <div><small>Needs attention</small><strong>4</strong><span>Review today</span></div>
-            <div><small>Ready to rebook</small><strong>7</strong><span>Warm opportunities</span></div>
-            <div><small>Upcoming</small><strong>5</strong><span>Next 7 days</span></div>
-          </div>
-          <div className="lp-preview-lower">
-            <div className="lp-priority-card">
-              <div className="lp-card-title"><span>Priority queue</span><small>Next best action</small></div>
-              {[
-                ["MP", "Maya P.", "Waiting on reply", "Send follow-up"],
-                ["JR", "Jordan R.", "Ready to rebook", "Offer a time"],
-                ["AL", "Alex L.", "Visit tomorrow", "Confirm"],
-              ].map(([initials, name, status, action]) => (
-                <div className="lp-priority-row" key={name}>
-                  <i>{initials}</i><span><b>{name}</b><small>{status}</small></span><span className="lp-preview-action">{action}</span>
-                </div>
-              ))}
-            </div>
-            <div className="lp-ai-card">
-              <span><FaMagic /> AI briefing</span>
-              <strong>Start with Maya.</strong>
-              <p>Her last message showed clear interest. A short, personal check-in is the strongest next move.</p>
-              <div>Draft ready <FaArrowRight /></div>
-            </div>
-          </div>
-        </div>
-      </div>
-    </div>
-  );
-}
-
 export function FAQSection() {
   return <section className="lp-section lp-faq-section" id="faq">
     <div className="lp-faq-heading">
@@ -156,7 +105,6 @@ export default function LandingPage() {
               <span><FaCheck /> Cancel anytime</span>
             </div>
           </div>
-          <AppPreview />
           <ProductCapture />
           <SourcedProof />
         </section>

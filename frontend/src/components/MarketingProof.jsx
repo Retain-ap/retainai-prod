@@ -43,7 +43,7 @@ export function OwnerBlock({ proof = proofContent }) {
 export function ProductCapture({ proof = proofContent }) {
   const capture = proof.productCapture;
   if (!capture?.src || !capture.alt || !capture.capturedOn) return null;
-  return <figure className="lp-product-capture">
+  return <figure className="lp-product-capture" aria-label="RetainAI workspace with example data">
     <a href={capture.src} aria-label="Open the RetainAI workspace screenshot at full size">
       <img src={capture.src} alt={capture.alt} width={capture.width} height={capture.height} loading="lazy" decoding="async" />
     </a>
