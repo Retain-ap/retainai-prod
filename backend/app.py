@@ -4538,10 +4538,12 @@ def signup():
     email = _norm_email(data.get("email"))
     password = str(data.get("password") or "")
     name = (data.get("name") or "").strip()
+    google_credential = data.get("googleCredential")
+    google_identity = None
 
     businessType = (data.get("businessType") or "").strip()
     businessName = (data.get("businessName") or businessType or "").strip()
-    teamSize = (data.get("teamSize") or "").strip()
+    teamSize = str(data.get("teamSize") if data.get("teamSize") is not None else "").strip()
     logo = (data.get("logo") or "").strip()
 
     phone = (data.get("phone") or "").strip()
@@ -4559,7 +4561,34 @@ def signup():
 
     if not re.fullmatch(r"[^@\s]+@[^@\s]+\.[^@\s]+", email or "") or len(email) > 320:
         return jsonify({"error": "Enter a valid email address."}), 400
-    if (
+    # Bound provider verification as well as checkout creation. A Google token
+    # is not trusted merely because the browser can decode its payload.
+    if _signup_rate_limited(email):
+        return jsonify({
+            "error": "Too many signup attempts. Please wait before trying again.",
+            "code": "signup_rate_limited",
+        }), 429, {"Retry-After": str(SIGNUP_WINDOW_SECONDS)}
+    if google_credential is not None:
+        try:
+            if not GOOGLE_CLIENT_ID or not isinstance(google_credential, str) or len(google_credential) > 16384:
+                raise ValueError("Invalid Google credential")
+            google_identity = id_token.verify_oauth2_token(
+                google_credential, grequests.Request(), GOOGLE_CLIENT_ID
+            )
+            if (
+                google_identity.get("email_verified") is not True
+                or google_identity.get("aud") != GOOGLE_CLIENT_ID
+                or google_identity.get("iss") not in {"accounts.google.com", "https://accounts.google.com"}
+                or not google_identity.get("sub")
+                or _norm_email(google_identity.get("email")) != email
+            ):
+                raise ValueError("Google identity does not match signup")
+        except Exception:
+            return jsonify({
+                "error": "Please choose your Google account again, or sign up with email.",
+                "code": "google_token_invalid",
+            }), 401
+    if google_identity is None and (
         len(password) < 12
         or len(password) > 256
         or not re.search(r"[a-z]", password)
@@ -4570,15 +4599,17 @@ def signup():
         return jsonify({"error": "Use 12 or more characters with uppercase and lowercase letters, a number, and a symbol."}), 400
     if not name or len(name) > 120:
         return jsonify({"error": "Enter your name (120 characters or fewer)."}), 400
-    if not businessName or len(businessName) > 160:
-        return jsonify({"error": "Enter your business name (160 characters or fewer)."}), 400
-    if not businessType or len(businessType) > 120:
-        return jsonify({"error": "Enter your business type (120 characters or fewer)."}), 400
-    if not location or len(location) > 200:
-        return jsonify({"error": "Enter your business location (200 characters or fewer)."}), 400
+    # Business setup belongs inside the workspace, after checkout and sign-in.
+    # Older clients may still send it, so retain validation for supplied data.
+    if len(businessName) > 160:
+        return jsonify({"error": "Use a business name of 160 characters or fewer."}), 400
+    if len(businessType) > 120:
+        return jsonify({"error": "Use a business type of 120 characters or fewer."}), 400
+    if len(location) > 200:
+        return jsonify({"error": "Use a business location of 200 characters or fewer."}), 400
     try:
-        parsed_team_size = int(teamSize)
-        if parsed_team_size < 1 or parsed_team_size > 1000:
+        parsed_team_size = int(teamSize) if teamSize else None
+        if parsed_team_size is not None and not 1 <= parsed_team_size <= 1000:
             raise ValueError
     except (TypeError, ValueError):
         return jsonify({"error": "Team size must be between 1 and 1,000."}), 400
@@ -4586,11 +4617,6 @@ def signup():
         return jsonify({"error": "One or more optional fields are too long."}), 400
     if len(logo) > 2_000_000:
         return jsonify({"error": "The uploaded logo is too large. Use an image under 1.5 MB."}), 400
-    if _signup_rate_limited(email):
-        return jsonify({
-            "error": "Too many signup attempts. Please wait before trying again.",
-            "code": "signup_rate_limited",
-        }), 429, {"Retry-After": str(SIGNUP_WINDOW_SECONDS)}
     if not STRIPE_SECRET_KEY or not STRIPE_PRICE_ID:
         return jsonify({"error": "Billing is temporarily unavailable. Please try again later."}), 503
 
@@ -4603,9 +4629,15 @@ def signup():
         password_hash = str(existing.get("password") or "")
         resumable = (
             str(existing.get("status") or "").lower() == "pending_payment"
-            and password_hash
-            and check_password_hash(password_hash, password)
             and not _administratively_blocked(existing)
+            and (
+                (google_identity is None and password_hash and check_password_hash(password_hash, password))
+                or (
+                    google_identity is not None
+                    and existing.get("auth_provider") == "google"
+                    and existing.get("google_sub") == google_identity["sub"]
+                )
+            )
         )
         if not resumable:
             return jsonify({"error": "An account already exists for this email. Sign in instead."}), 409
@@ -4614,12 +4646,12 @@ def signup():
         repeat_customer = trial_previously_used(email)
         account = {
             "email": email,
-            "password": generate_password_hash(password),
+            "password": generate_password_hash(password) if google_identity is None else "",
             "name": name,
             "businessType": businessType,
             "business": businessName,
             "businessName": businessName,
-            "teamSize": str(parsed_team_size),
+            "teamSize": str(parsed_team_size) if parsed_team_size is not None else "",
             "logo": logo,
             "phone": phone,
             "website": website,
@@ -4629,7 +4661,7 @@ def signup():
             "partner_code": signup_partner(email),
             "status": "pending_payment",
             "billing_status": "checkout_required",
-            "email_verified": False,
+            "email_verified": google_identity is not None,
             # The trial starts only after Stripe confirms checkout completion.
             "trial_start": "",
             "trial_eligible": not repeat_customer,
@@ -4638,6 +4670,10 @@ def signup():
             "terms_version": str(data.get("termsVersion") or "2026-09-13")[:32],
             "privacy_version": str(data.get("privacyVersion") or "2026-09-13")[:32],
         }
+        if google_identity is not None:
+            account["auth_provider"] = "google"
+            account["google_sub"] = google_identity["sub"]
+            account["email_verified_at"] = datetime.datetime.now(datetime.timezone.utc).isoformat()
         users[email] = account
         save_users(users)
 
@@ -5313,6 +5349,8 @@ def google_oauth():
 
     try:
         idinfo = id_token.verify_oauth2_token(token, grequests.Request(), GOOGLE_CLIENT_ID)
+        if idinfo.get("email_verified") is not True:
+            return jsonify({"error": "Use a Google account with a verified email address."}), 401
         email = _norm_email(idinfo["email"])
         name = (idinfo.get("name") or "").strip()
         picture = (idinfo.get("picture") or "").strip()
@@ -5324,6 +5362,8 @@ def google_oauth():
         user = users.get(email)
         if not user:
             return jsonify({"error": "No account found for this Google email. Please sign up first."}), 404
+        if user.get("auth_provider") == "google" and user.get("google_sub") != idinfo.get("sub"):
+            return jsonify({"error": "Use the Google account that created this workspace."}), 401
 
         changed = False
         if not user.get("name") and name:
