@@ -410,24 +410,36 @@ def _merge_owner_edits(existing, synced):
 
 
 def revoke_workspace(workspace):
-    """Revoke at Calendly (best effort) and delete the stored tokens."""
+    """Delete the stored tokens, then revoke them at Calendly (best effort).
+
+    The tokens are taken out of the store under the connection lock before any
+    revoke call. A token refresh running at the same time holds that lock, so it
+    either finishes first (and its new tokens are the ones revoked here) or
+    finds no connection and issues none; no rotated refresh token is left live.
+
+    Returns True only when Calendly confirmed revoking the refresh token, the
+    long-lived credential. Revoking just the access token is not reported as
+    revoked, so the caller tells the owner to remove RetainAI in Calendly too.
+    """
     config = _config()
-    connection = _load(workspace)
-    revoked = False
-    if config["configured"] and connection.get("user_uri"):
-        key, previous = _keys()
-        client = _client(config)
-        for field in ("refresh_token_enc", "access_token_enc"):
-            token = decrypt_secret(connection.get(field), key, previous)
-            if not token:
-                continue
-            try:
-                client.revoke(token)
-                revoked = True
-            except cal.CalendlyError:
-                pass
-    _update(lambda data: data.pop(workspace, None))
-    return revoked
+    taken = _update(lambda data: data.pop(workspace, None))
+    if not isinstance(taken, dict) or not taken.get("user_uri") or not config["configured"]:
+        return False
+    key, previous = _keys()
+    client = _client(config)
+    confirmed = {}
+    for field in ("refresh_token_enc", "access_token_enc"):
+        token = decrypt_secret(taken.get(field), key, previous)
+        if not token:
+            continue
+        try:
+            client.revoke(token)
+            confirmed[field] = True
+        except cal.CalendlyError:
+            confirmed[field] = False
+    if "refresh_token_enc" in confirmed:
+        return confirmed["refresh_token_enc"]
+    return confirmed.get("access_token_enc", False)
 
 
 @calendly_bp.post("/api/calendly/disconnect")

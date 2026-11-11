@@ -610,6 +610,46 @@ class CalendlyTests(unittest.TestCase):
         self.assertEqual({(c["data"]["client_id"], c["data"]["client_secret"]) for c in revokes}, {("cal-client", "cal-secret")})
         self.assertNotIn(self.owner, self.stored())
 
+    def live_refresh_tokens(self):
+        """Refresh tokens Calendly issued that were neither spent nor revoked."""
+        issued = {"refresh-1"} | {f"refresh-{n + 1}" for n in range(1, self.fake.refresh_count + 1)}
+        spent = {c["data"]["refresh_token"] for c in self.token_calls() if c["data"]["grant_type"] == "refresh_token"}
+        revoked = {c["data"]["token"] for c in self.fake.calls if c["path"] == "/oauth/revoke"}
+        return issued - spent - revoked
+
+    def test_disconnect_reports_revoked_only_when_the_refresh_token_was_revoked(self):
+        client, _, _ = self.connect()
+        self.fake.push("/oauth/revoke", Response(500, {}), Response(500, {}))  # refresh token: both attempts fail
+        with patch.dict(os.environ, CONFIG):
+            result = client.post("/api/calendly/disconnect", headers=ORIGIN).get_json()
+        revoked = [(c["data"]["token"]) for c in self.fake.calls if c["path"] == "/oauth/revoke"]
+        self.assertEqual(revoked, ["refresh-1", "refresh-1", "access-1"])  # access token's revoke succeeded
+        self.assertFalse(result["revoked"])
+        self.assertIn("integrations", result["message"])
+        self.assertNotIn(self.owner, self.stored())
+
+    def test_a_refresh_racing_a_disconnect_leaves_no_live_refresh_token(self):
+        client, _, _ = self.connect()
+        real = self.fake.request
+        raced = {}
+
+        def refresh_during_revoke(method, url, **kwargs):
+            if url.endswith("/oauth/revoke") and not raced:
+                raced["done"] = True
+                try:  # a sync renewing its token at this exact moment
+                    app_calendly._access_token(self.owner, app_calendly._config(), force_refresh=True)
+                    raced["outcome"] = "refreshed"
+                except LookupError:
+                    raced["outcome"] = "not_connected"
+            return real(method, url, **kwargs)
+
+        self.fake.request = refresh_during_revoke
+        with patch.dict(os.environ, CONFIG):
+            client.post("/api/calendly/disconnect", headers=ORIGIN)
+        self.assertEqual(raced["outcome"], "not_connected")
+        self.assertEqual(self.live_refresh_tokens(), set())
+        self.assertNotIn(self.owner, self.stored())
+
     def test_a_failed_revoke_still_deletes_the_tokens_and_says_so(self):
         client, _, _ = self.connect()
         self.fake.push("/oauth/revoke", *[Response(500, {})] * 4)
