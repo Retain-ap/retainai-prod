@@ -1,0 +1,20 @@
+# RetainAI
+
+> Customer retention CRM for Canadian service businesses. RetainAI brings customer conversations, follow-ups, appointments, invoices and retention priorities into one workspace.
+
+## Product
+- [Home](https://www.retainai.ca/): Product overview and trial questions.
+- [Features](https://www.retainai.ca/features): Customer history, WhatsApp, AI-assisted drafts, appointments and follow-up.
+- [Who it is for](https://www.retainai.ca/customers): Salons, home services, coaches and local service teams.
+- [Retention CRM for service businesses](https://www.retainai.ca/retention-crm-for-service-businesses): What a retention CRM does and when it fits.
+- [Pricing](https://www.retainai.ca/pricing): C$20 CAD monthly, one plan. Eligible new customers get 14 days. A card is required; cancel before the displayed trial end to avoid the subscription charge. Connected services can have separate fees.
+- [About](https://www.retainai.ca/about): Owner Mateo Zufic and direct contact information.
+- [Partners](https://www.retainai.ca/partners): Referral partnership information and terms.
+
+## Policies
+- [Privacy](https://www.retainai.ca/privacy-policy)
+- [Terms](https://www.retainai.ca/terms-of-service)
+- [Refunds and cancellation](https://www.retainai.ca/refund-policy)
+
+## Accuracy
+Product previews use example data, not customer endorsements. Trial eligibility, taxes and the final total are shown at checkout. No usage count, customer testimonial or external endorsement is claimed without a verified source.

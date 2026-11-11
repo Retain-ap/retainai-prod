@@ -1,0 +1,56 @@
+{
+  "bookingUrl": "https://calendly.com/mateozufic1/retainai-setup-10-minutes",
+  "faqs": [
+    ["What happens during the 14-day trial?", "Eligible new customers get the full RetainAI workspace for 14 days after completing checkout. A card is required and kept on file by Stripe. The C$20 monthly subscription starts automatically after the trial unless you cancel. Cancel in Settings → Billing before the trial end shown in your account to avoid the subscription charge. You can import contacts, try follow-ups, and connect supported services during the trial; those services may have their own fees or approval requirements."],
+    ["Does RetainAI send messages without my approval?", "You control how messages are sent. AI drafts can be reviewed and edited, while automations show their triggers and actions before you activate them."],
+    ["Can I use my existing WhatsApp Business account?", "RetainAI connects through Meta’s WhatsApp Business platform. Your account must meet Meta’s connection and approval requirements. Approved templates are used when a conversation is outside WhatsApp’s customer-service window. Meta’s messaging charges are separate from your RetainAI subscription."],
+    ["Can I cancel or download my data?", "Yes. Cancel from Settings → Billing or the Stripe billing portal. Workspace export and account-deletion controls are also available in Settings. Account deletion is separate from cancelling your subscription and includes a recovery window."],
+    ["Is RetainAI only for large teams?", "No. It is designed for owner-led and growing service businesses that want a clear system without enterprise CRM complexity."],
+    ["Will AI sound exactly like me?", "RetainAI uses your business context and tone preferences to prepare a useful draft. You can review and adjust the final message before sending."]
+  ],
+  "pages": {
+    "/pricing": {
+      "eyebrow": "One monthly plan",
+      "heading": "C$20 a month. One complete workspace.",
+      "intro": "Keep customer conversations, follow-ups, appointments and invoices together. Try the full workspace for 14 days before the monthly subscription begins.",
+      "sections": []
+    },
+    "/about": {
+      "eyebrow": "About RetainAI",
+      "heading": "Know who you’re trusting with your customer relationships.",
+      "intro": "RetainAI is a customer retention CRM for Canadian service businesses. It brings customer conversations, follow-ups, appointments, invoices and retention priorities into one calm workspace.",
+      "sections": [
+        {"heading": "Built around the customers you already know", "copy": "Your next sale is often already in your customer list. RetainAI helps you see who needs a reply, who is ready to rebook and what to do next, with the customer’s history close at hand."},
+        {"heading": "You keep the controls", "copy": "Review and edit AI drafts before sending. Check the triggers and actions before enabling an automation. Export your workspace data or manage your subscription in Settings."}
+      ]
+    },
+    "/features": {
+      "eyebrow": "The RetainAI workspace",
+      "heading": "One clear customer history. A next step you can act on.",
+      "intro": "Bring the details of the relationship together so you can start the day knowing which regulars need attention, instead of trying to remember every follow-up.",
+      "sections": [
+        {"heading": "Start with the contacts you have", "copy": "Import CSV or vCard files, or connect Google Contacts. Review matches and duplicates before saving. Exports from Apple Contacts, spreadsheets and supported CRM formats can be reviewed in the same import flow."},
+        {"heading": "Connect only what you need", "copy": "You can start with customer records and manual appointments. WhatsApp, Google and billing connections have separate account and approval requirements; connect them when they fit your workflow."}
+      ]
+    },
+    "/customers": {
+      "eyebrow": "Who RetainAI is for",
+      "heading": "For owners who win through trust and repeat visits.",
+      "intro": "RetainAI is most useful where relationships, responsiveness and repeat visits drive growth. Find the day-to-day work that sounds like yours below.",
+      "sections": [
+        {"heading": "Try it with your own workflow", "copy": "Import a small set of contacts, add a next action and review a follow-up draft. A 10-minute walkthrough can help you see whether the workspace fits before you start a trial."}
+      ]
+    },
+    "/retention-crm-for-service-businesses": {
+      "eyebrow": "A retention CRM for Canadian service businesses",
+      "heading": "Who is ready to rebook? Start with the customers you already have.",
+      "intro": "A customer retention CRM keeps each customer’s history and next action together. For a salon, home-service business or coach, that means fewer follow-ups left to memory and a clearer plan for repeat business.",
+      "sections": [
+        {"heading": "From memory to a shared next step", "copy": "A conversation in WhatsApp, a note on your phone and a booking in your calendar each tell part of the story. RetainAI brings the context together: the last conversation, what the customer needs and when to follow up."},
+        {"heading": "A useful daily rhythm", "copy": "Review the customers who need attention. Check their history, then reply, add an appointment or set a follow-up. AI can help draft the message; you review the words and decide what to send."},
+        {"heading": "For repeat relationships, not an enterprise sales rollout", "copy": "RetainAI is designed for owner-led service businesses and small teams. It is not built for large sales organizations that need a bespoke enterprise rollout. If your main job is keeping regulars, following up on estimates and helping clients rebook, start there."},
+        {"heading": "One workspace for C$20 a month", "copy": "Contacts, customer conversations, appointments, follow-ups, invoices and retention priorities share one monthly plan. Eligible new customers get a 14-day trial. A card is required; cancel before the trial ends to avoid the subscription charge. Connected services may have separate fees."}
+      ]
+    }
+  }
+}

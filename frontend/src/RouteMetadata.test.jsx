@@ -1,6 +1,6 @@
 import React from "react";
-import { render } from "@testing-library/react";
-import { MemoryRouter } from "react-router";
+import { fireEvent, render, screen } from "@testing-library/react";
+import { Link, MemoryRouter } from "react-router";
 import { RouteMetadata } from "./App";
 import routeMeta from "./routeMeta.json";
 
@@ -49,4 +49,20 @@ test("the homepage and unknown paths still use the homepage canonical", () => {
   expect(metadataAt("/")).toMatchObject({ title: routeMeta["/"].title, canonical: "https://www.retainai.ca/" });
   expect(metadataAt("/not-a-page/")).toMatchObject({ title: routeMeta["/"].title, canonical: "https://www.retainai.ca/" });
   expect(metadataAt("/app/")).toMatchObject({ robots: "noindex,nofollow" });
+});
+
+test("FAQ schema is reused on pricing and removed when its answers are not on the page", () => {
+  document.head.innerHTML = `${HEAD}<script id="retainai-faq-schema" type="application/ld+json">{}</script>`;
+  render(<MemoryRouter initialEntries={["/"]}><RouteMetadata /><Link to="/pricing">Pricing</Link><Link to="/about">About</Link></MemoryRouter>);
+  // Structured data lives in head and has no accessible role.
+  // eslint-disable-next-line testing-library/no-node-access
+  const schemas = () => document.head.querySelectorAll("#retainai-faq-schema");
+  expect(schemas()).toHaveLength(1);
+  expect(JSON.parse(schemas()[0].textContent).mainEntity).toHaveLength(6);
+  fireEvent.click(screen.getByRole("link", { name: "Pricing" }));
+  expect(schemas()).toHaveLength(1);
+  expect(document.title).toBe(routeMeta["/pricing"].title);
+  fireEvent.click(screen.getByRole("link", { name: "About" }));
+  expect(schemas()).toHaveLength(0);
+  expect(document.title).toBe(routeMeta["/about"].title);
 });

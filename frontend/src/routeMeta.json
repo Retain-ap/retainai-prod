@@ -30,5 +30,25 @@
   "/refund-policy": {
     "title": "Refund & Cancellation Policy — RetainAI",
     "description": "Review RetainAI trial, subscription, cancellation, and refund terms."
+  },
+  "/pricing": {
+    "title": "RetainAI pricing — C$20/month, full workspace, 14-day trial",
+    "description": "One RetainAI plan at C$20 CAD a month. Try the full customer retention workspace for 14 days. Card required; cancel before the trial ends to avoid a charge."
+  },
+  "/about": {
+    "title": "About RetainAI and owner Mateo Zufic",
+    "description": "Meet Mateo Zufic, the owner of RetainAI, a customer retention CRM for Canadian service businesses. Contact Mateo directly for setup, product and billing help."
+  },
+  "/features": {
+    "title": "RetainAI features — Contacts, follow-ups and rebooking",
+    "description": "See how RetainAI brings customer history, WhatsApp conversations, AI-assisted follow-ups, appointments and invoices into one workspace for service businesses."
+  },
+  "/customers": {
+    "title": "Who RetainAI is for — Salons, trades and coaches",
+    "description": "Explore RetainAI for salons, home services, coaches and local service teams. Keep customer history, follow-ups and repeat bookings together."
+  },
+  "/retention-crm-for-service-businesses": {
+    "title": "Customer retention CRM for Canadian service businesses — RetainAI",
+    "description": "Turn scattered customer notes into a clear next step. RetainAI helps salons, home services and coaches follow up and rebook, from C$20 CAD a month."
   }
 }

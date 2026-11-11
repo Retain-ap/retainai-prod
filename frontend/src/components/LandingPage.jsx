@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import React from "react";
 import {
   FaArrowRight,
   FaBolt,
@@ -16,11 +16,12 @@ import {
 } from "react-icons/fa";
 import brandLogo from "../assets/logo.png";
 import "./LandingPage.css";
+import publicContent from "../publicContent.json";
+import { CustomerProof, OwnerBlock, ProductCapture, SourcedProof } from "./MarketingProof";
 
-const BOOKING_URL =
-  "https://calendly.com/mateozufic1/retainai-setup-10-minutes?hide_gdpr_banner=1&primary_color=D6B25E";
+export const BOOKING_URL = publicContent.bookingUrl;
 
-const features = [
+export const features = [
   {
     icon: <FaWhatsapp />,
     title: "One WhatsApp inbox",
@@ -53,137 +54,41 @@ const features = [
   },
 ];
 
-const useCases = [
+export const useCases = [
   ["Salons & studios", "Turn first visits into repeat bookings with reminders and personal rebooking prompts."],
   ["Home services", "Keep estimates, scheduled visits, missed calls, and follow-ups from slipping through."],
   ["Coaches & consultants", "Nurture warm leads consistently while keeping every message personal."],
   ["Local service teams", "Give the whole team one clear customer history and a shared next action."],
 ];
 
-const faqs = [
-  [
-    "What happens during the 14-day trial?",
-    "You can set up your business profile, import contacts, connect supported integrations, and use the RetainAI workspace. Your billing and trial status remain visible inside the app.",
-  ],
-  [
-    "Does RetainAI send messages without my approval?",
-    "You control how messages are sent. AI drafts can be reviewed and edited, while automations show their triggers and actions before you activate them.",
-  ],
-  [
-    "Can I use my existing WhatsApp Business account?",
-    "Yes. RetainAI connects through Meta’s WhatsApp Business platform. Approved templates are used when a conversation is outside WhatsApp’s customer-service window.",
-  ],
-  [
-    "Can I cancel or download my data?",
-    "Yes. Billing controls, workspace export, and account-deletion controls are available in Settings. Account deletion includes a recovery window.",
-  ],
-  [
-    "Is RetainAI only for large teams?",
-    "No. It is designed for owner-led and growing service businesses that want a clear system without enterprise CRM complexity.",
-  ],
-  [
-    "Will AI sound exactly like me?",
-    "RetainAI uses your business context and tone preferences to prepare a useful draft. You can review and adjust the final message before sending.",
-  ],
-];
+export const faqs = publicContent.faqs;
 
-function AppPreview() {
-  return (
-    <div className="lp-preview" role="img" aria-label="RetainAI product preview with example data">
-      <div className="lp-preview-top">
-        <div className="lp-window-dots"><i /><i /><i /></div>
-        <span>Today’s retention briefing</span>
-        <b className="lp-preview-badge"><i /> Example</b>
-      </div>
-      <div className="lp-preview-grid">
-        <aside className="lp-preview-sidebar">
-          <div className="lp-mini-brand"><img src={brandLogo} alt="" /> RetainAI</div>
-          {["Overview", "Contacts", "Calendar", "Messages", "Insights"].map((item, index) => (
-            <span className={index === 0 ? "active" : ""} key={item}>{item}</span>
-          ))}
-        </aside>
-        <div className="lp-preview-main">
-          <div className="lp-preview-heading">
-            <div><small>GOOD MORNING</small><strong>Your relationships, prioritized.</strong></div>
-            <span className="lp-preview-action">Open actions</span>
-          </div>
-          <div className="lp-preview-stats">
-            <div><small>Needs attention</small><strong>4</strong><span>Review today</span></div>
-            <div><small>Ready to rebook</small><strong>7</strong><span>Warm opportunities</span></div>
-            <div><small>Upcoming</small><strong>5</strong><span>Next 7 days</span></div>
-          </div>
-          <div className="lp-preview-lower">
-            <div className="lp-priority-card">
-              <div className="lp-card-title"><span>Priority queue</span><small>Next best action</small></div>
-              {[
-                ["MP", "Maya P.", "Waiting on reply", "Send follow-up"],
-                ["JR", "Jordan R.", "Ready to rebook", "Offer a time"],
-                ["AL", "Alex L.", "Visit tomorrow", "Confirm"],
-              ].map(([initials, name, status, action]) => (
-                <div className="lp-priority-row" key={name}>
-                  <i>{initials}</i><span><b>{name}</b><small>{status}</small></span><span className="lp-preview-action">{action}</span>
-                </div>
-              ))}
-            </div>
-            <div className="lp-ai-card">
-              <span><FaMagic /> AI briefing</span>
-              <strong>Start with Maya.</strong>
-              <p>Her last message showed clear interest. A short, personal check-in is the strongest next move.</p>
-              <div>Draft ready <FaArrowRight /></div>
-            </div>
-          </div>
-        </div>
-      </div>
+export function FAQSection() {
+  return <section className="lp-section lp-faq-section" id="faq">
+    <div className="lp-faq-heading">
+      <span>Questions, answered</span><h2>Know exactly what you’re signing up for.</h2>
+      <p>Clear expectations create better customer relationships—including ours.</p>
+      <a href={BOOKING_URL}>Still unsure? Book a walkthrough <FaArrowRight /></a>
     </div>
-  );
-}
-
-function FAQItem({ question, answer, open, onClick }) {
-  return (
-    <div className={`lp-faq-item ${open ? "open" : ""}`}>
-      <button type="button" onClick={onClick} aria-expanded={open}>
-        <span>{question}</span><FaChevronDown />
-      </button>
-      {open && <p>{answer}</p>}
-    </div>
-  );
+    <div className="lp-faq-list">{faqs.map(([question, answer], index) => (
+      <details className="lp-faq-item" key={question} aria-label={question} open={index === 0}>
+        <summary><span>{question}</span><FaChevronDown /></summary><p>{answer}</p>
+      </details>
+    ))}</div>
+  </section>;
 }
 
 export default function LandingPage() {
-  const [openFaq, setOpenFaq] = useState(0);
-
-  const bookDemo = () => {
-    if (window.Calendly?.initPopupWidget) {
-      window.Calendly.initPopupWidget({ url: BOOKING_URL });
-    } else {
-      window.open(BOOKING_URL, "_blank", "noopener,noreferrer");
-    }
-  };
-
   return (
     <div className="lp-page">
       <a className="lp-skip" href="#main-content">Skip to content</a>
-      <nav className="lp-nav" aria-label="Main navigation">
-        <a className="lp-brand" href="/" aria-label="RetainAI home">
-          <img src={brandLogo} alt="" /><span>RetainAI</span>
-        </a>
-        <div className="lp-nav-links">
-          <a href="#product">Product</a>
-          <a href="#how-it-works">How it works</a>
-          <a href="#pricing">Pricing</a>
-          <a href="#faq">FAQ</a>
-        </div>
-        <div className="lp-nav-actions">
-          <a className="lp-link-button" href="/login">Log in</a>
-          <a className="lp-primary-button small" href="/signup">Start free trial <FaArrowRight /></a>
-        </div>
-      </nav>
+      <MarketingNav home />
 
       <main id="main-content">
         <section className="lp-hero">
           <div className="lp-glow one" /><div className="lp-glow two" />
           <div className="lp-hero-copy">
-            <div className="lp-kicker"><span><FaWhatsapp /></span> Built for relationship-driven businesses</div>
+            <div className="lp-kicker"><span><FaWhatsapp /></span> The customer retention CRM for Canadian service businesses</div>
             <h1>Keep more customers.<br /><em>Miss fewer moments.</em></h1>
             <p>
               RetainAI brings customer conversations, follow-ups, appointments,
@@ -191,7 +96,7 @@ export default function LandingPage() {
             </p>
             <div className="lp-hero-actions">
               <a className="lp-primary-button" href="/signup">Start your 14-day trial <FaArrowRight /></a>
-              <button className="lp-secondary-button" type="button" onClick={bookDemo}>Book a 10-minute walkthrough</button>
+              <a className="lp-secondary-button" href={BOOKING_URL}>Book a 10-minute walkthrough</a>
             </div>
             <div className="lp-trust-row">
               <span><FaCheck /> Guided setup</span>
@@ -200,7 +105,8 @@ export default function LandingPage() {
               <span><FaCheck /> Cancel anytime</span>
             </div>
           </div>
-          <AppPreview />
+          <ProductCapture />
+          <SourcedProof />
         </section>
 
         <section className="lp-value-strip" aria-label="RetainAI value">
@@ -261,6 +167,7 @@ export default function LandingPage() {
             <h2>Everything needed to turn attention into retention.</h2>
             <p>No bloated enterprise setup. No mystery automation. Just the context and controls your business needs.</p>
           </div>
+          <p className="lp-calm-note">Start the day knowing which regulars need attention, with a next step you can act on.</p>
           <div className="lp-feature-grid">
             {features.map((feature) => (
               <article key={feature.title}>
@@ -269,6 +176,8 @@ export default function LandingPage() {
             ))}
           </div>
         </section>
+
+        <CustomerProof />
 
         <section className="lp-section lp-use-cases">
           <div className="lp-use-copy">
@@ -290,45 +199,11 @@ export default function LandingPage() {
             <h2>Start small. Keep the full system.</h2>
             <p>Explore the workflow during your trial, then choose whether RetainAI belongs in your business.</p>
           </div>
-          <div className="lp-pricing-card">
-            <div className="lp-price-copy">
-              <small>RETAINAI STANDARD</small>
-              <h3>One complete customer-retention workspace.</h3>
-              <p>Contacts, conversations, appointments, insights, automations, invoices, team tools, and owner controls.</p>
-              <div className="lp-price"><strong>$20</strong><span>CAD<br />per month</span></div>
-              <p className="lp-launch-note">Current launch price. Confirm your total at checkout.</p>
-            </div>
-            <div className="lp-price-actions">
-              <ul>
-                {["14-day trial", "Guided onboarding", "WhatsApp Business connection", "AI-assisted messaging", "Retention insights", "Cancel and export controls"].map((item) => (
-                  <li key={item}><FaCheck /> {item}</li>
-                ))}
-              </ul>
-              <a className="lp-primary-button" href="/signup">Start your trial <FaArrowRight /></a>
-              <small>Payment method required. Subscription begins after the trial unless cancelled.</small>
-            </div>
-          </div>
+          <PricingCard />
         </section>
 
-        <section className="lp-section lp-faq-section" id="faq">
-          <div className="lp-faq-heading">
-            <span>Questions, answered</span>
-            <h2>Know exactly what you’re signing up for.</h2>
-            <p>Clear expectations create better customer relationships—including ours.</p>
-            <button type="button" onClick={bookDemo}>Still unsure? Book a walkthrough <FaArrowRight /></button>
-          </div>
-          <div className="lp-faq-list">
-            {faqs.map(([question, answer], index) => (
-              <FAQItem
-                key={question}
-                question={question}
-                answer={answer}
-                open={openFaq === index}
-                onClick={() => setOpenFaq(openFaq === index ? -1 : index)}
-              />
-            ))}
-          </div>
-        </section>
+        <OwnerBlock />
+        <FAQSection />
 
         <section className="lp-final-cta">
           <div>
@@ -338,17 +213,64 @@ export default function LandingPage() {
           </div>
           <div>
             <a className="lp-primary-button" href="/signup">Start your 14-day trial <FaArrowRight /></a>
-            <button type="button" onClick={bookDemo}>Book a walkthrough</button>
+            <a href={BOOKING_URL}>Book a walkthrough</a>
           </div>
         </section>
       </main>
 
-      <footer className="lp-footer">
-        <div className="lp-footer-brand"><img src={brandLogo} alt="" /><span><b>RetainAI</b><small>Client relationships. Done right.</small></span></div>
-        <div><a href="#product">Product</a><a href="#pricing">Pricing</a><a href="/partners">Partner with RetainAI</a><a href="/login">Log in</a></div>
-        <div><a href="/privacy-policy">Privacy</a><a href="/terms-of-service">Terms</a><a href="/refund-policy">Refunds &amp; cancellations</a><a href={`mailto:owner@retainai.ca`}>Support</a></div>
-        <small>© {new Date().getFullYear()} RetainAI. All rights reserved.</small>
-      </footer>
+      <MarketingFooter />
     </div>
   );
+}
+
+export function MarketingNav({ home = false }) {
+  return (<nav className="lp-nav" aria-label="Main navigation">
+        <a className="lp-brand" href="/" aria-label="RetainAI home">
+          <img src={brandLogo} alt="RetainAI logo" /><span>RetainAI</span>
+        </a>
+        <details className="lp-mobile-menu"><summary>Explore</summary><div><a href="/#product">Product</a><a href="/#how-it-works">How it works</a><a href="/#pricing">Pricing</a><a href="/#faq">FAQ</a><a href="/retention-crm-for-service-businesses">Who it’s for</a><a href="/about">About</a></div></details>
+        <div className="lp-nav-links">
+          <a href={`${home ? "" : "/"}#product`}>Product</a>
+          <a href={`${home ? "" : "/"}#how-it-works`}>How it works</a>
+          <a href={`${home ? "" : "/"}#pricing`}>Pricing</a>
+          <a href={`${home ? "" : "/"}#faq`}>FAQ</a>
+          <a href="/retention-crm-for-service-businesses">Who it’s for</a>
+        </div>
+        <div className="lp-nav-actions">
+          <a className="lp-link-button" href="/login">Log in</a>
+          <a className="lp-primary-button small" href="/signup">Start free trial <FaArrowRight /></a>
+        </div>
+      </nav>);
+}
+
+export function MarketingFooter() {
+  return (<footer className="lp-footer">
+        <div className="lp-footer-brand"><img src={brandLogo} alt="RetainAI logo" /><span><b>RetainAI</b><small>Mateo Zufic · Owner, RetainAI</small></span></div>
+        <div><a href="/#product">Product</a><a href="/#pricing">Pricing</a><a href="/about">About Mateo &amp; RetainAI</a><a href="/customers">Who it’s for</a><a href="/retention-crm-for-service-businesses">Service business CRM</a><a href="/partners">Partner with RetainAI</a><a href="/login">Log in</a></div>
+        <div><a href="/privacy-policy">Privacy</a><a href="/terms-of-service">Terms</a><a href="/refund-policy">Refunds &amp; cancellations</a><a href={`mailto:owner@retainai.ca`}>Support</a></div>
+        <small>© {new Date().getFullYear()} RetainAI. All rights reserved.</small>
+      </footer>);
+}
+
+export function PricingCard() {
+  return (<div className="lp-pricing-card">
+            <div className="lp-price-copy">
+              <small>RETAINAI STANDARD</small>
+              <h3>One complete customer-retention workspace.</h3>
+              <p>Contacts, conversations, appointments, insights, automations, invoices, team tools, and owner controls.</p>
+              <div className="lp-price"><strong>$20</strong><span>CAD<br />per month</span></div>
+              <p className="lp-price-anchor">Less than C$1 a day for RetainAI, billed C$20 monthly.</p>
+              <p className="lp-launch-note">One monthly plan, no annual commitment or separate feature tiers. Taxes and any connected-service charges are separate. Confirm your total at checkout.</p>
+            </div>
+            <div className="lp-price-actions">
+              <ul>
+                {["14-day trial", "Guided onboarding", "WhatsApp Business connection", "AI-assisted messaging", "Retention insights", "Cancel and export controls"].map((item) => (
+                  <li key={item}><FaCheck /> {item}</li>
+                ))}
+              </ul>
+              <a className="lp-primary-button" href="/signup">Start your trial <FaArrowRight /></a>
+              <p className="lp-payment-reassurance">Paid by card through Stripe. Cancel anytime, export your data.</p>
+              <small>Payment method required. Subscription begins after the trial unless cancelled.</small>
+            </div>
+          </div>);
 }

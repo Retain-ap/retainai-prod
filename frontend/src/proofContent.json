@@ -1,0 +1,20 @@
+{
+  "owner": {
+    "name": "Mateo Zufic",
+    "role": "Owner, RetainAI",
+    "email": "owner@retainai.ca",
+    "photo": null,
+    "whyBuilt": null,
+    "profileUrl": null
+  },
+  "testimonials": [],
+  "usage": null,
+  "externalMention": null,
+  "productCapture": {
+    "src": "/images/retainai-contacts-example.jpg",
+    "alt": "RetainAI Contacts screen with six fictional customer records, follow-up statuses, search and contact import controls",
+    "width": 1280,
+    "height": 720,
+    "capturedOn": "2026-11-11"
+  }
+}
