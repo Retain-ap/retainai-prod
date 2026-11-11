@@ -6,6 +6,7 @@ links) and what is still open. Add a file at the end of each session.
 
 | Date | Session | Summary |
 | --- | --- | --- |
+| 2026-11-11 | [Audit release and launch gates](2026-11-11-audit-release-and-launch-gates.md) | HeyCatch findings and shorter signup live; local/GitHub/Render reconciliation; read-only Calendly Sandbox connected; Closet Muse Apple entitlement protection deployed; provider and marketing gates verified |
 | 2026-11-07 | [Launch polish and marketing desk](2026-11-07-launch-polish-and-marketing.md) | Both SEO releases live; Render route rules corrected; Google accepted both sitemaps; free local marketing desk verified; owner/provider gates consolidated |
 | 2026-11-07 UTC | [Fixed AI routing and production recovery](2026-11-07-fixed-ai-and-production-recovery.md) | Fixed AI route and password form; reviewer workflow verified; 12-source import chooser and Calendar navigation; real encrypted backup restored locally; Calendly developer setup and remaining gates |
 | 2026-11-06 | [Service businesses, Calendly and inspired looks](2026-11-06-value-calendly-and-inspired-looks.md) | PR37 payment evidence/rebooking/booking imports; Closet Muse inspired looks and TestFlight 3; real cloud backup verified; exact release evidence and remaining owner/provider gates |
