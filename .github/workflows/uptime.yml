@@ -2,6 +2,8 @@ name: Production uptime
 
 # Checks the live RetainAI and Closet Muse services. A failed run makes GitHub
 # email the repository owner; nothing here changes production.
+# GitHub runs schedules best-effort: this cron asks for every 15 minutes, but
+# observed runs were 3-6 a day with gaps of hours. It is not 15-minute coverage.
 on:
   schedule:
     - cron: "7,22,37,52 * * * *"

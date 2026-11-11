@@ -43,9 +43,12 @@ after affected users re-enrol 2FA and reconnect workspace WhatsApp credentials.
   - `GOOGLE_PEOPLE_REDIRECT_URI=https://api.retainai.ca/api/google/people/oauth-callback`
 - `WHATSAPP_TOKEN`, `WHATSAPP_PHONE_ID`, and `APP_SECRET`: Meta messaging.
 - An external uptime monitor checking `/api/readiness` every five minutes.
-  `.github/workflows/uptime.yml` checks RetainAI and Closet Muse readiness every
-  15 minutes on GitHub Actions; a failed run emails the repository owner. It
-  warns, without failing, while `https://retainai.ca` lacks a Render certificate.
+  `.github/workflows/uptime.yml` checks RetainAI and Closet Muse readiness on
+  GitHub Actions; a failed run emails the repository owner. Its cron asks for
+  every 15 minutes, but GitHub runs schedules best-effort and has run it only
+  3–6 times a day (gaps of 3–8 hours observed through Nov 11, 2026), so it is
+  not a substitute for the external monitor. It warns, without failing, while
+  `https://retainai.ca` lacks a Render certificate.
 - Download verified snapshots from Owner Console → Backups and copy them to
   storage outside Render. On-platform backups do not protect against losing the
   entire Render disk.
