@@ -1,7 +1,7 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { FaCheck, FaCopy, FaMagic, FaPaperPlane, FaSearch, FaShieldAlt } from "react-icons/fa";
 import { apiUrl } from "../apiBase";
-import { BUSINESS_SETTINGS_PATH, holdDraft, isBusinessProfileRequired, takeHeldDraft } from "../businessProfile";
+import { BUSINESS_SETTINGS_PATH, consumeHeldDraft, heldDraftScope, holdDraft, isBusinessProfileRequired, peekHeldDraft } from "../businessProfile";
 import "./AiPrompts.css";
 
 const PLAYBOOKS = [
@@ -23,8 +23,6 @@ const SUBJECTS = {
   upsell: () => "An option you may find helpful",
 };
 
-const HELD_DRAFT_SCOPE = "ai-studio";
-
 export default function AiPromptsDashboard({ leads = [], user = {}, onSendAIPromptEmail, onOpenBusinessSettings }) {
   const [search, setSearch] = useState("");
   const [focusedLead, setFocusedLead] = useState(null);
@@ -41,6 +39,8 @@ export default function AiPromptsDashboard({ leads = [], user = {}, onSendAIProm
   // The backend uses the saved business name; no placeholder name is sent.
   const brandName = user.businessName || user.business || "";
   const userName = user.name || user.email?.split("@")[0] || "Your Team";
+  // One held draft per workspace and signed-in person; "" (nothing held) when unknown.
+  const heldScope = heldDraftScope("ai-studio", user);
 
   const filteredLeads = useMemo(() => {
     const query = search.trim().toLowerCase();
@@ -53,8 +53,10 @@ export default function AiPromptsDashboard({ leads = [], user = {}, onSendAIProm
   }, [leads, search]);
 
   // Put back a draft held while the owner went to Settings to add a business name.
+  // It is removed only after it is back on screen for this account's same
+  // customer; while customers are still loading it stays where it is.
   useEffect(() => {
-    const held = takeHeldDraft(HELD_DRAFT_SCOPE);
+    const held = peekHeldDraft(heldScope);
     if (!held) return;
     const lead = leads.find((item) => String(item.id) === String(held.leadId));
     if (!lead) return;
@@ -64,15 +66,17 @@ export default function AiPromptsDashboard({ leads = [], user = {}, onSendAIProm
     if (LENGTHS.includes(held.length)) setLength(held.length);
     setContext(String(held.context || ""));
     setDraft(String(held.draft || ""));
-  }, [leads]);
+    consumeHeldDraft(heldScope, held);
+  }, [heldScope, leads]);
 
   const showError = (err, fallback) => {
+    setStatus("");
     setNeedsBusinessName(isBusinessProfileRequired(err));
     setError(err?.message || err?.error || fallback);
   };
 
   const openBusinessSettings = (event) => {
-    holdDraft(HELD_DRAFT_SCOPE, { leadId: focusedLead?.id, playbook: activePlaybook, tone, length, context, draft });
+    if (focusedLead?.id != null) holdDraft(heldScope, { leadId: String(focusedLead.id), playbook: activePlaybook, tone, length, context, draft });
     if (typeof onOpenBusinessSettings === "function") {
       event.preventDefault();
       onOpenBusinessSettings();

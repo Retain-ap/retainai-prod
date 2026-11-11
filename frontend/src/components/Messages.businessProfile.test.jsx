@@ -1,6 +1,7 @@
 import React from "react";
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen } from "@testing-library/react";
 import Messages from "./Messages";
+import { heldDraftScope, holdDraft } from "../businessProfile";
 
 const lead = { id: "lead-1", name: "Jordan Lee", email: "jordan@example.com", phone: "+14165550100" };
 const refusal = {
@@ -27,10 +28,14 @@ afterEach(() => {
   delete global.fetch;
 });
 
+const owner = { email: "owner@example.com" };
+const threadScope = (user = owner) => heldDraftScope("messages", user, "lead-1");
+const composer = () => screen.findByPlaceholderText(/24h|Type a message|Optional notes/);
+
 test("AI Reply without a business name keeps the typed reply and offers Settings instead of a template", async () => {
   const openSettings = jest.fn();
-  render(<Messages user={{ email: "owner@example.com" }} leads={[lead]} onOpenBusinessSettings={openSettings} />);
-  const box = await screen.findByPlaceholderText(/24h|Type a message|Optional notes/);
+  render(<Messages user={owner} leads={[lead]} onOpenBusinessSettings={openSettings} />);
+  const box = await composer();
   fireEvent.change(box, { target: { value: "Typed reply" } });
   fireEvent.click(screen.getByRole("button", { name: "AI Reply" }));
 
@@ -41,13 +46,44 @@ test("AI Reply without a business name keeps the typed reply and offers Settings
 
   fireEvent.click(action);
   expect(openSettings).toHaveBeenCalledTimes(1);
-  const held = Object.keys(sessionStorage).find((key) => key.startsWith("retainai:held-draft:messages:"));
-  expect(JSON.parse(sessionStorage.getItem(held))).toEqual({ text: "Typed reply" });
+  expect(Object.keys(sessionStorage)).toEqual([threadScope()]);
+  expect(JSON.parse(sessionStorage.getItem(threadScope()))).toMatchObject({ text: "Typed reply" });
 });
 
-test("a held reply returns to its thread", async () => {
-  sessionStorage.setItem("retainai:held-draft:messages:owner@example.com|lead-1", JSON.stringify({ text: "Held reply" }));
-  render(<Messages user={{ email: "owner@example.com" }} leads={[lead]} />);
+test("a reply edited after the refusal is held as last typed, with no further AI call", async () => {
+  render(<Messages user={owner} leads={[lead]} onOpenBusinessSettings={jest.fn()} />);
+  const box = await composer();
+  fireEvent.change(box, { target: { value: "First words" } });
+  fireEvent.click(screen.getByRole("button", { name: "AI Reply" }));
+  const action = await screen.findByRole("link", { name: "Add business name in Settings" });
+  const aiCalls = () => global.fetch.mock.calls.filter(([url]) => String(url).includes("/api/generate-message")).length;
+  expect(aiCalls()).toBe(1);
+
+  fireEvent.change(box, { target: { value: "First words, then an edit" } });
+  fireEvent.click(action);
+  expect(JSON.parse(sessionStorage.getItem(threadScope()))).toMatchObject({ text: "First words, then an edit" });
+  expect(aiCalls()).toBe(1);
+});
+
+test("a held reply waits for its customer to load, then returns to its thread once", async () => {
+  holdDraft(threadScope(), { text: "Held reply" });
+  const { rerender } = render(<Messages user={owner} leads={[]} />);
+  await act(async () => { await new Promise((resolve) => setTimeout(resolve, 5)); });
+  expect(sessionStorage.getItem(threadScope())).not.toBeNull();
+
+  rerender(<Messages user={owner} leads={[lead]} />);
   expect(await screen.findByDisplayValue("Held reply")).toBeInTheDocument();
-  await waitFor(() => expect(sessionStorage.getItem("retainai:held-draft:messages:owner@example.com|lead-1")).toBeNull());
+  expect(sessionStorage.getItem(threadScope())).toBeNull();
+});
+
+test.each([
+  ["another person", { email: "other@example.com" }],
+  ["the same person in another workspace", { email: "owner@example.com", org_id: "second@example.com" }],
+])("%s never receives a held reply for the same customer id", async (_label, other) => {
+  holdDraft(threadScope(), { text: "Held reply" });
+  render(<Messages user={other} leads={[lead]} />);
+  const box = await composer();
+  await act(async () => { await new Promise((resolve) => setTimeout(resolve, 5)); });
+  expect(box).toHaveValue("");
+  expect(sessionStorage.getItem(threadScope())).not.toBeNull();
 });
