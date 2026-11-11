@@ -364,6 +364,11 @@ def calendly_sync():
                     merged = _merge_owner_edits(existing, appointment)
                     if all(existing.get(field) == merged.get(field) for field in fields):
                         results["unchanged"] += 1
+                        # Nothing the owner sees changed, but Calendly's status may
+                        # have (the baseline owner edits are measured against), or
+                        # an older row may be getting its first baseline: save it.
+                        if existing.get("calendly_synced_status") != merged.get("calendly_synced_status"):
+                            rows[position] = merged
                     else:
                         rows[position] = merged
                         results["updated"] += 1
@@ -394,16 +399,23 @@ def _merge_owner_edits(existing, synced):
     """Refresh an imported booking from Calendly without undoing the owner's work.
 
     Calendly never supplies notes, so the owner's notes are kept. A status the
-    owner set in RetainAI (one that differs from the status this sync last
-    wrote, e.g. a no-show or a manual completion) is kept too, unless Calendly
-    now reports the booking cancelled. Time, duration and title still follow
-    Calendly, which is the booking's source of truth.
+    owner set in RetainAI (one that differs from calendly_synced_status, the
+    status the sync last wrote, e.g. a no-show or a manual completion) is kept
+    too, unless Calendly now reports the booking cancelled. Time, duration and
+    title still follow Calendly, which is the booking's source of truth. The
+    merged row always carries Calendly's current status as the new baseline.
     """
     merged = {**existing, **synced}
     merged["notes"] = existing.get("notes") or ""
-    last_synced = existing.get("calendly_synced_status", existing.get("status"))
     owner_status = existing.get("status")
-    if owner_status and owner_status != last_synced and synced.get("status") != "cancelled":
+    baseline = existing.get("calendly_synced_status")
+    if baseline is None:
+        # Imported before baselines were recorded: we can't tell an owner edit
+        # from an older sync's status, so a stored status that differs from
+        # Calendly's is treated as the owner's and kept (cancellation still
+        # wins). The merged row records the baseline from now on.
+        baseline = synced.get("status")
+    if owner_status and owner_status != baseline and synced.get("status") != "cancelled":
         terminal = owner_status in ("completed", "cancelled", "no-show")
         merged.update(status=owner_status, done=terminal, is_done=terminal, completed=owner_status == "completed")
     return merged

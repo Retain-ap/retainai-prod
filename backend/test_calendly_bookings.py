@@ -319,6 +319,68 @@ class CalendlyTests(unittest.TestCase):
         row = self.appointments()[0]
         self.assertEqual((row["status"], row["done"], row["notes"]), ("cancelled", True, "Prepaid deposit"))
 
+    def stored_row(self):
+        return self.appointments()[0]
+
+    def test_a_calendly_status_change_updates_the_baseline_even_when_nothing_visible_changes(self):
+        # The reviewer's sequence: import scheduled -> owner marks completed ->
+        # Calendly's status becomes completed (time passed) -> owner resets to
+        # scheduled -> the next sync must keep the owner's scheduled.
+        self.fake.events = [event("SOON", 1)]
+        self.fake.invitees = {"SOON": [invitee("SOON", "I1")]}
+        client, _, _ = self.connect()
+        self.sync(client)
+        self.assertEqual((self.stored_row()["status"], self.stored_row()["calendly_synced_status"]), ("scheduled", "scheduled"))
+        self.edit_imported(status="completed", done=True, completed=True)
+        later = NOW + dt.timedelta(days=2)
+        with patch.object(app_calendly, "_now", return_value=later):
+            result = self.sync(client).get_json()
+            self.assertEqual((result["updated"], result["unchanged"]), (0, 1))
+            self.assertEqual((self.stored_row()["status"], self.stored_row()["calendly_synced_status"]), ("completed", "completed"))
+            self.edit_imported(status="scheduled", done=False, completed=False)
+            self.sync(client)
+        self.assertEqual(self.stored_row()["status"], "scheduled")
+
+    def strip_baseline(self, **changes):
+        data = retainai.load_appointments()
+        row = data[self.owner][0]
+        row.pop("calendly_synced_status", None)
+        row.update(changes)
+        retainai.save_appointments(data)
+
+    def test_legacy_rows_keep_a_differing_status_and_gain_a_baseline(self):
+        self.fake.events = [event("PAST", -2)]
+        self.fake.invitees = {"PAST": [invitee("PAST", "I1")]}
+        client, _, _ = self.connect()
+        self.sync(client)
+        self.strip_baseline(status="no-show", done=True, completed=False, notes="Did not arrive")
+        result = self.sync(client).get_json()
+        self.assertEqual((result["updated"], result["unchanged"]), (0, 1))
+        row = self.stored_row()
+        self.assertEqual((row["status"], row["notes"], row["calendly_synced_status"]), ("no-show", "Did not arrive", "completed"))
+        self.sync(client)
+        self.assertEqual(self.stored_row()["status"], "no-show")
+
+    def test_legacy_rows_with_the_same_status_gain_a_baseline_on_an_unchanged_sync(self):
+        self.fake.events = [event("PAST", -2)]
+        self.fake.invitees = {"PAST": [invitee("PAST", "I1")]}
+        client, _, _ = self.connect()
+        self.sync(client)
+        self.strip_baseline()
+        self.assertEqual(self.sync(client).get_json()["unchanged"], 1)
+        self.assertEqual(self.stored_row()["calendly_synced_status"], "completed")
+
+    def test_legacy_rows_still_follow_a_calendly_cancellation(self):
+        self.fake.events = [event("PAST", -2)]
+        self.fake.invitees = {"PAST": [invitee("PAST", "I1")]}
+        client, _, _ = self.connect()
+        self.sync(client)
+        self.strip_baseline(status="no-show", done=True, completed=False, notes="Did not arrive")
+        self.fake.events = [event("PAST", -2, "canceled")]
+        self.sync(client)
+        row = self.stored_row()
+        self.assertEqual((row["status"], row["notes"], row["calendly_synced_status"]), ("cancelled", "Did not arrive", "cancelled"))
+
     def test_unedited_imported_bookings_still_follow_calendly(self):
         self.fake.events = [event("SOON", 3)]
         self.fake.invitees = {"SOON": [invitee("SOON", "I1")]}
