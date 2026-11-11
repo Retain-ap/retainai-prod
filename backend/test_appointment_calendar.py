@@ -81,6 +81,33 @@ class AppointmentTimeTests(unittest.TestCase):
         self.assertEqual(created["status"], "scheduled")
         self.assertFalse(created["done"])
 
+    def test_emailed_appointment_requires_business_before_any_side_effect(self):
+        users = _users()
+        users["owner@example.com"].update(business="", businessName=" ", businessType="Salon")
+        with patch.object(retainai, "load_users", return_value=users), patch.object(
+            retainai, "load_user_profile", return_value={"timezone": "America/Toronto"}
+        ), patch.object(retainai, "load_leads", return_value={"owner@example.com": [{"id": "lead-1", "name": "Jenna", "email": "jenna@example.com"}]}), patch.object(
+            retainai, "save_appointments"
+        ) as save, patch.object(retainai, "create_ics_file") as create_ics, patch.object(retainai, "send_email_with_template") as send:
+            response = self._client().post("/api/appointments/owner@example.com", json={"lead_id": "lead-1", "appointment_time": "2030-07-02T10:30:00", "duration": 30})
+        self.assertEqual(response.status_code, 409)
+        self.assertEqual(response.get_json()["code"], "business_profile_required")
+        save.assert_not_called(); create_ics.assert_not_called(); send.assert_not_called()
+
+    def test_no_email_appointment_can_be_saved_before_business_setup(self):
+        users = _users()
+        users["owner@example.com"].update(business="", businessName="")
+        with patch.object(retainai, "load_users", return_value=users), patch.object(
+            retainai, "load_user_profile", return_value={"timezone": "America/Toronto"}
+        ), patch.object(retainai, "load_leads", return_value={"owner@example.com": [{"id": "lead-1", "name": "Jenna"}]}), patch.object(
+            retainai, "load_appointments", return_value={}
+        ), patch.object(retainai, "save_appointments") as save, patch.object(retainai, "create_ics_file"), patch.object(retainai, "send_email_with_template") as send, patch.object(retainai, "add_notification"):
+            response = self._client().post("/api/appointments/owner@example.com", json={"lead_id": "lead-1", "appointment_time": "2030-07-02T10:30:00", "duration": 30})
+        self.assertEqual(response.status_code, 201)
+        self.assertEqual(response.get_json()["appointment"]["business_name"], "")
+        self.assertTrue(response.get_json()["confirmation_skipped"])
+        save.assert_called_once(); send.assert_not_called()
+
     def test_get_normalizes_legacy_nested_store_and_naive_time(self):
         users = _users()
         legacy = {
