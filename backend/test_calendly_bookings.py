@@ -291,6 +291,43 @@ class CalendlyTests(unittest.TestCase):
         self.assertTrue(api_calls and all(c["method"] == "GET" for c in api_calls))
         self.assertTrue(all(c["params"]["user"] == f"{API}/users/USER1" for c in api_calls if c["path"] == "/scheduled_events"))
 
+    def edit_imported(self, **changes):
+        data = retainai.load_appointments()
+        data[self.owner][0].update(changes)
+        retainai.save_appointments(data)
+
+    def test_owner_status_and_notes_on_an_imported_booking_survive_re_sync(self):
+        self.fake.events = [event("PAST", -2)]
+        self.fake.invitees = {"PAST": [invitee("PAST", "I1")]}
+        client, _, _ = self.connect()
+        self.sync(client)
+        self.edit_imported(status="no-show", done=True, completed=False, notes="Did not arrive")
+        for _ in range(2):  # stable: later syncs neither revert nor keep "updating" it
+            result = self.sync(client).get_json()
+            self.assertEqual((result["updated"], result["unchanged"]), (0, 1))
+        row = self.appointments()[0]
+        self.assertEqual((row["status"], row["completed"], row["notes"]), ("no-show", False, "Did not arrive"))
+
+    def test_a_calendly_cancellation_overrides_the_owner_status_but_keeps_notes(self):
+        self.fake.events = [event("SOON", 3)]
+        self.fake.invitees = {"SOON": [invitee("SOON", "I1")]}
+        client, _, _ = self.connect()
+        self.sync(client)
+        self.edit_imported(status="completed", done=True, completed=True, notes="Prepaid deposit")
+        self.fake.events = [event("SOON", 3, "canceled")]
+        self.assertEqual(self.sync(client).get_json()["updated"], 1)
+        row = self.appointments()[0]
+        self.assertEqual((row["status"], row["done"], row["notes"]), ("cancelled", True, "Prepaid deposit"))
+
+    def test_unedited_imported_bookings_still_follow_calendly(self):
+        self.fake.events = [event("SOON", 3)]
+        self.fake.invitees = {"SOON": [invitee("SOON", "I1")]}
+        client, _, _ = self.connect()
+        self.sync(client)
+        self.fake.events = [event("SOON", 3, "canceled")]
+        self.sync(client)
+        self.assertEqual(self.appointments()[0]["status"], "cancelled")
+
     def test_sync_leaves_appointments_from_other_sources_alone(self):
         manual = {"id": "manual-1", "lead_id": "ana", "status": "scheduled", "appointment_time": "2026-12-01T10:00:00"}
         retainai.save_appointments({self.owner: [manual]})

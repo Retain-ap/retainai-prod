@@ -417,6 +417,9 @@ def to_appointment(event, invitee, lead, *, workspace, timezone_name, status, re
         "timezone": getattr(zone, "key", "UTC"),
         "duration": max(5, min(duration, 1440)),
         "status": status,
+        # The status this sync last wrote. A different current status was set
+        # by the owner in RetainAI (see app_calendly's merge on re-sync).
+        "calendly_synced_status": status,
         "done": terminal,
         "completed": status == "completed",
         "is_done": terminal,
