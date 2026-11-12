@@ -24,6 +24,12 @@ The new category page uses the audience's own follow-up/rebooking vocabulary. It
 
 Add explicit static rewrites before the existing SPA catch-all for `/pricing`, `/about`, `/features`, `/customers`, and `/retention-crm-for-service-businesses` to their respective `/.../index.html` output, including trailing-slash handling using the existing host convention. Each generated file has its own initial title, description, self-canonical, Open Graph and Twitter metadata. Check the actual short URLs after deployment, not only local files. `/llms.txt` and `/sitemap.xml` must be served as files.
 
+For every new public route, including `/find-customers-who-stopped-rebooking`, add both the exact path and its trailing-slash variant in Render's frontend **Redirects/Rewrites**, pointing to the route's `/index.html` file with action **Rewrite**, before `/* → /index.html`. Keep the existing rules. The rebooking guide's two rules were saved and verified on 12 November 2026 UTC. No repository Blueprint currently manages these dashboard rules.
+
+After the deployment and routing update, run `node tools/check-public-route-html.cjs` from the repository root (Node 20 or later). It reads the public route list and expected metadata directly from the application, requests both URL forms without running JavaScript, and exits unsuccessfully if a page serves another route's title, description, canonical, social URL or indexing directive. It includes the noindex sign-in and invite pages. An optional origin argument can check a local build, for example `node tools/check-public-route-html.cjs http://localhost:3000`. It only sends anonymous GET requests; it does not change hosting settings or customer data.
+
+A browser showing the right page is not enough: client-side routing can hide an incorrect initial HTML response from the SPA catch-all. Resolve an actual failed check rather than repeatedly deploying unchanged code or assuming the edge cache is the cause.
+
 ## Measurement
 
 Audit hypotheses are not results. Compare homepage-to-trial and walkthrough completion over four weeks; use 60 days for non-homepage search impressions and 90 days for category-page organic entries. No new analytics vendor, tracking cookie or fabricated baseline was introduced by this change.
