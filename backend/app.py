@@ -4221,6 +4221,12 @@ def stripe_webhook():
             current_subscription = str(user.get("stripe_subscription_id") or "").strip()
             if not invoice_subscription or invoice_subscription != current_subscription:
                 return "", 200
+            # Invoices carry no subscription status. Once a subscription event has
+            # reported the current subscription unpaid, canceled or expired, a late
+            # or retried invoice must not reopen it; Stripe sends
+            # customer.subscription.updated when the subscription becomes active again.
+            if str(user.get("billing_status") or "") in {"unpaid", "canceled", "incomplete_expired"}:
+                return "", 200
 
         now_iso = datetime.datetime.utcnow().isoformat() + "Z"
         customer_id = event_object.get("customer")
