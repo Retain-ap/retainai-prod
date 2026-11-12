@@ -6,6 +6,8 @@ links) and what is still open. Add a file at the end of each session.
 
 | Date | Session | Summary |
 | --- | --- | --- |
+| 2026-11-11 evening | [Import undo and birthday validation](2026-11-11-import-undo-release.md) | PR64 live on both services; safe undo survives the normal Contacts reload; invalid birthdays are reported without replacing saved dates |
+| 2026-11-11 evening | [Release closeout](2026-11-11-evening-release-closeout.md) | Billing fixes and rebooking guide live; raw HTML route checks; exact Google approval and remaining provider gates |
 | 2026-11-11 | [Audit release and launch gates](2026-11-11-audit-release-and-launch-gates.md) | HeyCatch findings and shorter signup live; local/GitHub/Render reconciliation; read-only Calendly Sandbox connected; Closet Muse Apple entitlement protection deployed; provider and marketing gates verified |
 | 2026-11-07 | [Launch polish and marketing desk](2026-11-07-launch-polish-and-marketing.md) | Both SEO releases live; Render route rules corrected; Google accepted both sitemaps; free local marketing desk verified; owner/provider gates consolidated |
 | 2026-11-07 UTC | [Fixed AI routing and production recovery](2026-11-07-fixed-ai-and-production-recovery.md) | Fixed AI route and password form; reviewer workflow verified; 12-source import chooser and Calendar navigation; real encrypted backup restored locally; Calendly developer setup and remaining gates |
