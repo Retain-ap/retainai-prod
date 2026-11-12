@@ -5,6 +5,7 @@ app_imports.py validate, deduplicate and save the rows this module returns.
 """
 
 import csv
+import datetime
 import io
 import quopri
 import re
@@ -303,13 +304,22 @@ def clean_phone(value, country_code="+1"):
 
 
 def normalize_birthday(value):
+    """ISO dates (YYYY-MM-DD, YYYYMMDD or vCard --MM-DD) only.
+
+    Slash dates such as 02/03/1990 are not guessed: they could be day-first or
+    month-first. Impossible dates (February 31) are rejected.
+    """
     text = str(value or "").strip()
     match = re.match(r"^(\d{4}|--)-?(\d{2})-?(\d{2})", text)
     if match:
         year = match.group(1) if match.group(1) != "--" else "0000"
         month, day = int(match.group(2)), int(match.group(3))
-        if 1 <= month <= 12 and 1 <= day <= 31:
-            return f"{year}-{month:02d}-{day:02d}"
+        try:
+            # A missing year is checked against a leap year so 29 February stays valid.
+            datetime.date(int(year) if year != "0000" else 2000, month, day)
+        except ValueError:
+            return ""
+        return f"{year}-{month:02d}-{day:02d}"
     return ""
 
 
@@ -341,6 +351,11 @@ def build_contact(raw, mapping, country_code="+1"):
         problem, phone = problem or "invalid_phone", ""
     if not (email or phone):
         return None, problem or "missing_email_or_phone"
+    birthday_raw = take("birthday")
+    birthday = normalize_birthday(birthday_raw)
+    if birthday_raw and not birthday:
+        # The contact is still imported; the unreadable birthday is reported.
+        problem = problem or "invalid_birthday"
     contact = {
         "name": (name or email or phone)[:MAX_FIELD_CHARS["name"]],
         "email": email,
@@ -348,7 +363,7 @@ def build_contact(raw, mapping, country_code="+1"):
         "company": take("company"),
         "title": take("title"),
         "notes": take("notes"),
-        "birthday": normalize_birthday(take("birthday")),
+        "birthday": birthday,
     }
     # A contact with one usable channel is kept; the dropped value is reported.
     return contact, problem

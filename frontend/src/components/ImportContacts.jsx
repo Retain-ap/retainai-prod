@@ -22,6 +22,7 @@ const REASONS = {
   not_selected: "Not selected", duplicate_in_file: "Appears earlier in this file",
   already_in_crm: "Already in RetainAI", identity_conflict: "Email and phone belong to different contacts", missing_email_or_phone: "No valid email or phone",
   invalid_email: "Email is not valid", invalid_phone: "Phone number is not valid",
+  invalid_birthday: "Birthday not recognised (use YYYY-MM-DD); imported without it",
 };
 const ROW_LIMIT = 200;
 

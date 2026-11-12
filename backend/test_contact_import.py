@@ -286,6 +286,49 @@ class ImportApiTests(unittest.TestCase):
         self.assertEqual(after["pat@example.com"]["phone"], "+14165550199")
         self.assertEqual(self._undo(import_id).status_code, 404)  # one undo per import
 
+    def test_undo_still_works_after_the_contact_list_is_opened(self):
+        # The import page reloads contacts right after a commit, and GET /api/leads
+        # stores each contact's computed status. That is not an edit.
+        self._commit(self._preview("a.csv", _csv(["Name", "Email"], ["Sam", "sam@example.com"])).get_json())
+        second = self._preview("b.csv", _csv(["Name", "Email"], ["Samuel", "sam@example.com"], ["Pat", "pat@example.com"])).get_json()
+        import_id = self._commit(second, duplicate_mode="update").get_json()["import"]["id"]
+        listed = self.client.get("/api/leads", headers={"Origin": "http://localhost:3000"})
+        self.assertEqual(listed.status_code, 200)
+        self.assertTrue(all(lead.get("status") for lead in self._leads()), "opening contacts stores a computed status")
+
+        body = self._undo(import_id).get_json()
+        self.assertEqual((body["removed_contacts"], body["restored_contacts"], body["kept_contacts"]), (1, 1, 0))
+        self.assertEqual({lead["email"]: lead["name"] for lead in self._leads()}, {"sam@example.com": "Sam"})
+
+    def test_a_real_edit_after_opening_contacts_is_still_kept(self):
+        preview = self._preview("a.csv", _csv(["Name", "Email"], ["Pat", "pat@example.com"], ["Lee", "lee@example.com"])).get_json()
+        import_id = self._commit(preview).get_json()["import"]["id"]
+        self.client.get("/api/leads", headers={"Origin": "http://localhost:3000"})
+        pat = self._by_email()["pat@example.com"]
+        marked = self.client.post("/api/leads/contacted", json={"leadId": pat["id"]}, headers={"Origin": "http://localhost:3000"})
+        self.assertEqual(marked.status_code, 200)
+
+        body = self._undo(import_id).get_json()
+        self.assertEqual((body["removed_contacts"], body["kept_contacts"]), (1, 1))
+        self.assertEqual(list(self._by_email()), ["pat@example.com"])
+
+    def test_unreadable_birthdays_are_reported_and_impossible_dates_rejected(self):
+        self.assertEqual(ci.normalize_birthday("1990-02-14"), "1990-02-14")
+        self.assertEqual(ci.normalize_birthday("19900214"), "1990-02-14")
+        self.assertEqual(ci.normalize_birthday("--02-29"), "0000-02-29")
+        for unreadable in ("2/14/1990", "14/02/1990", "1990-02-31", "1990-13-01", "0/0/00"):
+            self.assertEqual(ci.normalize_birthday(unreadable), "", unreadable)
+
+        preview = self._preview("outlook.csv", _csv(["First Name", "Last Name", "E-mail Address", "Birthday"],
+                                                     ["Ava", "Example", "ava@example.com", "2/14/1990"],
+                                                     ["Ben", "Sample", "ben@example.com", "1990-02-14"])).get_json()
+        self.assertEqual([o["reason"] for o in preview["outcomes"]], ["invalid_birthday", ""])
+        self.assertIn("YYYY-MM-DD", preview["reasons"]["invalid_birthday"])
+        summary = self._commit(preview).get_json()["summary"]
+        self.assertEqual((summary["imported"], summary["warnings"]), (2, 1))
+        saved = self._by_email()
+        self.assertEqual((saved["ava@example.com"]["birthday"], saved["ben@example.com"]["birthday"]), ("", "1990-02-14"))
+
     def test_legacy_full_list_undo_is_refused_without_touching_contacts(self):
         retainai.save_user_leads(self.owner, [{"id": "kept", "name": "Added after", "email": "after@example.com"}])
         history = app_imports._load_json_file(app_imports.IMPORT_HISTORY_FILE, {})
