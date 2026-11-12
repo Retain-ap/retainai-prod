@@ -486,7 +486,7 @@ REASON_TEXT = {
     "missing_email_or_phone": "No valid email or phone",
     "invalid_email": "Email is not valid",
     "invalid_phone": "Phone number is not valid",
-    "invalid_birthday": "Birthday not recognised (use YYYY-MM-DD); imported without it",
+    "invalid_birthday": "Birthday not recognised (use YYYY-MM-DD); this birthday was skipped",
     "duplicate_in_file": "Repeated earlier in this file",
     "already_in_crm": "Already in RetainAI",
     "identity_conflict": "Email and phone belong to different contacts",

@@ -303,20 +303,31 @@ def clean_phone(value, country_code="+1"):
     return f"+{digits}"
 
 
+# The whole trimmed value must be one of these; nothing is accepted by prefix.
+BIRTHDAY_FORMATS = (
+    re.compile(r"(\d{4})-(\d{2})-(\d{2})"),  # YYYY-MM-DD
+    re.compile(r"(\d{4})(\d{2})(\d{2})"),    # YYYYMMDD
+    re.compile(r"(--)(\d{2})-?(\d{2})"),      # vCard/Google no-year: --MM-DD or --MMDD
+)
+
+
 def normalize_birthday(value):
-    """ISO dates (YYYY-MM-DD, YYYYMMDD or vCard --MM-DD) only.
+    """ISO dates only: YYYY-MM-DD, YYYYMMDD, or --MM-DD / --MMDD without a year.
 
     Slash dates such as 02/03/1990 are not guessed: they could be day-first or
-    month-first. Impossible dates (February 31) are rejected.
+    month-first. Impossible dates (February 31) and values with anything else
+    around the date are rejected.
     """
     text = str(value or "").strip()
-    match = re.match(r"^(\d{4}|--)-?(\d{2})-?(\d{2})", text)
-    if match:
-        year = match.group(1) if match.group(1) != "--" else "0000"
+    for pattern in BIRTHDAY_FORMATS:
+        match = pattern.fullmatch(text)
+        if not match:
+            continue
+        year = "0000" if match.group(1) == "--" else match.group(1)
         month, day = int(match.group(2)), int(match.group(3))
         try:
             # A missing year is checked against a leap year so 29 February stays valid.
-            datetime.date(int(year) if year != "0000" else 2000, month, day)
+            datetime.date(2000 if year == "0000" else int(year), month, day)
         except ValueError:
             return ""
         return f"{year}-{month:02d}-{day:02d}"
@@ -351,7 +362,9 @@ def build_contact(raw, mapping, country_code="+1"):
         problem, phone = problem or "invalid_phone", ""
     if not (email or phone):
         return None, problem or "missing_email_or_phone"
-    birthday_raw = take("birthday")
+    # Validate the whole source value: truncating first could leave a valid prefix.
+    birthday_column = mapping.get("birthday") or ""
+    birthday_raw = str((raw or {}).get(birthday_column, "") if birthday_column else "").strip()
     birthday = normalize_birthday(birthday_raw)
     if birthday_raw and not birthday:
         # The contact is still imported; the unreadable birthday is reported.
