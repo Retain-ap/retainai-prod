@@ -22,7 +22,7 @@ export default function MarketingPage({ path }) {
       {path === "/customers" && <><CustomerProof /><SourcedProof /></>}
       {(path === "/pricing" || category) && <section className="lp-section lp-pricing-section"><h2 className="lp-route-price-title">One plan. The full workspace.</h2><PricingCard /></section>}
       {path === "/pricing" && <FAQSection />}
-      <nav className="lp-section lp-related-pages" aria-label="Explore RetainAI"><a href="/features">Explore the features <FaArrowRight /></a><a href="/pricing">See pricing and trial terms <FaArrowRight /></a><a href="/about">Meet the owner <FaArrowRight /></a><a href="/retention-crm-for-service-businesses">Retention CRM for service businesses <FaArrowRight /></a></nav>
+      <nav className="lp-section lp-related-pages" aria-label="Explore RetainAI"><a href="/features">Explore the features <FaArrowRight /></a><a href="/pricing">See pricing and trial terms <FaArrowRight /></a><a href="/about">Meet the owner <FaArrowRight /></a><a href="/retention-crm-for-service-businesses">Retention CRM for service businesses <FaArrowRight /></a><a href="/find-customers-who-stopped-rebooking">Guide: find customers who stopped rebooking <FaArrowRight /></a></nav>
     </main>
     <MarketingFooter />
   </div>;

@@ -96,3 +96,17 @@ test("category content and internal links are present before JavaScript", () => 
   expect(doc.querySelector('a[href="/pricing"]')).not.toBeNull();
   expect(doc.querySelector("#retainai-faq-schema")).toBeNull();
 });
+
+test("the sitemap lists exactly the indexable routes, and the rebooking guide is linked before JavaScript", () => {
+  const sitemap = fs.readFileSync(path.resolve(__dirname, "../../public/sitemap.xml"), "utf8");
+  const listed = [...sitemap.matchAll(/<loc>https:\/\/www\.retainai\.ca([^<]*)<\/loc>/g)].map((match) => match[1] || "/");
+  expect([...listed].sort()).toEqual(["/", ...PUBLIC_ROUTES].sort());
+  for (const route of PRIVATE_ROUTES) expect(listed).not.toContain(route);
+
+  const route = "/find-customers-who-stopped-rebooking";
+  const doc = new DOMParser().parseFromString(buildRouteHtml(homepage, route, routeMeta[route], { indexable: true }), "text/html");
+  expect(doc.querySelector("h1").textContent).toBe("How to find customers who stopped rebooking");
+  expect(doc.body.textContent).toContain("usual time between them");
+  const fromCategory = new DOMParser().parseFromString(buildRouteHtml(homepage, "/retention-crm-for-service-businesses", routeMeta["/retention-crm-for-service-businesses"], { indexable: true }), "text/html");
+  expect(fromCategory.querySelector(`a[href="${route}"]`)).not.toBeNull();
+});

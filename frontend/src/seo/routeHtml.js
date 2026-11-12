@@ -52,7 +52,7 @@ function fallbackContent(meta, path) {
     (page ? page.sections.map((section) => `<section><h2>${escapeHtml(section.heading)}</h2><p>${escapeHtml(section.copy)}</p></section>`).join("") : "") +
     (path === "/about" ? '<p>Mateo Zufic — Owner, RetainAI. <a href="mailto:owner@retainai.ca">Contact Mateo</a>.</p>' : "") +
     (path === "/pricing" ? faqFallback() : "") +
-    (page ? `<p><a href="/signup">Start your 14-day trial</a> · <a href="${escapeHtml(publicContent.bookingUrl)}">Book a 10-minute walkthrough</a></p><nav aria-label="Explore RetainAI"><a href="/features">Features</a> · <a href="/pricing">Pricing</a> · <a href="/about">About</a> · <a href="/retention-crm-for-service-businesses">Retention CRM for service businesses</a></nav>` : "") +
+    (page ? `<p><a href="/signup">Start your 14-day trial</a> · <a href="${escapeHtml(publicContent.bookingUrl)}">Book a 10-minute walkthrough</a></p><nav aria-label="Explore RetainAI"><a href="/features">Features</a> · <a href="/pricing">Pricing</a> · <a href="/about">About</a> · <a href="/retention-crm-for-service-businesses">Retention CRM for service businesses</a> · <a href="/find-customers-who-stopped-rebooking">Find customers who stopped rebooking</a></nav>` : "") +
     `<p>${action}</p></main>`
   );
 }

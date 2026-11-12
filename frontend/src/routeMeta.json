@@ -50,5 +50,9 @@
   "/retention-crm-for-service-businesses": {
     "title": "Customer retention CRM for Canadian service businesses — RetainAI",
     "description": "Turn scattered customer notes into a clear next step. RetainAI helps salons, home services and coaches follow up and rebook, from C$20 CAD a month."
+  },
+  "/find-customers-who-stopped-rebooking": {
+    "title": "How to find customers who stopped rebooking — RetainAI guide",
+    "description": "A step-by-step way for service businesses to spot regulars who haven’t rebooked, using completed visits and each customer’s usual rhythm, then follow up personally."
   }
 }
