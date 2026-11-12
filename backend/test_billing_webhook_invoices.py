@@ -199,6 +199,46 @@ class InvoiceWebhookTests(unittest.TestCase):
                 self._send("customer.subscription.deleted", {"object": "subscription", "id": "sub_replaced", "customer": "cus_owner", "status": "canceled"}, "evt_replaced_deleted")
                 self.assertEqual((self.users[OWNER]["status"], self.users[OWNER]["billing_status"]), ("active", "active"))
 
+    def _delete(self, sub_id, event_id, created=1_800_000_000):
+        return self._send("customer.subscription.deleted", {"object": "subscription", "id": sub_id, "customer": "cus_owner", "status": "canceled"}, event_id, created)
+
+    def test_a_same_second_active_update_cannot_reopen_a_deleted_subscription_in_either_order(self):
+        for order in ("deleted_first", "updated_first"):
+            with self.subTest(order=order):
+                self.setUp()
+                steps = [lambda: self._delete("sub_current", "evt_deleted"), lambda: self._subscription("sub_current", "active", "evt_updated")]
+                for step in (steps if order == "deleted_first" else reversed(steps)):
+                    step()
+                self.assertEqual((self.users[OWNER]["status"], self.users[OWNER]["billing_status"], self.users[OWNER]["stripe_subscription_id"]),
+                                 ("inactive", "canceled", ""))
+                # A delayed checkout completion naming the deleted subscription is ignored too.
+                self._send("checkout.session.completed", {"object": "checkout.session", "id": "cs_old", "customer": "cus_owner",
+                                                          "subscription": "sub_current", "metadata": {"user_email": OWNER}}, "evt_old_checkout")
+                self.assertEqual((self.users[OWNER]["status"], self.users[OWNER]["billing_status"]), ("inactive", "canceled"))
+
+    def test_a_deleted_replaced_subscription_stays_closed_after_the_current_one_ends(self):
+        self._delete("sub_replaced", "evt_replaced_deleted")
+        self.assertEqual(self.users[OWNER]["stripe_subscription_id"], "sub_current")
+        self._delete("sub_current", "evt_current_deleted")
+        self._subscription("sub_replaced", "active", "evt_replaced_late")
+        self.assertEqual((self.users[OWNER]["status"], self.users[OWNER]["billing_status"]), ("inactive", "canceled"))
+
+    def test_a_new_subscription_after_deletion_still_reactivates_in_the_same_second(self):
+        self._delete("sub_current", "evt_deleted")
+        self.users[OWNER]["trial_eligible"] = False
+        self._send("checkout.session.completed", {"object": "checkout.session", "id": "cs_new", "customer": "cus_owner",
+                                                  "subscription": "sub_new", "metadata": {"user_email": OWNER}}, "evt_checkout")
+        self._subscription("sub_new", "active", "evt_new_active")
+        self.assertEqual((self.users[OWNER]["status"], self.users[OWNER]["billing_status"], self.users[OWNER]["stripe_subscription_id"]),
+                         ("active", "active", "sub_new"))
+        self.assertEqual(self.users[OWNER]["stripe_closed_subscription_ids"], ["sub_current"])
+
+    def test_the_closed_subscription_record_is_bounded(self):
+        for index in range(25):
+            self._delete(f"sub_old_{index}", f"evt_old_{index}")
+        self.assertEqual(len(self.users[OWNER]["stripe_closed_subscription_ids"]), 20)
+        self.assertEqual(self.users[OWNER]["stripe_closed_subscription_ids"][-1], "sub_old_24")
+
 
 if __name__ == "__main__":
     unittest.main()

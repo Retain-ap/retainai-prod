@@ -4228,6 +4228,22 @@ def stripe_webhook():
             if str(user.get("billing_status") or "") in {"unpaid", "canceled", "incomplete_expired"}:
                 return "", 200
 
+        # A deleted Stripe subscription can never become active again, and events
+        # sharing a created second may arrive in any order. Once a deletion has
+        # been recorded, later updates or checkout completions that name that
+        # subscription must not reopen billing. A real resubscription has a new id.
+        closed_subscriptions = [str(value) for value in (user.get("stripe_closed_subscription_ids") or []) if str(value)]
+        if event_type in {"customer.subscription.updated", "checkout.session.completed"}:
+            named = event_object.get("id") if event_type == "customer.subscription.updated" else event_object.get("subscription")
+            named = str((named.get("id") if isinstance(named, dict) else named) or "")
+            if named and named in closed_subscriptions:
+                if event_id:
+                    user["stripe_processed_event_ids"] = (processed_ids + [event_id])[-50:]
+                user["stripe_event_type"] = "closed_subscription_event_ignored"
+                users[email] = user
+                save_users(users)
+                return "", 200
+
         now_iso = datetime.datetime.utcnow().isoformat() + "Z"
         customer_id = event_object.get("customer")
         if customer_id:
@@ -4330,6 +4346,10 @@ def stripe_webhook():
                 if event_id:
                     user["stripe_processed_event_ids"] = (processed_ids + [event_id])[-50:]
                 user["stripe_event_type"] = "stale_subscription_deletion_ignored"
+                if deleted_subscription:
+                    user["stripe_closed_subscription_ids"] = (
+                        [value for value in closed_subscriptions if value != deleted_subscription] + [deleted_subscription]
+                    )[-20:]
                 user["stripe_event_at"] = now_iso
                 users[email] = user
                 save_users(users)
@@ -4338,6 +4358,10 @@ def stripe_webhook():
             if can_activate:
                 user["status"] = "inactive"
             user["stripe_subscription_id"] = ""
+            if deleted_subscription:
+                user["stripe_closed_subscription_ids"] = (
+                    [value for value in closed_subscriptions if value != deleted_subscription] + [deleted_subscription]
+                )[-20:]
 
         user["stripe_event_type"] = event_type
         user["stripe_event_at"] = now_iso
