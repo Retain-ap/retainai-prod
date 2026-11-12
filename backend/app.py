@@ -4093,6 +4093,20 @@ def resend_invoice_email():
         app.logger.exception("[INVOICE EMAIL] Could not send invoice %s", invoice_id)
         return jsonify({"error": "invoice_email_delivery_failed"}), 502
 
+def _invoice_subscription_id(invoice: Any) -> str:
+    """The subscription an invoice bills, from either Stripe invoice shape."""
+    if not isinstance(invoice, dict):
+        return ""
+    subscription = invoice.get("subscription")
+    if not subscription:
+        parent = invoice.get("parent") if isinstance(invoice.get("parent"), dict) else {}
+        details = parent.get("subscription_details") if isinstance(parent.get("subscription_details"), dict) else {}
+        subscription = details.get("subscription")
+    if isinstance(subscription, dict):
+        subscription = subscription.get("id")
+    return str(subscription or "").strip()
+
+
 @app.route("/api/stripe/webhook", methods=["POST"])
 def stripe_webhook():
     payload = request.data
@@ -4175,6 +4189,18 @@ def stripe_webhook():
                 users[email] = user
                 save_users(users)
             return "", 200
+
+        # Invoice events are not ordered and Stripe retries them for days. Only an
+        # invoice for the workspace's current subscription may change its billing:
+        # a late or retried invoice for a cancelled or earlier subscription (or one
+        # matched only by an editable customer email) must never reactivate it.
+        # A first invoice that arrives before checkout.session.completed is safe to
+        # skip; that event sets the subscription and its status itself.
+        if event_type.startswith("invoice."):
+            invoice_subscription = _invoice_subscription_id(event_object)
+            current_subscription = str(user.get("stripe_subscription_id") or "").strip()
+            if not invoice_subscription or invoice_subscription != current_subscription:
+                return "", 200
 
         now_iso = datetime.datetime.utcnow().isoformat() + "Z"
         customer_id = event_object.get("customer")
