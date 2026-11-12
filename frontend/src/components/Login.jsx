@@ -26,6 +26,7 @@ function Input({
   onKeyDown,
   rightEl,
   autoComplete,
+  label,
 }) {
   return (
     <div style={{ position: "relative" }}>
@@ -35,6 +36,9 @@ function Input({
         onChange={onChange}
         onKeyDown={onKeyDown}
         placeholder={placeholder}
+        // Placeholder text disappears while typing and is not a reliable
+        // accessible name, so every field carries its own label.
+        aria-label={label || placeholder}
         autoComplete={autoComplete}
         style={{
           width: "100%",
@@ -748,6 +752,9 @@ export default function Login() {
                       background: "transparent",
                       border: 0,
                       cursor: "pointer",
+                      minWidth: 44,
+                      minHeight: 32,
+                      padding: "6px 8px",
                     }}
                     aria-label={showPw ? "Hide password" : "Show password"}
                   >
