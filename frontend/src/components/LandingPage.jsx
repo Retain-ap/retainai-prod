@@ -246,7 +246,7 @@ export function MarketingNav({ home = false }) {
 export function MarketingFooter() {
   return (<footer className="lp-footer">
         <div className="lp-footer-brand"><img src={brandLogo} alt="RetainAI logo" /><span><b>RetainAI</b><small>Mateo Zufic · Owner, RetainAI</small></span></div>
-        <div><a href="/#product">Product</a><a href="/#pricing">Pricing</a><a href="/about">About Mateo &amp; RetainAI</a><a href="/customers">Who it’s for</a><a href="/retention-crm-for-service-businesses">Service business CRM</a><a href="/partners">Partner with RetainAI</a><a href="/login">Log in</a></div>
+        <div><a href="/#product">Product</a><a href="/#pricing">Pricing</a><a href="/about">About Mateo &amp; RetainAI</a><a href="/customers">Who it’s for</a><a href="/retention-crm-for-service-businesses">Service business CRM</a><a href="/find-customers-who-stopped-rebooking">Rebooking guide</a><a href="/partners">Partner with RetainAI</a><a href="/login">Log in</a></div>
         <div><a href="/privacy-policy">Privacy</a><a href="/terms-of-service">Terms</a><a href="/refund-policy">Refunds &amp; cancellations</a><a href={`mailto:owner@retainai.ca`}>Support</a></div>
         <small>© {new Date().getFullYear()} RetainAI. All rights reserved.</small>
       </footer>);
