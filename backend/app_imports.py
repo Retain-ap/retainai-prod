@@ -486,6 +486,7 @@ REASON_TEXT = {
     "missing_email_or_phone": "No valid email or phone",
     "invalid_email": "Email is not valid",
     "invalid_phone": "Phone number is not valid",
+    "invalid_birthday": "Birthday not recognised (use YYYY-MM-DD); this birthday was skipped",
     "duplicate_in_file": "Repeated earlier in this file",
     "already_in_crm": "Already in RetainAI",
     "identity_conflict": "Email and phone belong to different contacts",
@@ -526,8 +527,19 @@ def _snapshot(lead):
     return json.loads(json.dumps(lead, default=str))
 
 
+# Fields the server rewrites by itself: GET /api/leads recomputes "status" from
+# activity dates and saves it whenever the contact list is opened, which happens
+# right after every import. That is not an edit, so undo ignores it; a real edit
+# (for example marking a contact contacted) also changes other fields.
+_DERIVED_LEAD_FIELDS = frozenset({"status"})
+
+
 def _same_record(a, b):
-    return json.dumps(a, sort_keys=True, default=str) == json.dumps(b, sort_keys=True, default=str)
+    def comparable(lead):
+        if not isinstance(lead, dict):
+            return lead
+        return {key: value for key, value in lead.items() if key not in _DERIVED_LEAD_FIELDS}
+    return json.dumps(comparable(a), sort_keys=True, default=str) == json.dumps(comparable(b), sort_keys=True, default=str)
 
 
 def _outcome_contact(contact):
