@@ -49,8 +49,10 @@ class InvoiceWebhookTests(unittest.TestCase):
         self.saved.append(copy.deepcopy(users))
         self.users = copy.deepcopy(users)
 
-    def _send(self, event_type, invoice, event_id="evt_1"):
-        event = {"id": event_id, "type": event_type, "created": 1_800_000_000, "data": {"object": invoice}}
+    def _send(self, event_type, invoice, event_id="evt_1", created=1_800_000_000):
+        # Stripe does not guarantee delivery order, and distinct events can share
+        # a created timestamp, so most fixtures here deliberately use the same one.
+        event = {"id": event_id, "type": event_type, "created": created, "data": {"object": invoice}}
         with patch.object(retainai.stripe.Webhook, "construct_event", return_value=event):
             return retainai.app.test_client().post("/api/stripe/webhook", data=json.dumps(event),
                                                    headers={"stripe-signature": "t=1,v1=x"})
@@ -82,11 +84,59 @@ class InvoiceWebhookTests(unittest.TestCase):
             self.assertEqual(self.users[OWNER]["billing_status"], "past_due")
         self.assertEqual(self.saved, [])
 
-    def test_an_email_match_cannot_move_another_customers_invoice_onto_this_workspace(self):
+    def test_stripe_ids_beat_an_edited_billing_email(self):
+        # The other customer's billing email was changed to this account's email.
         self.users[OWNER].update(status="inactive", billing_status="canceled", stripe_subscription_id="")
-        self._send("invoice.paid", {"object": "invoice", "customer": "cus_other", "customer_email": OWNER, "subscription": "sub_other"})
+        for shape in ({"subscription": "sub_other"},
+                      {"parent": {"subscription_details": {"subscription": "sub_other"}}}):
+            with self.subTest(shape=shape):
+                self.users[OTHER]["billing_status"] = "active"
+                self._send("invoice.payment_failed", {"object": "invoice", "customer": "cus_other", "customer_email": OWNER, **shape},
+                           event_id=f"evt_failed_{len(shape)}_{list(shape)[0]}")
+                self.assertEqual(self.users[OTHER]["billing_status"], "past_due", "the real customer must be updated")
+                self.assertEqual((self.users[OWNER]["status"], self.users[OWNER]["billing_status"]), ("inactive", "canceled"))
+        self._send("invoice.paid", {"object": "invoice", "customer": "cus_other", "customer_email": OWNER, "subscription": "sub_other"}, "evt_paid")
+        self.assertEqual(self.users[OTHER]["billing_status"], "active")
         self.assertEqual((self.users[OWNER]["status"], self.users[OWNER]["billing_status"]), ("inactive", "canceled"))
-        self.assertEqual(self.saved, [])
+
+    def test_subscription_events_also_match_by_id_before_email(self):
+        self._send("customer.subscription.updated", {"object": "subscription", "id": "sub_other", "customer": "cus_other",
+                                                     "status": "past_due", "customer_email": OWNER, "items": {"data": []}}, "evt_sub")
+        self.assertEqual(self.users[OTHER]["billing_status"], "past_due")
+        self.assertEqual(self.users[OWNER]["billing_status"], "active")
+
+    def test_checkout_trusts_the_metadata_retainai_set_over_the_entered_email(self):
+        self.users[OWNER].update(status="inactive", billing_status="canceled", stripe_subscription_id="", trial_eligible=False)
+        self._send("checkout.session.completed", {"object": "checkout.session", "id": "cs_1", "customer": "cus_owner", "subscription": "sub_new",
+                                                  "customer_details": {"email": OTHER}, "metadata": {"user_email": OWNER}}, "evt_checkout")
+        self.assertEqual((self.users[OWNER]["status"], self.users[OWNER]["billing_status"], self.users[OWNER]["stripe_subscription_id"]),
+                         ("active", "active", "sub_new"))
+        self.assertEqual(self.users[OTHER]["stripe_subscription_id"], "sub_other")
+
+    def test_an_email_is_still_the_fallback_when_no_stored_id_matches(self):
+        self.users[OWNER].update(stripe_customer_id="", stripe_subscription_id="")
+        self._send("customer.subscription.updated", {"object": "subscription", "id": "sub_first", "customer": "cus_first",
+                                                     "status": "active", "metadata": {"user_email": OWNER}, "items": {"data": []}}, "evt_first")
+        self.assertEqual((self.users[OWNER]["stripe_subscription_id"], self.users[OWNER]["stripe_customer_id"]), ("sub_first", "cus_first"))
+
+    def test_a_delayed_update_for_a_replaced_subscription_cannot_take_over(self):
+        # sub_current replaced an earlier subscription; its late updates are ignored.
+        for status in ("canceled", "past_due", "active"):
+            with self.subTest(status=status):
+                self._send("customer.subscription.updated", {"object": "subscription", "id": "sub_replaced", "customer": "cus_owner",
+                                                             "status": status, "items": {"data": []}}, f"evt_old_{status}")
+                self.assertEqual((self.users[OWNER]["stripe_subscription_id"], self.users[OWNER]["status"], self.users[OWNER]["billing_status"]),
+                                 ("sub_current", "active", "active"))
+        # Its later deletion stays ignored because it is not the current subscription.
+        self._send("customer.subscription.deleted", {"object": "subscription", "id": "sub_replaced", "customer": "cus_owner", "status": "canceled"}, "evt_old_deleted")
+        self.assertEqual((self.users[OWNER]["status"], self.users[OWNER]["billing_status"]), ("active", "active"))
+
+    def test_a_live_subscription_is_adopted_when_the_workspace_has_no_live_billing(self):
+        self.users[OWNER].update(status="inactive", billing_status="canceled")
+        self._send("customer.subscription.updated", {"object": "subscription", "id": "sub_live", "customer": "cus_owner",
+                                                     "status": "active", "items": {"data": []}}, "evt_live")
+        self.assertEqual((self.users[OWNER]["stripe_subscription_id"], self.users[OWNER]["status"], self.users[OWNER]["billing_status"]),
+                         ("sub_live", "active", "active"))
 
     def test_the_current_subscriptions_invoices_still_update_billing(self):
         self._send("invoice.payment_failed", {"object": "invoice", "customer": "cus_owner", "subscription": "sub_current"}, "evt_failed")
@@ -106,6 +156,88 @@ class InvoiceWebhookTests(unittest.TestCase):
         self.assertEqual((self.users[OWNER]["status"], self.users[OWNER]["billing_status"]), ("active", "active"))
         self._send("invoice.paid", {"object": "invoice", "customer": "cus_owner", "subscription": "sub_new"}, "evt_renewal")
         self.assertEqual(self.users[OWNER]["stripe_subscription_id"], "sub_new")
+
+    def _subscription(self, sub_id, status, event_id, created=1_800_000_000):
+        return self._send("customer.subscription.updated", {"object": "subscription", "id": sub_id, "customer": "cus_owner",
+                                                            "status": status, "items": {"data": []}}, event_id, created)
+
+    def test_a_late_invoice_cannot_reopen_an_unpaid_subscription_until_stripe_reports_it_active(self):
+        self._subscription("sub_current", "unpaid", "evt_unpaid", created=1_800_000_100)
+        self.assertEqual((self.users[OWNER]["status"], self.users[OWNER]["billing_status"]), ("inactive", "unpaid"))
+        # Older invoices for the same, current subscription arrive afterwards.
+        for event_type in ("invoice.paid", "invoice.payment_succeeded", "invoice.payment_failed"):
+            self._send(event_type, {"object": "invoice", "customer": "cus_owner", "subscription": "sub_current"}, f"evt_late_{event_type}")
+            self.assertEqual((self.users[OWNER]["status"], self.users[OWNER]["billing_status"]), ("inactive", "unpaid"))
+        # Recovery comes from the subscription itself becoming active again.
+        self._subscription("sub_current", "active", "evt_recovered", created=1_800_000_200)
+        self.assertEqual((self.users[OWNER]["status"], self.users[OWNER]["billing_status"]), ("active", "active"))
+        self._send("invoice.paid", {"object": "invoice", "customer": "cus_owner", "subscription": "sub_current"}, "evt_renewal", created=1_800_000_300)
+        self.assertEqual((self.users[OWNER]["status"], self.users[OWNER]["billing_status"]), ("active", "active"))
+
+    def test_same_timestamp_unpaid_and_invoice_end_unpaid_in_either_order(self):
+        invoice = {"object": "invoice", "customer": "cus_owner", "subscription": "sub_current"}
+        for order in ("invoice_first", "subscription_first"):
+            with self.subTest(order=order):
+                self.setUp()
+                if order == "invoice_first":
+                    self._send("invoice.paid", invoice, "evt_paid")
+                    self._subscription("sub_current", "unpaid", "evt_unpaid")
+                else:
+                    self._subscription("sub_current", "unpaid", "evt_unpaid")
+                    self._send("invoice.paid", invoice, "evt_paid")
+                self.assertEqual((self.users[OWNER]["status"], self.users[OWNER]["billing_status"]), ("inactive", "unpaid"))
+
+    def test_same_timestamp_updates_for_current_and_replaced_subscriptions_in_either_order(self):
+        for order in ("replaced_first", "current_first"):
+            with self.subTest(order=order):
+                self.setUp()
+                updates = [("sub_replaced", "canceled", "evt_replaced"), ("sub_current", "active", "evt_current")]
+                for sub_id, status, event_id in (updates if order == "replaced_first" else reversed(updates)):
+                    self._subscription(sub_id, status, event_id)
+                self.assertEqual((self.users[OWNER]["stripe_subscription_id"], self.users[OWNER]["status"], self.users[OWNER]["billing_status"]),
+                                 ("sub_current", "active", "active"))
+                self._send("customer.subscription.deleted", {"object": "subscription", "id": "sub_replaced", "customer": "cus_owner", "status": "canceled"}, "evt_replaced_deleted")
+                self.assertEqual((self.users[OWNER]["status"], self.users[OWNER]["billing_status"]), ("active", "active"))
+
+    def _delete(self, sub_id, event_id, created=1_800_000_000):
+        return self._send("customer.subscription.deleted", {"object": "subscription", "id": sub_id, "customer": "cus_owner", "status": "canceled"}, event_id, created)
+
+    def test_a_same_second_active_update_cannot_reopen_a_deleted_subscription_in_either_order(self):
+        for order in ("deleted_first", "updated_first"):
+            with self.subTest(order=order):
+                self.setUp()
+                steps = [lambda: self._delete("sub_current", "evt_deleted"), lambda: self._subscription("sub_current", "active", "evt_updated")]
+                for step in (steps if order == "deleted_first" else reversed(steps)):
+                    step()
+                self.assertEqual((self.users[OWNER]["status"], self.users[OWNER]["billing_status"], self.users[OWNER]["stripe_subscription_id"]),
+                                 ("inactive", "canceled", ""))
+                # A delayed checkout completion naming the deleted subscription is ignored too.
+                self._send("checkout.session.completed", {"object": "checkout.session", "id": "cs_old", "customer": "cus_owner",
+                                                          "subscription": "sub_current", "metadata": {"user_email": OWNER}}, "evt_old_checkout")
+                self.assertEqual((self.users[OWNER]["status"], self.users[OWNER]["billing_status"]), ("inactive", "canceled"))
+
+    def test_a_deleted_replaced_subscription_stays_closed_after_the_current_one_ends(self):
+        self._delete("sub_replaced", "evt_replaced_deleted")
+        self.assertEqual(self.users[OWNER]["stripe_subscription_id"], "sub_current")
+        self._delete("sub_current", "evt_current_deleted")
+        self._subscription("sub_replaced", "active", "evt_replaced_late")
+        self.assertEqual((self.users[OWNER]["status"], self.users[OWNER]["billing_status"]), ("inactive", "canceled"))
+
+    def test_a_new_subscription_after_deletion_still_reactivates_in_the_same_second(self):
+        self._delete("sub_current", "evt_deleted")
+        self.users[OWNER]["trial_eligible"] = False
+        self._send("checkout.session.completed", {"object": "checkout.session", "id": "cs_new", "customer": "cus_owner",
+                                                  "subscription": "sub_new", "metadata": {"user_email": OWNER}}, "evt_checkout")
+        self._subscription("sub_new", "active", "evt_new_active")
+        self.assertEqual((self.users[OWNER]["status"], self.users[OWNER]["billing_status"], self.users[OWNER]["stripe_subscription_id"]),
+                         ("active", "active", "sub_new"))
+        self.assertEqual(self.users[OWNER]["stripe_closed_subscription_ids"], ["sub_current"])
+
+    def test_the_closed_subscription_record_is_bounded(self):
+        for index in range(25):
+            self._delete(f"sub_old_{index}", f"evt_old_{index}")
+        self.assertEqual(len(self.users[OWNER]["stripe_closed_subscription_ids"]), 20)
+        self.assertEqual(self.users[OWNER]["stripe_closed_subscription_ids"][-1], "sub_old_24")
 
 
 if __name__ == "__main__":

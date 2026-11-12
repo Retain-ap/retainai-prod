@@ -4135,26 +4135,46 @@ def stripe_webhook():
 
     def find_billing_user() -> Tuple[str, Optional[dict]]:
         metadata = event_object.get("metadata") or {}
-        candidate_email = _norm_email(
-            event_object.get("customer_email")
+        if not isinstance(metadata, dict):
+            metadata = {}
+
+        def known(value: Any) -> str:
+            candidate = _norm_email(value)
+            return candidate if candidate and isinstance(users.get(candidate), dict) else ""
+
+        # A Checkout Session carries the signed-in workspace in metadata that
+        # RetainAI set when it created the session; trust that first.
+        if event_type.startswith("checkout.session."):
+            owner = known(metadata.get("user_email"))
+            if owner:
+                return owner, users[owner]
+
+        # Stripe ids never change, while a customer's billing email can be edited
+        # in Stripe. Match the stored subscription, then the stored customer,
+        # before falling back to any email.
+        customer = event_object.get("customer")
+        customer_id = str((customer.get("id") if isinstance(customer, dict) else customer) or "")
+        if event_type.startswith("customer.subscription."):
+            subscription_id = str(event_object.get("id") or "")
+        elif event_type.startswith("invoice."):
+            subscription_id = _invoice_subscription_id(event_object)
+        else:
+            subscription = event_object.get("subscription")
+            subscription_id = str((subscription.get("id") if isinstance(subscription, dict) else subscription) or "")
+        rows = [(stored_email, stored_user) for stored_email, stored_user in users.items() if isinstance(stored_user, dict)]
+        for field, wanted in (("stripe_subscription_id", subscription_id), ("stripe_customer_id", customer_id)):
+            if wanted:
+                for stored_email, stored_user in rows:
+                    if str(stored_user.get(field) or "") == wanted:
+                        return stored_email, stored_user
+
+        owner = known(
+            metadata.get("user_email")
+            or event_object.get("customer_email")
             or (event_object.get("customer_details") or {}).get("email")
-            or metadata.get("user_email")
         )
-        if candidate_email and isinstance(users.get(candidate_email), dict):
-            return candidate_email, users[candidate_email]
-        customer_id = str(event_object.get("customer") or "")
-        subscription_id = str(
-            event_object.get("subscription")
-            or (event_object.get("id") if event_type.startswith("customer.subscription.") else "")
-            or ""
-        )
-        for stored_email, stored_user in users.items():
-            if not isinstance(stored_user, dict):
-                continue
-            if customer_id and str(stored_user.get("stripe_customer_id") or "") == customer_id:
-                return stored_email, stored_user
-            if subscription_id and str(stored_user.get("stripe_subscription_id") or "") == subscription_id:
-                return stored_email, stored_user
+        if owner:
+            return owner, users[owner]
         return "", None
 
     email, user = find_billing_user()
@@ -4201,6 +4221,28 @@ def stripe_webhook():
             current_subscription = str(user.get("stripe_subscription_id") or "").strip()
             if not invoice_subscription or invoice_subscription != current_subscription:
                 return "", 200
+            # Invoices carry no subscription status. Once a subscription event has
+            # reported the current subscription unpaid, canceled or expired, a late
+            # or retried invoice must not reopen it; Stripe sends
+            # customer.subscription.updated when the subscription becomes active again.
+            if str(user.get("billing_status") or "") in {"unpaid", "canceled", "incomplete_expired"}:
+                return "", 200
+
+        # A deleted Stripe subscription can never become active again, and events
+        # sharing a created second may arrive in any order. Once a deletion has
+        # been recorded, later updates or checkout completions that name that
+        # subscription must not reopen billing. A real resubscription has a new id.
+        closed_subscriptions = [str(value) for value in (user.get("stripe_closed_subscription_ids") or []) if str(value)]
+        if event_type in {"customer.subscription.updated", "checkout.session.completed"}:
+            named = event_object.get("id") if event_type == "customer.subscription.updated" else event_object.get("subscription")
+            named = str((named.get("id") if isinstance(named, dict) else named) or "")
+            if named and named in closed_subscriptions:
+                if event_id:
+                    user["stripe_processed_event_ids"] = (processed_ids + [event_id])[-50:]
+                user["stripe_event_type"] = "closed_subscription_event_ignored"
+                users[email] = user
+                save_users(users)
+                return "", 200
 
         now_iso = datetime.datetime.utcnow().isoformat() + "Z"
         customer_id = event_object.get("customer")
@@ -4240,6 +4282,28 @@ def stripe_webhook():
             user["billing_issue_at"] = now_iso
         elif event_type == "customer.subscription.updated":
             subscription_status = str(event_object.get("status") or "")
+            updated_subscription = str(event_object.get("id") or "")
+            current_subscription = str(user.get("stripe_subscription_id") or "")
+            # A delayed update for a replaced subscription must not take over a
+            # workspace whose current subscription is a different one. A live
+            # subscription is adopted only when the workspace has no live billing
+            # (for example if its checkout event was missed).
+            if (
+                current_subscription
+                and updated_subscription
+                and updated_subscription != current_subscription
+                and not (
+                    subscription_status in {"active", "trialing"}
+                    and str(user.get("billing_status") or "") not in {"active", "trialing", "past_due"}
+                )
+            ):
+                if event_id:
+                    user["stripe_processed_event_ids"] = (processed_ids + [event_id])[-50:]
+                user["stripe_event_type"] = "stale_subscription_update_ignored"
+                user["stripe_event_at"] = now_iso
+                users[email] = user
+                save_users(users)
+                return "", 200
             user["stripe_subscription_id"] = event_object.get("id")
             user["billing_status"] = subscription_status
             items = ((event_object.get("items") or {}).get("data") or [])
@@ -4282,6 +4346,10 @@ def stripe_webhook():
                 if event_id:
                     user["stripe_processed_event_ids"] = (processed_ids + [event_id])[-50:]
                 user["stripe_event_type"] = "stale_subscription_deletion_ignored"
+                if deleted_subscription:
+                    user["stripe_closed_subscription_ids"] = (
+                        [value for value in closed_subscriptions if value != deleted_subscription] + [deleted_subscription]
+                    )[-20:]
                 user["stripe_event_at"] = now_iso
                 users[email] = user
                 save_users(users)
@@ -4290,6 +4358,10 @@ def stripe_webhook():
             if can_activate:
                 user["status"] = "inactive"
             user["stripe_subscription_id"] = ""
+            if deleted_subscription:
+                user["stripe_closed_subscription_ids"] = (
+                    [value for value in closed_subscriptions if value != deleted_subscription] + [deleted_subscription]
+                )[-20:]
 
         user["stripe_event_type"] = event_type
         user["stripe_event_at"] = now_iso
