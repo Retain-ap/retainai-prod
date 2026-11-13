@@ -1,5 +1,8 @@
 {
-  "baselineCommit": "e9efa777bd6b600f76ff1a39ac40bb40df8d3e1b",
+  "originalBaselineCommit": "e9efa777bd6b600f76ff1a39ac40bb40df8d3e1b",
+  "baselineCommit": "1c1210a42988b69c7939097d1042154e3efa9833",
+  "mergedBaselineCommit": "21a54df490ab0467fd87c47a1dfb18ef77a7606b",
+  "baselineFrontendTree": "ad162520ff2bd6c271a8aa9a86a29cc4198a51af",
   "tests": [
     {
       "file": "src/components/RetentionCommandCenter.test.jsx",
@@ -218,6 +221,102 @@
       "name": "a refused mark-contacted reports a clear error"
     },
     {
+      "file": "src/components/Appointments.test.jsx",
+      "name": "standalone: completing an appointment saves only that change onto the latest list"
+    },
+    {
+      "file": "src/components/Appointments.test.jsx",
+      "name": "inside the dashboard: hands the change to the shared save instead of posting itself"
+    },
+    {
+      "file": "src/components/Appointments.test.jsx",
+      "name": "shows an error and changes nothing when the latest list cannot be loaded"
+    },
+    {
+      "file": "src/components/Appointments.test.jsx",
+      "name": "appointments saved before keys were stored Done changes only the clicked appointment, not its identical twin or the other contact's"
+    },
+    {
+      "file": "src/components/Appointments.test.jsx",
+      "name": "appointments saved before keys were stored reschedule moves only the clicked appointment"
+    },
+    {
+      "file": "src/components/Appointments.test.jsx",
+      "name": "appointments saved before keys were stored delete removes only the clicked appointment"
+    },
+    {
+      "file": "src/components/Appointments.test.jsx",
+      "name": "appointments saved before keys were stored edit replaces only the clicked appointment and gives it a key of its own"
+    },
+    {
+      "file": "src/components/Appointments.test.jsx",
+      "name": "localAppointmentKey keeps stored keys and tells identical legacy appointments apart"
+    },
+    {
+      "file": "src/components/Appointments.test.jsx",
+      "name": "cancelled and missed visits appear only in history with truthful outcomes and no reinstate controls"
+    },
+    {
+      "file": "src/components/Appointments.test.jsx",
+      "name": "undoing a locally completed visit clears its explicit completed status"
+    },
+    {
+      "file": "src/components/Appointments.test.jsx",
+      "name": "saving a no-show note records the outcome on a local appointment"
+    },
+    {
+      "file": "src/components/Appointments.test.jsx",
+      "name": "saving a no-show note sends the actual outcome to the server"
+    },
+    {
+      "file": "src/components/ImportContacts.races.test.jsx",
+      "name": "a pending commit owns the review and refuses picker, drop and cancel changes"
+    },
+    {
+      "file": "src/components/ImportContacts.races.test.jsx",
+      "name": "a refused commit keeps the reviewed file and releases the lock without automatically retrying"
+    },
+    {
+      "file": "src/components/ImportContacts.races.test.jsx",
+      "name": "a completed import after unmount notifies only its original workspace without restarting importer reads"
+    },
+    {
+      "file": "src/components/ImportContacts.races.test.jsx",
+      "name": "a late preview success cannot replace another workspace's new review"
+    },
+    {
+      "file": "src/components/ImportContacts.races.test.jsx",
+      "name": "a late preview failure cannot replace another workspace's new review"
+    },
+    {
+      "file": "src/components/ImportContacts.races.test.jsx",
+      "name": "a current preview failure releases the upload lock for a deliberate retry"
+    },
+    {
+      "file": "src/components/ImportContacts.races.test.jsx",
+      "name": "a failed recount after editing Email blocks import until an explicit review retry succeeds"
+    },
+    {
+      "file": "src/components/ImportContacts.races.test.jsx",
+      "name": "a failed recount after editing If a contact already exists blocks import until an explicit review retry succeeds"
+    },
+    {
+      "file": "src/components/ImportContacts.races.test.jsx",
+      "name": "a late retry success cannot replace the review of a newer mapping"
+    },
+    {
+      "file": "src/components/ImportContacts.races.test.jsx",
+      "name": "a late retry failure cannot replace the review of a newer mapping"
+    },
+    {
+      "file": "src/components/ImportContacts.races.test.jsx",
+      "name": "a recount success from the old workspace cannot change the new file's review"
+    },
+    {
+      "file": "src/components/ImportContacts.races.test.jsx",
+      "name": "a recount failure from the old workspace cannot change the new file's review"
+    },
+    {
       "file": "src/rebooking.test.js",
       "name": "uses the customer's own completed-visit rhythm and explains it"
     },
@@ -410,38 +509,6 @@
       "name": "a source chosen before navigation opens its matching file guide"
     },
     {
-      "file": "src/components/Appointments.test.jsx",
-      "name": "standalone: completing an appointment saves only that change onto the latest list"
-    },
-    {
-      "file": "src/components/Appointments.test.jsx",
-      "name": "inside the dashboard: hands the change to the shared save instead of posting itself"
-    },
-    {
-      "file": "src/components/Appointments.test.jsx",
-      "name": "shows an error and changes nothing when the latest list cannot be loaded"
-    },
-    {
-      "file": "src/components/Appointments.test.jsx",
-      "name": "appointments saved before keys were stored Done changes only the clicked appointment, not its identical twin or the other contact's"
-    },
-    {
-      "file": "src/components/Appointments.test.jsx",
-      "name": "appointments saved before keys were stored reschedule moves only the clicked appointment"
-    },
-    {
-      "file": "src/components/Appointments.test.jsx",
-      "name": "appointments saved before keys were stored delete removes only the clicked appointment"
-    },
-    {
-      "file": "src/components/Appointments.test.jsx",
-      "name": "appointments saved before keys were stored edit replaces only the clicked appointment and gives it a key of its own"
-    },
-    {
-      "file": "src/components/Appointments.test.jsx",
-      "name": "localAppointmentKey keeps stored keys and tells identical legacy appointments apart"
-    },
-    {
       "file": "src/components/ValueReceipt.test.jsx",
       "name": "keeps Stripe-verified and owner-recorded revenue apart and shows the evidence chain"
     },
@@ -460,6 +527,34 @@
     {
       "file": "src/components/ValueReceipt.test.jsx",
       "name": "requests the chosen period and formats currencies without mixing them"
+    },
+    {
+      "file": "src/components/CrmDashboard.appointment-races.test.jsx",
+      "name": "a slow initial appointment list cannot replace a newer appointments-changed result"
+    },
+    {
+      "file": "src/components/CrmDashboard.appointment-races.test.jsx",
+      "name": "failed overlapping refreshes keep the last confirmed list and never revive an older result"
+    },
+    {
+      "file": "src/components/CrmDashboard.appointment-races.test.jsx",
+      "name": "changing workspace clears its appointments and ignores the previous workspace's delayed response"
+    },
+    {
+      "file": "src/components/CrmDashboard.appointment-races.test.jsx",
+      "name": "unmount invalidates the pending read and removes its refresh listener"
+    },
+    {
+      "file": "src/components/CrmDashboard.appointment-races.test.jsx",
+      "name": "import completion reloads its own workspace while legacy notifications remain compatible"
+    },
+    {
+      "file": "src/components/CrmDashboard.appointment-races.test.jsx",
+      "name": "late quick-add success after unmount does not refresh or alert another workspace"
+    },
+    {
+      "file": "src/components/CrmDashboard.appointment-races.test.jsx",
+      "name": "late quick-add failure after unmount does not refresh or alert another workspace"
     },
     {
       "file": "src/components/Signup.test.jsx",
@@ -798,6 +893,30 @@
       "name": "shows the callback result from the URL"
     },
     {
+      "file": "src/components/Calendar.test.jsx",
+      "name": "surfaces appointment load failures and clears the error after retry"
+    },
+    {
+      "file": "src/components/Calendar.test.jsx",
+      "name": "places offset and all-day events on their workspace calendar day"
+    },
+    {
+      "file": "src/components/Calendar.test.jsx",
+      "name": "provider cancelled is displayed as its actual outcome, not completed"
+    },
+    {
+      "file": "src/components/Calendar.test.jsx",
+      "name": "provider no_show is displayed as its actual outcome, not completed"
+    },
+    {
+      "file": "src/components/Calendar.test.jsx",
+      "name": "local no-show status also overrides done while legacy completed visits remain completed"
+    },
+    {
+      "file": "src/components/Calendar.test.jsx",
+      "name": "an older UTC record retains its recorded wall time and explicitly displays UTC"
+    },
+    {
       "file": "src/components/Messages.businessProfile.test.jsx",
       "name": "AI Reply without a business name keeps the typed reply and offers Settings instead of a template"
     },
@@ -922,20 +1041,20 @@
       "name": "collapses on phones after a step opens its screen"
     },
     {
-      "file": "src/components/Calendar.test.jsx",
-      "name": "surfaces appointment load failures and clears the error after retry"
-    },
-    {
-      "file": "src/components/Calendar.test.jsx",
-      "name": "places offset and all-day events on their workspace calendar day"
-    },
-    {
       "file": "src/components/ProtectedRoute.test.jsx",
       "name": "ProtectedRoute redirects only when the session endpoint explicitly rejects authentication"
     },
     {
       "file": "src/components/ProtectedRoute.test.jsx",
       "name": "ProtectedRoute preserves the session and offers retry during a service outage"
+    },
+    {
+      "file": "src/components/Analytics.test.jsx",
+      "name": "completed metrics suppress stale mirrors by stable contact ID even with provider email 'ana-old@example.com'"
+    },
+    {
+      "file": "src/components/Analytics.test.jsx",
+      "name": "completed metrics suppress stale mirrors by stable contact ID even with provider email ''"
     },
     {
       "file": "src/components/WhatsAppHealthCard.test.jsx",
@@ -1036,6 +1155,38 @@
     {
       "file": "src/components/NotificationsCenter.test.jsx",
       "name": "uses workspace identity and rolls back a failed optimistic read"
+    },
+    {
+      "file": "src/components/appointmentStatus.test.js",
+      "name": "cancelled is not a completion even when imported terminal flags are true"
+    },
+    {
+      "file": "src/components/appointmentStatus.test.js",
+      "name": "canceled is not a completion even when imported terminal flags are true"
+    },
+    {
+      "file": "src/components/appointmentStatus.test.js",
+      "name": "CANCELLED is not a completion even when imported terminal flags are true"
+    },
+    {
+      "file": "src/components/appointmentStatus.test.js",
+      "name": "no_show is not a completion even when imported terminal flags are true"
+    },
+    {
+      "file": "src/components/appointmentStatus.test.js",
+      "name": "no-show is not a completion even when imported terminal flags are true"
+    },
+    {
+      "file": "src/components/appointmentStatus.test.js",
+      "name": "No show is not a completion even when imported terminal flags are true"
+    },
+    {
+      "file": "src/components/appointmentStatus.test.js",
+      "name": "retains explicitly completed and legacy completed visits"
+    },
+    {
+      "file": "src/components/appointmentStatus.test.js",
+      "name": "timezone labels preserve UTC and IANA Etc offsets"
     },
     {
       "file": "src/pages/PrivacyPolicy.test.jsx",

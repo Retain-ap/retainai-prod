@@ -6,6 +6,11 @@ route, public copy or runtime package version. Do not merge it on the strength
 of a clean dependency audit alone. The production app remains on CRA until the
 checks below and visual acceptance are complete.
 
+The final comparison baseline is PR74 source `1c1210a42988b69c7939097d1042154e3efa9833`,
+merged as `21a54df490ab0467fd87c47a1dfb18ef77a7606b`. Its isolated Linux CRA run passed
+42 test files / 303 cases. The inventory also confirms all 266 cases from the
+earlier baseline are retained; PR73/74 add 37 cases without dropping one.
+
 ## Preserved contracts
 
 - Node remains 24.19.0; the engine restriction, CI job names, backend checks and
