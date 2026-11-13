@@ -8,6 +8,9 @@
 //   4. a default for the business type (salon/barber presets, else general)
 
 const DAY = 24 * 60 * 60 * 1000;
+// After the owner contacts a due customer, give them this long to book before
+// the customer comes back to the "contact now" list.
+export const CONTACT_SNOOZE_DAYS = 7;
 export const MIN_INTERVAL_DAYS = 7;
 export const MAX_INTERVAL_DAYS = 365;
 // Visits closer together than this are treated as one visit (split or duplicate records).
@@ -142,6 +145,11 @@ export function rebookingSuggestions({ leads = [], appointments = [], user, toda
     }
     const due = lastVisit + interval * DAY;
     const nextBooked = entry.upcoming.find((day) => day >= todayMs);
+    // Only real outreach (a delivered follow-up or the owner marking the contact)
+    // after the last completed visit counts. last_contacted is not used: it is
+    // also stamped when a contact is first created.
+    const contactDay = dayStart(lead?.last_outreach_at);
+    const contacted = contactDay !== null && contactDay > lastVisit && contactDay <= todayMs ? contactDay : null;
     out.push({
       lead,
       intervalDays: interval,
@@ -151,6 +159,9 @@ export function rebookingSuggestions({ leads = [], appointments = [], user, toda
       dueDate: new Date(due).toISOString().slice(0, 10),
       daysUntilDue: Math.round((due - todayMs) / DAY),
       bookedFor: nextBooked ? new Date(nextBooked).toISOString().slice(0, 10) : "",
+      contactedOn: contacted !== null ? new Date(contacted).toISOString().slice(0, 10) : "",
+      waitingUntil: contacted !== null ? new Date(contacted + CONTACT_SNOOZE_DAYS * DAY).toISOString().slice(0, 10) : "",
+      contactedRecently: contacted !== null && (todayMs - contacted) / DAY < CONTACT_SNOOZE_DAYS,
       reasons: [
         `Last completed visit ${formatDay(lastVisit)}.`,
         reason,
@@ -161,7 +172,15 @@ export function rebookingSuggestions({ leads = [], appointments = [], user, toda
   return out.sort((a, b) => a.daysUntilDue - b.daysUntilDue);
 }
 
-/** Customers to contact now: due within `aheadDays` or overdue, and not already booked. */
+/**
+ * Customers to contact now: due within `aheadDays` or overdue, not already
+ * booked, and not contacted in the last CONTACT_SNOOZE_DAYS days.
+ */
 export function dueForRebooking(suggestions, aheadDays = 7) {
-  return suggestions.filter((item) => !item.bookedFor && item.daysUntilDue <= aheadDays);
+  return suggestions.filter((item) => !item.bookedFor && item.daysUntilDue <= aheadDays && !item.contactedRecently);
+}
+
+/** Due customers the owner contacted recently, waiting to see if they book. */
+export function waitingToBook(suggestions, aheadDays = 7) {
+  return suggestions.filter((item) => !item.bookedFor && item.daysUntilDue <= aheadDays && item.contactedRecently);
 }

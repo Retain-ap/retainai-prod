@@ -25,7 +25,7 @@ const SUBJECTS = {
   upsell: () => "An option you may find helpful",
 };
 
-export default function AiPromptsDashboard({ leads = [], user = {}, onSendAIPromptEmail, onOpenBusinessSettings }) {
+export default function AiPromptsDashboard({ leads = [], user = {}, onSendAIPromptEmail, onOpenBusinessSettings, initialFocus = null, onFocusApplied }) {
   const [search, setSearch] = useState("");
   const [focusedLead, setFocusedLead] = useState(null);
   const [activePlaybook, setActivePlaybook] = useState(PLAYBOOKS[0].key);
@@ -58,6 +58,8 @@ export default function AiPromptsDashboard({ leads = [], user = {}, onSendAIProm
   // It is removed only after it is back on screen for this account's same
   // customer; while customers are still loading it stays where it is.
   useEffect(() => {
+    // A customer chosen from the rebooking list wins; a held draft stays stored for later.
+    if (initialFocus) return;
     const held = peekHeldDraft(heldScope);
     if (!held) return;
     const lead = leads.find((item) => String(item.id) === String(held.leadId));
@@ -69,7 +71,24 @@ export default function AiPromptsDashboard({ leads = [], user = {}, onSendAIProm
     setContext(String(held.context || ""));
     setDraft(String(held.draft || ""));
     consumeHeldDraft(heldScope, held);
-  }, [heldScope, leads]);
+  }, [heldScope, initialFocus, leads]);
+
+  // Open on a customer chosen from the rebooking list, with factual context the
+  // owner can edit. This only prepares the screen: nothing is generated or sent.
+  useEffect(() => {
+    if (!initialFocus?.leadId || !leads.length) return;
+    const lead = leads.find((item) => String(item.id) === String(initialFocus.leadId));
+    if (lead) {
+      setFocusedLead(lead);
+      if (PLAYBOOKS.some((playbook) => playbook.key === initialFocus.playbook)) setActivePlaybook(initialFocus.playbook);
+      setContext(String(initialFocus.context || "").slice(0, 800));
+      setDraft("");
+      setError("");
+      setNeedsBusinessName(false);
+      setStatus("");
+    }
+    if (typeof onFocusApplied === "function") onFocusApplied();
+  }, [initialFocus, leads, onFocusApplied]);
 
   const showError = (err, fallback) => {
     setStatus("");

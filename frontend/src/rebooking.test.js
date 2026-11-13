@@ -1,4 +1,4 @@
-import { businessKind, dayStart, dueForRebooking, rebookingSuggestions, visitsByLead } from "./rebooking";
+import { CONTACT_SNOOZE_DAYS, businessKind, dayStart, dueForRebooking, rebookingSuggestions, visitsByLead, waitingToBook } from "./rebooking";
 
 const visit = (lead, date, extra = {}) => ({ lead, date, time: "10:00", ...extra });
 const done = (lead, date) => visit(lead, date, { status: "completed", _backend: {} });
@@ -104,4 +104,45 @@ test("impossible dates are ignored and visits dated in the future are never comp
   expect(dayStart("2026-02-31")).toBeNull();
   expect(dayStart("2026-02-28")).toBe(Date.UTC(2026, 1, 28));
   expect(rebookingSuggestions({ leads: [ana], appointments: [done(ana, "2026-09-01")], user: {}, today: "not-a-date" })).toEqual([]);
+});
+
+test("a due customer contacted in the last week waits to book instead of staying on the contact list", () => {
+  const leads = [
+    { id: "fresh", last_outreach_at: "2026-11-04T15:00:00Z" }, // contacted 2 days ago
+    { id: "stale", last_outreach_at: "2026-10-26T15:00:00Z" }, // contacted 11 days ago: back on the list
+    { id: "before", last_outreach_at: "2026-09-20T15:00:00Z" }, // contact before the last visit is not a follow-up
+    { id: "never" },
+  ];
+  const suggestions = rebookingSuggestions({
+    leads,
+    appointments: leads.map((lead) => done(lead, "2026-10-01")),
+    user: { businessType: "Barber shop" },
+    today,
+  });
+  const byId = Object.fromEntries(suggestions.map((item) => [item.lead.id, item]));
+  expect(byId.fresh).toMatchObject({ contactedOn: "2026-11-04", waitingUntil: "2026-11-11", contactedRecently: true });
+  expect(byId.stale).toMatchObject({ contactedOn: "2026-10-26", contactedRecently: false });
+  expect(byId.before).toMatchObject({ contactedOn: "", contactedRecently: false });
+  expect(dueForRebooking(suggestions).map((item) => item.lead.id).sort()).toEqual(["before", "never", "stale"]);
+  expect(waitingToBook(suggestions).map((item) => item.lead.id)).toEqual(["fresh"]);
+  expect(CONTACT_SNOOZE_DAYS).toBe(7);
+});
+
+test("a booked customer is neither due nor waiting, even if contacted", () => {
+  const lead = { id: "booked", last_outreach_at: "2026-11-04T15:00:00Z" };
+  const suggestions = rebookingSuggestions({
+    leads: [lead],
+    appointments: [done(lead, "2026-09-01"), visit(lead, "2026-11-20", { status: "scheduled", _backend: {} })],
+    user: {},
+    today,
+  });
+  expect(dueForRebooking(suggestions)).toEqual([]);
+  expect(waitingToBook(suggestions)).toEqual([]);
+});
+
+test("creating a contact (which stamps last_contacted) does not count as following up", () => {
+  const lead = { id: "new", last_contacted: "2026-11-05T09:00:00Z", createdAt: "2026-11-05T09:00:00Z" };
+  const [item] = rebookingSuggestions({ leads: [lead], appointments: [done(lead, "2026-09-01")], user: {}, today });
+  expect(item.contactedRecently).toBe(false);
+  expect(dueForRebooking([item])).toHaveLength(1);
 });

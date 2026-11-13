@@ -29,11 +29,72 @@ test("rebooking opportunities use each customer's visit rhythm and save an owner
   expect(screen.getByText(/Rebooking overdue by 10 days · every 30 days/)).toBeInTheDocument();
   expect(screen.getByText(/median of 2 gaps between 3 completed visits/)).toBeInTheDocument();
   expect(screen.getByText(/Win-back: no completed visit recorded/)).toBeInTheDocument();
-  expect(screen.getByText(/Values are estimates, not revenue/)).toBeInTheDocument();
+  expect(screen.getByText(/Nothing is sent automatically/)).toBeInTheDocument();
 
   fireEvent.click(screen.getByRole("button", { name: "Set interval" }));
   expect(onUpdateLead).toHaveBeenCalledWith({ ...ana, rebook_interval_days: 21 });
   prompt.mockRestore();
+});
+
+test("no value is invented: only values the owner recorded are shown or added up", () => {
+  const valued = { ...ana, id: "v", name: "Val Recorded", email: "val@example.com", average_sale: 120 };
+  const { unmount } = render(<RetentionCommandCenter leads={[ana]} appointments={appointments} user={{ timezone: "UTC" }} />);
+  expect(screen.getByText("No customer values recorded")).toBeInTheDocument();
+  expect(screen.queryByText(/\$75/)).not.toBeInTheDocument();
+  fireEvent.click(screen.getByRole("tab", { name: "Revenue Opportunities" }));
+  expect(screen.getByText("No value recorded")).toBeInTheDocument();
+  unmount();
+
+  render(<RetentionCommandCenter leads={[ana, valued]} appointments={[...appointments, completed(valued, 70), completed(valued, 40)]} user={{ timezone: "UTC" }} />);
+  // Shown on the metric card and in Today's priorities.
+  expect(screen.getAllByText(/\$120 recorded for 1 of 2/).length).toBeGreaterThanOrEqual(1);
+});
+
+test("a due customer can be drafted for review or marked contacted; nothing is sent from the list", async () => {
+  const onDraftFollowUp = jest.fn();
+  const onMarkContacted = jest.fn().mockResolvedValue({});
+  render(<RetentionCommandCenter leads={[ana]} appointments={appointments} user={{ timezone: "UTC" }} onDraftFollowUp={onDraftFollowUp} onMarkContacted={onMarkContacted} />);
+  fireEvent.click(screen.getByRole("tab", { name: "Revenue Opportunities" }));
+
+  fireEvent.click(screen.getByRole("button", { name: "Draft follow-up" }));
+  expect(onDraftFollowUp).toHaveBeenCalledTimes(1);
+  const [lead, context] = onDraftFollowUp.mock.calls[0];
+  expect(lead).toBe(ana);
+  expect(context).toMatch(/^Due to rebook: last completed visit .+; usually every 30 days\.$/);
+
+  fireEvent.click(screen.getByRole("button", { name: "Mark contacted" }));
+  await waitFor(() => expect(onMarkContacted).toHaveBeenCalledWith(ana));
+  expect(global.fetch).not.toHaveBeenCalledWith(expect.stringContaining("send-ai-message"), expect.anything());
+});
+
+test("a failed mark-contacted shows the reason and keeps the customer on the list", async () => {
+  const onMarkContacted = jest.fn().mockRejectedValue(new Error("The contact could not be recorded (HTTP 500)."));
+  render(<RetentionCommandCenter leads={[ana]} appointments={appointments} user={{ timezone: "UTC" }} onMarkContacted={onMarkContacted} />);
+  fireEvent.click(screen.getByRole("tab", { name: "Revenue Opportunities" }));
+  fireEvent.click(screen.getByRole("button", { name: "Mark contacted" }));
+  expect(await screen.findByRole("alert")).toHaveTextContent("The contact could not be recorded (HTTP 500).");
+  expect(screen.getByRole("button", { name: "Mark contacted" })).toBeEnabled();
+});
+
+test("unsubscribed or email-less customers get no email draft action", () => {
+  const optedOut = { ...ana, id: "o", name: "Opted Out", email: "out@example.com", email_opt_out: true };
+  const noEmail = { ...ana, id: "n", name: "No Email", email: "" };
+  render(<RetentionCommandCenter leads={[optedOut, noEmail]} appointments={[...appointments.map((a) => ({ ...a, lead: optedOut })), ...appointments.map((a) => ({ ...a, lead: noEmail }))]}
+    user={{ timezone: "UTC" }} onDraftFollowUp={jest.fn()} onMarkContacted={jest.fn()} />);
+  fireEvent.click(screen.getByRole("tab", { name: "Revenue Opportunities" }));
+  expect(screen.queryByRole("button", { name: "Draft follow-up" })).not.toBeInTheDocument();
+  expect(screen.getByText("Unsubscribed from email")).toBeInTheDocument();
+  expect(screen.getByText("No email address")).toBeInTheDocument();
+  expect(screen.getAllByRole("button", { name: "Mark contacted" })).toHaveLength(2);
+});
+
+test("a customer followed up this week waits to book instead of staying on the contact list", () => {
+  const followedUp = { ...ana, last_outreach_at: `${daysAgo(2)}T15:00:00Z` };
+  render(<RetentionCommandCenter leads={[followedUp]} appointments={appointments.map((a) => ({ ...a, lead: followedUp }))} user={{ timezone: "UTC" }} onMarkContacted={jest.fn()} />);
+  fireEvent.click(screen.getByRole("tab", { name: "Revenue Opportunities" }));
+  expect(screen.getByText("No one is due right now")).toBeInTheDocument();
+  expect(screen.getByRole("heading", { name: "Contacted, waiting to book (1)" })).toBeInTheDocument();
+  expect(screen.getByText(/Back on the list .+ if they haven't booked\./)).toBeInTheDocument();
 });
 
 test("rejects an invalid interval without saving", () => {

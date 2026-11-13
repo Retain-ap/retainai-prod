@@ -20,7 +20,7 @@ import {
 } from "./appointmentDateTime";
 import ValueReceipt from "./ValueReceipt";
 import ServiceSetupPanel, { SALON_PLAYBOOKS } from "./ServiceSetupPanel";
-import { dueForRebooking, rebookingSuggestions } from "../rebooking";
+import { dueForRebooking, rebookingSuggestions, waitingToBook } from "../rebooking";
 import "./product-system.css";
 
 const DAY = 24 * 60 * 60 * 1000;
@@ -81,7 +81,28 @@ function HealthPill({ health }) {
   return <span className={`health-pill ${health.kind}`}>{health.label} · {health.score}</span>;
 }
 
-export default function RetentionCommandCenter({ leads = [], appointments = [], user, onOpenAutomations, onOpenMessages, onUpdateLead, onOpenImports, onOpenAppointments }) {
+function shortDay(dateKey) {
+  const ms = Date.parse(`${dateKey}T00:00:00Z`);
+  return Number.isFinite(ms) ? new Date(ms).toLocaleDateString(undefined, { month: "short", day: "numeric", timeZone: "UTC" }) : dateKey;
+}
+
+/** The value the owner recorded for this customer, or null. Never a made-up default. */
+function recordedValue(lead) {
+  for (const field of ["next_value", "average_sale", "value"]) {
+    const amount = Number(lead?.[field]);
+    if (Number.isFinite(amount) && amount > 0) return amount;
+  }
+  return null;
+}
+
+/** Factual context for a drafted follow-up, taken only from recorded visits. */
+function followUpContext(rebook) {
+  return `Due to rebook: last completed visit ${shortDay(rebook.lastVisit)}; usually every ${rebook.intervalDays} days.`;
+}
+
+export default function RetentionCommandCenter({ leads = [], appointments = [], user, onOpenAutomations, onOpenMessages, onUpdateLead, onOpenImports, onOpenAppointments, onDraftFollowUp, onMarkContacted }) {
+  const [marking, setMarking] = useState("");
+  const [actionError, setActionError] = useState("");
   const [tab, setTab] = useState("briefing");
   const [timelineLead, setTimelineLead] = useState(null);
 
@@ -101,7 +122,6 @@ export default function RetentionCommandCenter({ leads = [], appointments = [], 
   const playbooks = salonPreset
     ? SALON_PLAYBOOKS.map((playbook) => ({ ...playbook, icon: PLAYBOOKS.find((item) => item.key === playbook.key)?.icon }))
     : PLAYBOOKS;
-  const estimateFor = (lead) => Number(lead.next_value || lead.average_sale || lead.value || 75);
   const healthByLead = new Map(enriched.map((item) => [item.lead, item.health]));
   const withVisits = new Set(rebooking.map((item) => item.lead));
   const opportunities = [
@@ -111,14 +131,31 @@ export default function RetentionCommandCenter({ leads = [], appointments = [], 
       health: healthByLead.get(item.lead) || healthFor(item.lead),
       rebook: item,
       reason: item.daysUntilDue < 0 ? `Rebooking overdue by ${-item.daysUntilDue} days` : item.daysUntilDue === 0 ? "Rebooking due today" : `Rebooking due in ${item.daysUntilDue} days`,
-      value: estimateFor(item.lead),
+      value: recordedValue(item.lead),
     })),
     // No completed visit on record: only long inactivity suggests a win-back.
     ...enriched
       .filter((item) => !withVisits.has(item.lead) && item.health.days > 90)
-      .map((item) => ({ ...item, reason: "Win-back: no completed visit recorded and inactive for 90+ days", value: estimateFor(item.lead) })),
+      .map((item) => ({ ...item, reason: "Win-back: no completed visit recorded and inactive for 90+ days", value: recordedValue(item.lead) })),
   ];
-  const opportunityValue = opportunities.reduce((sum, item) => sum + item.value, 0);
+  const waiting = waitingToBook(rebooking);
+  // Only values the owner recorded are added up; customers without one are counted, not guessed.
+  const valued = opportunities.filter((item) => item.value !== null);
+  const opportunityValue = valued.reduce((sum, item) => sum + item.value, 0);
+  const valueSummary = valued.length
+    ? `${money(opportunityValue)} recorded for ${valued.length} of ${opportunities.length}`
+    : "No customer values recorded";
+  const markContacted = async (lead) => {
+    setActionError("");
+    setMarking(String(lead.id));
+    try {
+      await onMarkContacted(lead);
+    } catch (error) {
+      setActionError(error?.message || "The contact could not be recorded.");
+    } finally {
+      setMarking("");
+    }
+  };
   const pulse = leads.length
     ? Math.round(enriched.reduce((sum, item) => sum + item.health.score, 0) / enriched.length)
     : 0;
@@ -186,7 +223,7 @@ export default function RetentionCommandCenter({ leads = [], appointments = [], 
       <div className="metric-grid">
         <div className="metric-card"><div className="metric-icon"><FaHeartbeat /></div><span>Business pulse</span><strong>{pulse || "—"}</strong><small>Average relationship health</small></div>
         <div className="metric-card"><div className="metric-icon attention"><FaUsers /></div><span>Needs attention</span><strong>{atRisk.length + needsAttention.length}</strong><small>Relationships to protect</small></div>
-        <div className="metric-card"><div className="metric-icon opportunity"><FaChartLine /></div><span>Potential revenue</span><strong>{money(opportunityValue)}</strong><small>Estimated rebooking value</small></div>
+        <div className="metric-card"><div className="metric-icon opportunity"><FaChartLine /></div><span>Due to rebook</span><strong>{opportunities.length}</strong><small>{valueSummary}</small></div>
         <div className="metric-card"><div className="metric-icon schedule"><FaRegClock /></div><span>Next 7 days</span><strong>{upcoming.length}</strong><small>Upcoming appointments</small></div>
       </div>
 
@@ -206,7 +243,7 @@ export default function RetentionCommandCenter({ leads = [], appointments = [], 
             <div className="product-card-header"><div><h2>Today’s priorities</h2><p className="product-card-copy">The highest-impact actions to take now.</p></div></div>
             <div className="insight-list">
               <div className="insight-row"><div className="insight-row-main"><strong>{atRisk.length} customers are at risk</strong><small>Reach out before these relationships go cold.</small></div><button className="product-button" onClick={() => setTab("customers")}>Review</button></div>
-              <div className="insight-row"><div className="insight-row-main"><strong>{opportunities.length} rebooking opportunities</strong><small>Estimated value {money(opportunityValue)}.</small></div><button className="product-button" onClick={() => setTab("opportunities")}>Open</button></div>
+              <div className="insight-row"><div className="insight-row-main"><strong>{opportunities.length} rebooking opportunities</strong><small>{waiting.length ? `${waiting.length} contacted and waiting to book. ` : ""}{valueSummary}.</small></div><button className="product-button" onClick={() => setTab("opportunities")}>Open</button></div>
               <div className="insight-row"><div className="insight-row-main"><strong>{upcoming.length} appointments this week</strong><small>Confirm important bookings and reduce no-shows.</small></div><button className="product-button" onClick={() => onOpenAutomations?.("no_show")}>Automate</button></div>
             </div>
           </section>
@@ -240,7 +277,8 @@ export default function RetentionCommandCenter({ leads = [], appointments = [], 
 
       {tab === "opportunities" && (
         <section className="product-card" style={{ marginTop: 18 }}>
-          <div className="product-card-header"><div><h2>Revenue Opportunities</h2><p className="product-card-copy">Rebooking dates come from each customer's completed visits. Values are estimates, not revenue.</p></div><strong title="Estimate">{money(opportunityValue)}</strong></div>
+          <div className="product-card-header"><div><h2>Due to rebook</h2><p className="product-card-copy">Rebooking dates come from each customer's completed visits. Nothing is sent automatically: draft a follow-up to review, or mark a customer contacted once you've reached them.</p></div><strong title="Values you recorded for these customers, not revenue">{valued.length ? money(opportunityValue) : "—"}</strong></div>
+          {actionError && <div className="product-alert" role="alert">{actionError}</div>}
           <div className="insight-list">
             {opportunities.slice(0, 30).map(({ lead, health, reason, value, rebook }) => (
               <div className="insight-row rebook-row" key={lead.id || lead.email}>
@@ -249,8 +287,18 @@ export default function RetentionCommandCenter({ leads = [], appointments = [], 
                   <small>{reason}{rebook ? ` · every ${rebook.intervalDays} days` : ` · ${health.days} days since activity`}</small>
                   {rebook && <ul className="rebook-reasons">{rebook.reasons.map((text) => <li key={text}>{text}</li>)}</ul>}
                 </div>
-                <strong title="Estimate">{money(value)}</strong>
+                <strong title="Value you recorded for this customer">{value !== null ? money(value) : <small>No value recorded</small>}</strong>
                 <div className="rebook-actions">
+                  {lead.email_opt_out && <small className="rebook-note">Unsubscribed from email</small>}
+                  {!lead.email_opt_out && !lead.email && <small className="rebook-note">No email address</small>}
+                  {rebook && onDraftFollowUp && lead.email && !lead.email_opt_out && (
+                    <button className="product-button primary" onClick={() => onDraftFollowUp(lead, followUpContext(rebook))}>Draft follow-up</button>
+                  )}
+                  {onMarkContacted && lead.id && (
+                    <button className="product-button" disabled={marking === String(lead.id)} onClick={() => markContacted(lead)}>
+                      {marking === String(lead.id) ? "Recording…" : "Mark contacted"}
+                    </button>
+                  )}
                   {rebook && onUpdateLead && (
                     <button
                       className="product-button"
@@ -277,6 +325,21 @@ export default function RetentionCommandCenter({ leads = [], appointments = [], 
             ))}
             {!opportunities.length && <div className="insight-row"><div className="insight-row-main"><strong>No one is due right now</strong><small>Customers appear here when their usual time between completed visits has nearly passed.</small></div></div>}
           </div>
+          {waiting.length > 0 && (
+            <div className="rebook-waiting">
+              <h3>Contacted, waiting to book ({waiting.length})</h3>
+              <div className="insight-list">
+                {waiting.map((item) => (
+                  <div className="insight-row" key={item.lead.id || item.lead.email}>
+                    <div className="insight-row-main">
+                      <strong>{leadName(item.lead)}</strong>
+                      <small>Contacted {shortDay(item.contactedOn)}. Back on the list {shortDay(item.waitingUntil)} if they haven't booked.</small>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
         </section>
       )}
 
@@ -336,11 +399,12 @@ export default function RetentionCommandCenter({ leads = [], appointments = [], 
             <div className="product-eyebrow">Estimates · not revenue</div>
             <h3 style={{ marginTop: 10 }}>Open rebooking opportunities</h3>
             <p className="product-card-copy">
-              Estimated from each customer's recorded value, or {money(75)} when none is recorded.
+              Adds up only the values you recorded on these customers; customers without a value are counted, not guessed.
               This is not money received and is never included in verified revenue.
             </p>
             <div className="insight-list">
-              <div className="insight-row"><span>Estimated value of open opportunities</span><strong>{money(opportunityValue)}</strong></div>
+              <div className="insight-row"><span>Recorded value of open opportunities</span><strong>{valued.length ? money(opportunityValue) : "—"}</strong></div>
+              <div className="insight-row"><span>Opportunities with a recorded value</span><strong>{valued.length}</strong></div>
               <div className="insight-row"><span>Customers with an opportunity</span><strong>{opportunities.length}</strong></div>
               <div className="insight-row"><span>Relationships monitored</span><strong>{leads.length}</strong></div>
             </div>

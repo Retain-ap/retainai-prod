@@ -346,6 +346,8 @@ function CrmDashboard({ authenticatedUser }) {
   const [editLead, setEditLead] = useState(null);
   const [draftNotification, setDraftNotification] = useState(null);
   const [highlightLeadIds, setHighlightLeadIds] = useState([]);
+  // A customer to open in AI Studio from the rebooking list (nothing is sent until reviewed).
+  const [studioFocus, setStudioFocus] = useState(null);
   const [loadingLeads, setLoadingLeads] = useState(false);
   const [leadPersistenceError, setLeadPersistenceError] = useState("");
   const [deletingLeadId, setDeletingLeadId] = useState(null);
@@ -922,8 +924,40 @@ function CrmDashboard({ authenticatedUser }) {
       throw error;
     }
     setHighlightLeadIds([lead.id]);
+    // The server recorded the contact time; reload so rebooking and health reflect it.
+    window.dispatchEvent(new Event("leads:changed"));
     return true;
   }
+
+  // Rebooking: open AI Studio on this customer with factual visit context. The
+  // owner reviews and edits the draft; nothing is sent until they press Send.
+  const handleDraftFollowUp = useCallback(
+    (lead, context) => {
+      setStudioFocus({ leadId: String(lead?.id || ""), playbook: "followup", context: String(context || "") });
+      openSection("ai-prompts");
+    },
+    [openSection]
+  );
+
+  // Records that the owner reached this customer (on the server, one contact only).
+  const handleMarkContacted = useCallback(async (lead) => {
+    const response = await fetch(apiUrl("leads/contacted"), {
+      method: "POST",
+      credentials: "include",
+      headers: { "Content-Type": "application/json", Accept: "application/json" },
+      body: JSON.stringify({ leadId: lead?.id }),
+    });
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok || data?.ok !== true) {
+      throw new Error(
+        data?.error === "lead_not_found"
+          ? "This customer is no longer in your contacts. Reload and try again."
+          : `The contact could not be recorded (HTTP ${response.status}).`
+      );
+    }
+    window.dispatchEvent(new Event("leads:changed"));
+    return data.lead;
+  }, []);
 
   // Refresh user (best-effort; backend may not support this)
   const handleRefreshUser = useCallback(async () => {
@@ -1279,6 +1313,8 @@ function CrmDashboard({ authenticatedUser }) {
             onOpenImports={openImports}
             onOpenAppointments={openAppointments}
             onOpenMessages={() => openSection("messages")}
+            onDraftFollowUp={handleDraftFollowUp}
+            onMarkContacted={handleMarkContacted}
             onOpenAutomations={(playbook) => {
               try {
                 localStorage.setItem("retainai:selected-playbook", playbook || "");
@@ -1567,6 +1603,8 @@ function CrmDashboard({ authenticatedUser }) {
             user={user}
             onSendAIPromptEmail={handleSendAIPromptEmail}
             onOpenBusinessSettings={openBusinessSettings}
+            initialFocus={studioFocus}
+            onFocusApplied={() => setStudioFocus(null)}
           />
         )}
 

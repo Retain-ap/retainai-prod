@@ -180,3 +180,39 @@ describe("business name required before customer messages", () => {
     expect(sessionStorage.length).toBe(0);
   });
 });
+
+describe("opening from the rebooking list", () => {
+  afterEach(() => {
+    sessionStorage.clear();
+    delete global.fetch;
+  });
+
+  test("selects the customer with the follow-up playbook and factual context, and generates or sends nothing", async () => {
+    global.fetch = jest.fn();
+    const applied = jest.fn();
+    const send = jest.fn();
+    render(<AiPromptsDashboard leads={[lead]} user={{ email: "owner@example.com" }} onSendAIPromptEmail={send}
+      initialFocus={{ leadId: "lead-1", playbook: "followup", context: "Due to rebook: last completed visit Oct 1; usually every 30 days." }} onFocusApplied={applied} />);
+    expect(await screen.findByText("Writing for")).toBeInTheDocument();
+    expect(screen.getByDisplayValue("Due to rebook: last completed visit Oct 1; usually every 30 days.")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /Follow-up/ })).toHaveClass("active");
+    expect(applied).toHaveBeenCalled();
+    expect(global.fetch).not.toHaveBeenCalled();
+    expect(send).not.toHaveBeenCalled();
+  });
+
+  test("a focus request for a customer who is gone is cleared without selecting anyone", async () => {
+    const applied = jest.fn();
+    render(<AiPromptsDashboard leads={[lead]} user={{ email: "owner@example.com" }} initialFocus={{ leadId: "gone", playbook: "followup", context: "x" }} onFocusApplied={applied} />);
+    await waitFor(() => expect(applied).toHaveBeenCalled());
+    expect(screen.queryByText("Writing for")).not.toBeInTheDocument();
+  });
+
+  test("an explicit focus leaves a held business-name draft stored for later", async () => {
+    holdDraft(heldDraftScope("ai-studio", { email: "owner@example.com" }), { leadId: "lead-1", draft: "Held words.", playbook: "reengage" });
+    render(<AiPromptsDashboard leads={[lead]} user={{ email: "owner@example.com" }} initialFocus={{ leadId: "lead-1", playbook: "followup", context: "Due to rebook." }} onFocusApplied={jest.fn()} />);
+    expect(await screen.findByDisplayValue("Due to rebook.")).toBeInTheDocument();
+    expect(screen.queryByDisplayValue("Held words.")).not.toBeInTheDocument();
+    expect(sessionStorage.getItem(heldDraftScope("ai-studio", { email: "owner@example.com" }))).not.toBeNull();
+  });
+});
