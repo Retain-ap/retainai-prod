@@ -1,0 +1,11 @@
+# Partner refund allocation — 2026-11-13
+
+The public offer remains 30% of qualifying base membership payments after discounts and before tax, for the first 12 months from the first successful base payment. The 30-day hold, attribution window, cancellation/rejoining rules and monthly owner review are unchanged.
+
+Stripe's `charge.amount_refunded` is a charge-wide amount. It cannot identify whether a partial refund covered membership or an excluded add-on. Partial refunds on mixed or unknown invoices now produce a zero-payable `review` row. Base-only invoices verified against stored/current membership price IDs keep their proportional refund calculation, including tax. Full refunds remain zero. No money is transferred by the commission ledger.
+
+No database/schema migration or historical payout edit is required. Older positive `Refund adjusted` snapshots have no allocation evidence and are exposed as zero-payable review holds immediately on read, including the owner API and its UI/JSON export. `previousCommissionMinor` retains their former computed amount for audit; it is not payable. Normal ledger writes persist the hold. Existing payout records, customer attribution and first-paid dates remain intact.
+
+Before paying, use **Refresh from Stripe**. A successful refresh replaces each customer's invoice snapshots: verified base-only partial refunds recover their proportional commission; full refunds remain zero; mixed or unknown allocations remain held. All payout recording for a partner is blocked while any review hold exists. A temporary negative balance during review is provisional, not an instruction to collect money from the partner.
+
+Do not edit the database or manually clear a hold. Mixed allocations need provider line-level evidence and an audited reconciliation change. This bounded change does not infer that evidence from the aggregate charge refund or automatically settle ambiguous commissions. Provider outages preserve the hold, and no production customer data or billing calls are needed by the synthetic regression tests.
