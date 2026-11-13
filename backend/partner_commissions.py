@@ -25,6 +25,20 @@ def blank():
     return {"partners": [], "referrals": [], "invoices": [], "payouts": []}
 
 
+def needs_refund_refresh(row):
+    return row.get("reason") == "Refund adjusted" and row.get("refundAllocationVersion") != 1
+
+
+def hold_legacy_refunds(state):
+    # Old snapshots lack line-allocation evidence. Normalize reads as well as
+    # writes so owner screens/exports cannot present stale amounts as payable.
+    for row in state["invoices"]:
+        if needs_refund_refresh(row):
+            row.update({"previousCommissionMinor": row["commissionMinor"], "commissionMinor": 0,
+                "status": "review", "reason": "Refund allocation needs refresh"})
+    return state
+
+
 @contextmanager
 def state_write():
     # Share the already-backed-up application database; BEGIN IMMEDIATE also
@@ -33,7 +47,7 @@ def state_write():
         connection.execute("CREATE TABLE IF NOT EXISTS partner_ledger (id INTEGER PRIMARY KEY, value TEXT NOT NULL)")
         connection.execute("BEGIN IMMEDIATE")
         row = connection.execute("SELECT value FROM partner_ledger WHERE id=1").fetchone()
-        state = json.loads(row[0]) if row else blank()
+        state = hold_legacy_refunds(json.loads(row[0]) if row else blank())
         yield state
         connection.execute("INSERT OR REPLACE INTO partner_ledger VALUES (1, ?)", (json.dumps(state),))
 
@@ -42,7 +56,7 @@ def read_state():
     with closing(sqlite3.connect(SQLITE_PATH, timeout=15)) as connection, connection:
         connection.execute("CREATE TABLE IF NOT EXISTS partner_ledger (id INTEGER PRIMARY KEY, value TEXT NOT NULL)")
         row = connection.execute("SELECT value FROM partner_ledger WHERE id=1").fetchone()
-        return json.loads(row[0]) if row else blank()
+        return hold_legacy_refunds(json.loads(row[0]) if row else blank())
 
 
 def identity(email):
@@ -148,11 +162,11 @@ def base_amount(invoice, price):
     return max(0, amount)
 
 
-def calculate(invoice, charge, base, first_paid, now):
+def calculate(invoice, charge, base, first_paid, now, base_prices=()):
     """Pure calculation, all amounts in Stripe minor units. Fail closed."""
     paid_at = (invoice.get("status_transitions") or {}).get("paid_at") or 0
     result = {"invoiceId": invoice["id"], "currency": invoice.get("currency", ""), "paidAt": paid_at,
-        "baseMinor": base, "commissionMinor": 0, "holdUntil": paid_at + HOLD, "reason": "", "status": "excluded"}
+        "baseMinor": base, "commissionMinor": 0, "holdUntil": paid_at + HOLD, "reason": "", "status": "excluded", "refundAllocationVersion": 1}
     if invoice.get("status") != "paid" or invoice.get("amount_paid", 0) <= 0 or base <= 0:
         result["reason"] = "No paid base membership"
         return result
@@ -172,6 +186,17 @@ def calculate(invoice, charge, base, first_paid, now):
         return {**result, "status": "review", "reason": "Payment or credit allocation needs review"}
     if charge.get("disputed") or (charge.get("fraud_details") or {}).get("stripe_report") == "fraudulent" or (charge.get("fraud_details") or {}).get("user_report") == "fraudulent":
         return {**result, "status": "review", "reason": "Dispute or fraud hold"}
+    # Stripe reports charge-wide refunds, not which subscription line was
+    # refunded. Base-only invoices may include tax without including add-ons.
+    lines = invoice.get("lines") or {}
+    base_only = (base == invoice.get("total_excluding_tax") and lines.get("has_more") is False
+        and isinstance(lines.get("data"), list)
+        and any(line.get("amount", 0) > 0 and ((line.get("pricing") or {}).get("price_details") or {}).get("price") in base_prices for line in lines["data"])
+        and all(line.get("amount") == 0
+            or ((line.get("pricing") or {}).get("price_details") or {}).get("price") in base_prices
+            for line in lines["data"]))
+    if 0 < charge["amount_refunded"] < total and not base_only:
+        return {**result, "status": "review", "reason": "Partial refund allocation needs review"}
     remaining = max(0, total - charge["amount_refunded"])
     commission = (base * remaining * 30 + total * 50) // (total * 100)
     return {**result, "commissionMinor": commission, "status": "available" if now >= result["holdUntil"] else "pending", "reason": "Refund adjusted" if remaining < total else ""}
@@ -229,7 +254,7 @@ def sync_customer(customer):
                     if payment.get("invoice") == invoice["id"] and payment.get("livemode") == live and payment.get("amount_paid") == invoice["amount_paid"] and re.fullmatch(r"pi_[A-Za-z0-9]+", str(pi)):
                         intent = stripe_get(f"payment_intents/{pi}?expand[]=latest_charge")
                         charge = intent.get("latest_charge") if isinstance(intent.get("latest_charge"), dict) else None
-                row = calculate(invoice, charge, base, first, int(time.time()))
+                row = calculate(invoice, charge, base, first, int(time.time()), prices)
             except ValueError as error:
                 # API errors must block the entire refresh, not silently drop debt.
                 if "unavailable" in str(error):
@@ -292,7 +317,7 @@ def reconcile_signed_webhook(response):
 
 
 def available(state, code, currency, live, now):
-    earned = sum(i["commissionMinor"] for i in state["invoices"] if i["code"] == code and i["currency"] == currency and i["livemode"] == live and i["status"] in {"available", "pending"} and i["holdUntil"] <= now)
+    earned = sum(i["commissionMinor"] for i in state["invoices"] if i["code"] == code and i["currency"] == currency and i["livemode"] == live and not needs_refund_refresh(i) and i["status"] in {"available", "pending"} and i["holdUntil"] <= now)
     paid = sum(p["amountMinor"] for p in state["payouts"] if p["code"] == code and p["currency"] == currency and p["livemode"] == live)
     return earned - paid
 

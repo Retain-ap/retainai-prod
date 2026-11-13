@@ -46,13 +46,80 @@ class PartnerAccountingTests(unittest.TestCase):
 
     def test_refunds_disputes_and_unknown_allocations_never_overpay(self):
         i = invoice(); first = i["status_transitions"]["paid_at"]
-        self.assertEqual(ledger.calculate(i, charge(refunded=1130), 2000, first, first+3000000)["commissionMinor"], 300)
+        self.assertEqual(ledger.calculate(i, charge(refunded=1130), 2000, first, first+3000000, ["price_base"])["commissionMinor"], 300)
         self.assertEqual(ledger.calculate(i, charge(refunded=2260), 2000, first, first+3000000)["commissionMinor"], 0)
         for mutation in ({"disputed": True}, {"customer": "cus_else"}, {"livemode": True}, {"captured": False}, {"currency": "usd"}):
             result = ledger.calculate(i, {**charge(), **mutation}, 2000, first, first+3000000)
             self.assertEqual((result["commissionMinor"], result["status"]), (0, "review"))
         i["post_payment_credit_notes_amount"] = 50
         self.assertEqual(ledger.calculate(i, charge(), 2000, first, first+3000000)["status"], "review")
+
+    def test_partial_mixed_refunds_hold_without_guessing_base_or_addon_allocation(self):
+        i = invoice(total=3000)
+        i["total_excluding_tax"] = 3000
+        i["lines"]["data"].append({"amount": 1000, "pricing": {"price_details": {"price": "price_addon"}}})
+        first, now = i["status_transitions"]["paid_at"], 1800000000
+        for refunded in (1000, 2000):
+            result = ledger.calculate(i, charge(3000, refunded), 2000, first, now, ["price_base"])
+            self.assertEqual((result["status"], result["commissionMinor"]), ("review", 0))
+            self.assertIn("Partial refund allocation", result["reason"])
+        full = ledger.calculate(i, charge(3000, 3000), 2000, first, now, ["price_base"])
+        self.assertEqual((full["status"], full["commissionMinor"]), ("available", 0))
+        self.assertEqual(ledger.calculate(i, charge(3000), 2000, first, now, ["price_base"])["commissionMinor"], 600)
+        # Tax alone does not make a membership invoice mixed.
+        base_only = ledger.calculate(invoice(), charge(refunded=1130), 2000, first, now, ["price_base"])
+        self.assertEqual((base_only["status"], base_only["commissionMinor"]), ("available", 300))
+        self.assertEqual(ledger.calculate(invoice(), charge(refunded=1130), 2000, first, now)["status"], "review")
+        for data in ([], [{**invoice()["lines"]["data"][0], "amount": 0}]):
+            missing_base = {**invoice(), "lines": {"has_more": False, "data": data}}
+            self.assertEqual(ledger.calculate(missing_base, charge(refunded=1130), 2000, first, now, ["price_base"])["status"], "review")
+        i["total_excluding_tax"] = 2000
+        i["lines"]["data"].append({"amount": -1000})
+        self.assertEqual(ledger.calculate(i, charge(3000, 1000), 2000, first, now, ["price_base"])["status"], "review")
+
+    def test_legacy_refunds_hold_owner_export_and_recording_until_safe_refresh(self):
+        ledger.bind_customer("member@example.com", "cus_example", "salon-coach", "2026-01-01", False)
+        first = invoice()["status_transitions"]["paid_at"]
+        prior = {**ledger.calculate(invoice(), charge(), 2000, first, int(time.time())), "customerId": "cus_example",
+            "code": "salon-coach", "livemode": False, "commissionMinor": 300, "reason": "Refund adjusted"}
+        del prior["refundAllocationVersion"]
+        payout = {"code": "salon-coach", "currency": "cad", "livemode": False, "amountMinor": 100, "reference": "historical-payment", "recordedAt": first}
+        with ledger.state_write() as state:
+            state["referrals"][0].update({"firstPaidAt": first, "syncedAt": int(time.time()), "error": ""})
+            state["invoices"] = [prior, {**prior, "invoiceId": "in_legacyzero", "commissionMinor": 0}]; state["payouts"] = [payout]
+            self.assertEqual(ledger.available(state, "salon-coach", "cad", False, int(time.time())), -100)
+        current_invoice = invoice(total=3000)
+        current_invoice["total_excluding_tax"] = 3000
+        current_invoice["lines"]["data"].append({"amount": 1000, "pricing": {"price_details": {"price": "price_addon"}}})
+        refunded = 1000
+        def provider(path):
+            if path.startswith("invoices?"): return {"data": [current_invoice], "has_more": False}
+            if path.startswith("invoice_payments?"): return {"data": [{"invoice": "in_one", "livemode": False, "amount_paid": current_invoice["total"], "payment": {"payment_intent": "pi_example"}}], "has_more": False}
+            if path.startswith("payment_intents/"): return {"latest_charge": charge(current_invoice["total"], refunded)}
+            raise AssertionError(path)
+        with patch.object(ledger, "_require_owner", return_value=("owner@retainai.ca", None)), patch.object(ledger, "bind_known_customers"), patch.object(ledger, "stripe_get", provider):
+            data = self.client.get("/api/owner/partners").get_json()
+            self.assertEqual((data["invoices"][0]["status"], data["invoices"][0]["commissionMinor"]), ("review", 0))
+            self.assertEqual(data["invoices"][0]["previousCommissionMinor"], 300)
+            self.assertEqual(data["invoices"][1]["status"], "review")
+            self.assertEqual(data["invoices"][1]["previousCommissionMinor"], 0)
+            self.assertEqual(data["balances"][0]["amountMinor"], -100); self.assertEqual(data["payouts"], [payout])
+            record = {"op": "record", "code": "salon-coach", "currency": "cad", "amountMinor": 200, "reference": "must-not-record"}
+            response = self.client.post("/api/owner/partners", json=record)
+            self.assertEqual(response.status_code, 400); self.assertIn("review holds", response.get_json()["error"])
+            ledger.sync_customer("cus_example"); ledger.sync_customer("cus_example")
+            self.assertEqual(len(ledger.read_state()["invoices"]), 1)
+            self.assertEqual(ledger.read_state()["invoices"][0]["status"], "review")
+            self.assertEqual(self.client.post("/api/owner/partners", json=record).status_code, 400)
+            current_invoice = invoice(); refunded = 1130
+            ledger.sync_customer("cus_example")
+            restored = self.client.get("/api/owner/partners").get_json()
+            self.assertEqual((restored["invoices"][0]["status"], restored["invoices"][0]["commissionMinor"]), ("available", 300))
+            self.assertEqual(restored["invoices"][0]["refundAllocationVersion"], 1)
+            self.assertEqual(restored["balances"][0]["amountMinor"], 200)
+            self.assertEqual(restored["referrals"][0]["firstPaidAt"], first)
+            self.assertEqual(self.client.post("/api/owner/partners", json={**record, "reference": "reconciled-fixture"}).status_code, 200)
+            self.assertEqual(len(ledger.read_state()["payouts"]), 2)
 
     def test_zero_trials_hold_and_exact_anniversary(self):
         i = invoice(); first = i["status_transitions"]["paid_at"]
