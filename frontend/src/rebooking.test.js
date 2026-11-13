@@ -146,3 +146,39 @@ test("creating a contact (which stamps last_contacted) does not count as followi
   expect(item.contactedRecently).toBe(false);
   expect(dueForRebooking([item])).toHaveLength(1);
 });
+
+describe("outreach days are compared in the workspace's own time zone", () => {
+  // Visits on Oct 1 with a 28-day barber default: due Oct 29, so overdue on Nov 6.
+  const suggest = (lastOutreachAt, timeZone) => {
+    const lead = { id: "x", last_outreach_at: lastOutreachAt };
+    return rebookingSuggestions({ leads: [lead], appointments: [done(lead, "2026-10-01")], user: { businessType: "Barber shop" }, today, timeZone })[0];
+  };
+
+  test("a Toronto evening follow-up (already tomorrow in UTC) counts today, not tomorrow", () => {
+    const item = suggest("2026-11-07T01:30:00Z", "America/Toronto"); // Nov 6, 8:30 pm in Toronto
+    expect(item).toMatchObject({ contactedOn: "2026-11-06", waitingUntil: "2026-11-13", contactedRecently: true });
+    expect(dueForRebooking([item])).toEqual([]);
+    expect(waitingToBook([item])).toHaveLength(1);
+  });
+
+  test("an Auckland morning follow-up (still yesterday in UTC) uses the Auckland day at the 7-day boundary", () => {
+    const item = suggest("2026-10-30T12:30:00Z", "Pacific/Auckland"); // Oct 31, 1:30 am in Auckland: 6 days ago
+    expect(item).toMatchObject({ contactedOn: "2026-10-31", contactedRecently: true });
+    expect(waitingToBook([item])).toHaveLength(1);
+  });
+
+  test("seven local days after the follow-up the customer is back on the list", () => {
+    const sevenDaysAgo = suggest("2026-10-31T00:30:00Z", "America/Toronto"); // Oct 30, 8:30 pm in Toronto
+    expect(sevenDaysAgo).toMatchObject({ contactedOn: "2026-10-30", waitingUntil: "2026-11-06", contactedRecently: false });
+    expect(dueForRebooking([sevenDaysAgo])).toHaveLength(1);
+    const sixDaysAgo = suggest("2026-10-31T23:30:00Z", "America/Toronto"); // Oct 31, 7:30 pm in Toronto
+    expect(sixDaysAgo).toMatchObject({ contactedOn: "2026-10-31", contactedRecently: true });
+    expect(dueForRebooking([sixDaysAgo])).toEqual([]);
+  });
+
+  test("a follow-up later in the workspace's future day is not counted yet", () => {
+    // 11 pm Nov 6 in Auckland is still Nov 6 for an Auckland workspace, but Nov 7 for one in London.
+    expect(suggest("2026-11-06T10:00:00Z", "Pacific/Auckland").contactedOn).toBe("2026-11-06");
+    expect(suggest("2026-11-07T10:00:00Z", "Europe/London").contactedOn).toBe("");
+  });
+});

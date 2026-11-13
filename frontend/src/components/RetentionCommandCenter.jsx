@@ -115,7 +115,7 @@ export default function RetentionCommandCenter({ leads = [], appointments = [], 
   const healthy = enriched.filter((item) => ["healthy", "vip"].includes(item.health.kind));
   const workspaceTimeZone = user?.timezone || getBrowserTimeZone();
   const rebooking = useMemo(
-    () => rebookingSuggestions({ leads, appointments, user, today: dayKeyNow(workspaceTimeZone) }),
+    () => rebookingSuggestions({ leads, appointments, user, today: dayKeyNow(workspaceTimeZone), timeZone: workspaceTimeZone }),
     [leads, appointments, user, workspaceTimeZone]
   );
   const salonPreset = user?.setup_preset === "salon_barber";

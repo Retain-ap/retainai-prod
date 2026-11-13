@@ -216,3 +216,35 @@ describe("opening from the rebooking list", () => {
     expect(sessionStorage.getItem(heldDraftScope("ai-studio", { email: "owner@example.com" }))).not.toBeNull();
   });
 });
+
+describe("opening from the rebooking list with the dashboard clearing the request", () => {
+  afterEach(() => sessionStorage.clear());
+
+  function Host({ focus }) {
+    // Mirrors CrmDashboard: the request is cleared once AI Studio applies it.
+    const [initialFocus, setInitialFocus] = React.useState(focus);
+    return <AiPromptsDashboard leads={[lead, { id: "lead-2", name: "Riley", email: "riley@example.com" }]} user={{ email: "owner@example.com" }}
+      initialFocus={initialFocus} onFocusApplied={() => setInitialFocus(null)} />;
+  }
+
+  test("an older held draft never replaces the customer and context just requested", async () => {
+    const scope = heldDraftScope("ai-studio", { email: "owner@example.com" });
+    holdDraft(scope, { leadId: "lead-2", draft: "Older held words.", context: "Older context", playbook: "reengage" });
+    render(<Host focus={{ leadId: "lead-1", playbook: "followup", context: "Due to rebook: last completed visit Oct 1." }} />);
+    expect(await screen.findByDisplayValue("Due to rebook: last completed visit Oct 1.")).toBeInTheDocument();
+    // Let the cleared request re-run every effect.
+    await act(async () => { await new Promise((resolve) => setTimeout(resolve, 20)); });
+    expect(screen.getByDisplayValue("Due to rebook: last completed visit Oct 1.")).toBeInTheDocument();
+    expect(screen.queryByDisplayValue("Older held words.")).not.toBeInTheDocument();
+    expect(screen.queryByDisplayValue("Older context")).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /Follow-up/ })).toHaveClass("active");
+    expect(sessionStorage.getItem(scope)).not.toBeNull();
+  });
+
+  test("without a request, a held draft is still restored as before", async () => {
+    const scope = heldDraftScope("ai-studio", { email: "owner@example.com" });
+    holdDraft(scope, { leadId: "lead-2", draft: "Held words.", playbook: "reengage" });
+    render(<Host focus={null} />);
+    expect(await screen.findByDisplayValue("Held words.")).toBeInTheDocument();
+  });
+});

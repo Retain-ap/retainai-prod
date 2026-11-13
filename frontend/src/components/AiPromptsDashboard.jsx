@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import { FaCheck, FaCopy, FaMagic, FaPaperPlane, FaSearch, FaShieldAlt } from "react-icons/fa";
 import { apiUrl } from "../apiBase";
 import { BUSINESS_SETTINGS_PATH, HELD_DRAFT_MAX_CHARS, consumeHeldDraft, heldDraftScope, holdDraft, isBusinessProfileRequired, peekHeldDraft } from "../businessProfile";
@@ -57,9 +57,13 @@ export default function AiPromptsDashboard({ leads = [], user = {}, onSendAIProm
   // Put back a draft held while the owner went to Settings to add a business name.
   // It is removed only after it is back on screen for this account's same
   // customer; while customers are still loading it stays where it is.
+  // Set once a rebooking focus has been applied in this visit, so clearing the
+  // focus afterwards cannot let an older held draft replace the chosen customer.
+  const focusAppliedRef = useRef(false);
+
   useEffect(() => {
     // A customer chosen from the rebooking list wins; a held draft stays stored for later.
-    if (initialFocus) return;
+    if (initialFocus || focusAppliedRef.current) return;
     const held = peekHeldDraft(heldScope);
     if (!held) return;
     const lead = leads.find((item) => String(item.id) === String(held.leadId));
@@ -79,6 +83,7 @@ export default function AiPromptsDashboard({ leads = [], user = {}, onSendAIProm
     if (!initialFocus?.leadId || !leads.length) return;
     const lead = leads.find((item) => String(item.id) === String(initialFocus.leadId));
     if (lead) {
+      focusAppliedRef.current = true;
       setFocusedLead(lead);
       if (PLAYBOOKS.some((playbook) => playbook.key === initialFocus.playbook)) setActivePlaybook(initialFocus.playbook);
       setContext(String(initialFocus.context || "").slice(0, 800));

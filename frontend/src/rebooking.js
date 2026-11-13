@@ -7,6 +7,8 @@
 //   3. the typical interval across this workspace's customers
 //   4. a default for the business type (salon/barber presets, else general)
 
+import { dayKeyNow } from "./components/appointmentDateTime";
+
 const DAY = 24 * 60 * 60 * 1000;
 // After the owner contacts a due customer, give them this long to book before
 // the customer comes back to the "contact now" list.
@@ -96,9 +98,10 @@ function formatDay(ms) {
 
 /**
  * Suggestions for every contact with at least one completed visit.
- * `today` is a YYYY-MM-DD string in the workspace's timezone.
+ * `today` is a YYYY-MM-DD string in the workspace's timezone, and `timeZone`
+ * is that zone, so outreach instants are compared as the same local days.
  */
-export function rebookingSuggestions({ leads = [], appointments = [], user, today }) {
+export function rebookingSuggestions({ leads = [], appointments = [], user, today, timeZone = "UTC" }) {
   const todayMs = dayStart(today);
   const visits = visitsByLead(appointments, todayMs);
   const kind = businessKind(user);
@@ -148,7 +151,9 @@ export function rebookingSuggestions({ leads = [], appointments = [], user, toda
     // Only real outreach (a delivered follow-up or the owner marking the contact)
     // after the last completed visit counts. last_contacted is not used: it is
     // also stamped when a contact is first created.
-    const contactDay = dayStart(lead?.last_outreach_at);
+    // last_outreach_at is a UTC instant: take its calendar day in the workspace
+    // zone, the same zone `today` uses (a Toronto evening is already tomorrow in UTC).
+    const contactDay = lead?.last_outreach_at ? dayStart(dayKeyNow(timeZone, lead.last_outreach_at)) : null;
     const contacted = contactDay !== null && contactDay > lastVisit && contactDay <= todayMs ? contactDay : null;
     out.push({
       lead,
