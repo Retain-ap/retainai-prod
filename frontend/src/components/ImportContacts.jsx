@@ -73,6 +73,8 @@ function ImportWorkspace({ user, focusGoogle = false, initialSource = "apple" })
   const [tag, setTag] = useState("Imported");
   const [plan, setPlan] = useState(null);
   const [planning, setPlanning] = useState(false);
+  const [reviewError, setReviewError] = useState("");
+  const [reviewAttempt, setReviewAttempt] = useState(0);
   const [filter, setFilter] = useState("all");
   const [result, setResult] = useState(null);
   const [googleResult, setGoogleResult] = useState(null);
@@ -149,31 +151,51 @@ function ImportWorkspace({ user, focusGoogle = false, initialSource = "apple" })
   useEffect(() => {
     if (!preview || !dirty.current) return undefined;
     const seq = ++planSeq.current;
-    if (!hasChannel) { setPlan(null); setPlanning(false); return undefined; }
+    setPlan(null);
+    setReviewError("");
+    if (!hasChannel) { setPlanning(false); return undefined; }
     setPlanning(true);
     const timer = window.setTimeout(async () => {
       try {
         const data = await request("import/file/commit", {
           method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload({ dry_run: true })),
         }, userEmail);
-        if (seq === planSeq.current) setPlan({ summary: data.summary, outcomes: data.outcomes || [] });
+        if (seq === planSeq.current) setPlan({ sequence: seq, summary: data.summary, outcomes: data.outcomes || [] });
       } catch (err) {
-        if (seq === planSeq.current) setError(err.message);
+        if (seq === planSeq.current) setReviewError(err.message);
       } finally {
         if (seq === planSeq.current) setPlanning(false);
       }
     }, 400);
     return () => window.clearTimeout(timer);
-  }, [preview, hasChannel, payload, userEmail]);
+  }, [preview, hasChannel, payload, userEmail, reviewAttempt]);
+
+  function invalidateReview() {
+    // Invalidate synchronously: an old response or click cannot reuse this plan
+    // while React is applying the edited inputs and scheduling their recount.
+    planSeq.current += 1;
+    setPlan(null); setReviewError(""); setPlanning(true);
+    setReviewAttempt((value) => value + 1);
+  }
 
   function edited(setter) {
-    return (value) => { dirty.current = true; setter(value); };
+    return (value) => {
+      if (!mounted.current || operation.current) return;
+      dirty.current = true;
+      invalidateReview();
+      setter(value);
+    };
+  }
+
+  function retryReview() {
+    if (!mounted.current || operation.current || !preview || !hasChannel) return;
+    invalidateReview();
   }
 
   function clearPreview() {
     planSeq.current += 1;
     dirty.current = false;
-    setPreview(null); setRows([]); setPlan(null); setPlanning(false); setFile(null);
+    setPreview(null); setRows([]); setPlan(null); setPlanning(false); setReviewError(""); setFile(null);
   }
 
   async function createPreview(selected) {
@@ -189,7 +211,7 @@ function ImportWorkspace({ user, focusGoogle = false, initialSource = "apple" })
       // The server preview uses these defaults; later edits trigger a recount.
       setCountryCode("+1"); setDuplicateMode("skip");
       setPreview(data); setRows(data.rows || []); setMapping(data.mapping || {});
-      setPlan({ summary: data.summary, outcomes: data.outcomes || [] });
+      setPlan({ sequence: planSeq.current, summary: data.summary, outcomes: data.outcomes || [] });
     } catch (err) {
       if (currentOperation(token)) { setFile(null); setError(err.message); }
     } finally {
@@ -199,6 +221,7 @@ function ImportWorkspace({ user, focusGoogle = false, initialSource = "apple" })
   }
 
   async function commit() {
+    if (!plan || plan.sequence !== planSeq.current || !hasChannel || !ready || planning) return;
     const token = beginOperation("commit");
     if (!token) return;
     setError("");
@@ -314,8 +337,12 @@ function ImportWorkspace({ user, focusGoogle = false, initialSource = "apple" })
         </div></div>
 
         <div className="import-summary ra-keep-grid" aria-live="polite" data-testid="import-summary">
-          {[["New", summary.imported], ["Update", (summary.updated || 0) + (summary.merged || 0)], ["Skip", summary.skipped], ["Needs fixing", summary.invalid]].map(([label, value]) => <div key={label}><strong>{planning ? "…" : value || 0}</strong><span>{label}</span></div>)}
+          {[["New", summary.imported], ["Update", (summary.updated || 0) + (summary.merged || 0)], ["Skip", summary.skipped], ["Needs fixing", summary.invalid]].map(([label, value]) => <div key={label}><strong>{planning ? "…" : plan ? value || 0 : "—"}</strong><span>{label}</span></div>)}
         </div>
+        {reviewError && <div className="product-alert danger" role="alert">
+          <p>Review could not be updated. {reviewError} Retry the review before importing these contacts.</p>
+          <button type="button" className="product-button" disabled={Boolean(busy) || planning || !hasChannel} onClick={retryReview}>Retry review</button>
+        </div>}
 
         <h3 className="import-subhead">Match columns</h3>
         <div className="mapping-grid">{FIELDS.map(([key, label]) => <label key={key}>{label}<select className="product-input" disabled={Boolean(busy)} value={mapping[key] || ""} onChange={(event) => edited(setMapping)({ ...mapping, [key]: event.target.value })}><option value="">Not imported</option>{preview.headers.map((header) => <option key={header} value={header}>{header}</option>)}</select></label>)}</div>
@@ -324,7 +351,7 @@ function ImportWorkspace({ user, focusGoogle = false, initialSource = "apple" })
         <div className="import-options">
           <label>Country code for local numbers<input className="product-input" disabled={Boolean(busy)} value={countryCode} inputMode="tel" onChange={(event) => edited(setCountryCode)(event.target.value)} /></label>
           <label>If a contact already exists<select className="product-input" disabled={Boolean(busy)} value={duplicateMode} onChange={(event) => edited(setDuplicateMode)(event.target.value)}><option value="skip">Skip it</option><option value="merge">Fill in its blank fields</option><option value="update">Replace with file values</option></select></label>
-          <label>Tag imported contacts<input className="product-input" disabled={Boolean(busy)} value={tag} maxLength={80} onChange={(event) => setTag(event.target.value)} /></label>
+          <label>Tag imported contacts<input className="product-input" disabled={Boolean(busy)} value={tag} maxLength={80} onChange={(event) => edited(setTag)(event.target.value)} /></label>
         </div>
         <div className="product-alert import-consent" role="note" data-testid="import-consent">
           <strong>Email consent</strong>
