@@ -348,6 +348,8 @@ function CrmDashboard({ authenticatedUser }) {
   const [highlightLeadIds, setHighlightLeadIds] = useState([]);
   // A customer to open in AI Studio from the rebooking list (nothing is sent until reviewed).
   const [studioFocus, setStudioFocus] = useState(null);
+  // Stable, so AI Studio's focus effect does not re-run on every dashboard render.
+  const clearStudioFocus = useCallback(() => setStudioFocus(null), []);
   const [loadingLeads, setLoadingLeads] = useState(false);
   const [leadPersistenceError, setLeadPersistenceError] = useState("");
   const [deletingLeadId, setDeletingLeadId] = useState(null);
@@ -1604,7 +1606,7 @@ function CrmDashboard({ authenticatedUser }) {
             onSendAIPromptEmail={handleSendAIPromptEmail}
             onOpenBusinessSettings={openBusinessSettings}
             initialFocus={studioFocus}
-            onFocusApplied={() => setStudioFocus(null)}
+            onFocusApplied={clearStudioFocus}
           />
         )}
 

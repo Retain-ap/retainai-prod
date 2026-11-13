@@ -60,7 +60,7 @@ test("a due customer can be drafted for review or marked contacted; nothing is s
   expect(onDraftFollowUp).toHaveBeenCalledTimes(1);
   const [lead, context] = onDraftFollowUp.mock.calls[0];
   expect(lead).toBe(ana);
-  expect(context).toMatch(/^Due to rebook: last completed visit .+; usually every 30 days\.$/);
+  expect(context).toMatch(/^Due to rebook: last completed visit .+; they usually return about every 30 days \(measured from their completed visits\)\.$/);
 
   fireEvent.click(screen.getByRole("button", { name: "Mark contacted" }));
   await waitFor(() => expect(onMarkContacted).toHaveBeenCalledWith(ana));
@@ -196,4 +196,41 @@ test("the salon preset adds a checklist, count-only metrics and review-only play
   fireEvent.click(screen.getAllByRole("button", { name: "Review this playbook" })[0]);
   expect(onOpenAutomations).toHaveBeenCalledWith("rebook");
   expect(screen.getAllByText(/Nothing is sent until you activate it/).length).toBeGreaterThan(0);
+});
+
+describe("draft context only calls a measured visit pattern the customer's habit", () => {
+  const draftContextFor = (lead, visits) => {
+    const onDraftFollowUp = jest.fn();
+    const { unmount } = render(<RetentionCommandCenter leads={[lead]} appointments={visits} user={{ timezone: "UTC" }} onDraftFollowUp={onDraftFollowUp} />);
+    fireEvent.click(screen.getByRole("tab", { name: "Revenue Opportunities" }));
+    fireEvent.click(screen.getByRole("button", { name: "Draft follow-up" }));
+    unmount();
+    return onDraftFollowUp.mock.calls[0][1];
+  };
+
+  test("one completed visit uses a labelled standard interval, never 'usually'", () => {
+    const single = { id: "s", name: "Sol Single", email: "sol@example.com" };
+    const context = draftContextFor(single, [completed(single, 90)]);
+    expect(context).toMatch(/only one completed visit recorded; planning uses a standard 60-day interval, not a habit of this customer\.$/);
+    expect(context).not.toMatch(/usually/);
+  });
+
+  test("an owner-set interval is attributed to the owner, not the customer", () => {
+    const owned = { id: "o", name: "Oli Owner", email: "oli@example.com", rebook_interval_days: 21 };
+    const context = draftContextFor(owned, [completed(owned, 90)]);
+    expect(context).toMatch(/the owner set a 21-day rebooking interval for this customer\.$/);
+    expect(context).not.toMatch(/usually/);
+  });
+
+  test("two visits describe the single measured gap, not a habit", () => {
+    const pair = { id: "p", name: "Pat Pair", email: "pat@example.com" };
+    const context = draftContextFor(pair, [completed(pair, 100), completed(pair, 60)]);
+    expect(context).toMatch(/one gap of 40 days between their two completed visits so far\.$/);
+    expect(context).not.toMatch(/usually/);
+  });
+
+  test("three or more visits may state the measured cadence", () => {
+    const context = draftContextFor(ana, appointments);
+    expect(context).toMatch(/they usually return about every 30 days \(measured from their completed visits\)\.$/);
+  });
 });

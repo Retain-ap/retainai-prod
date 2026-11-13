@@ -95,9 +95,20 @@ function recordedValue(lead) {
   return null;
 }
 
-/** Factual context for a drafted follow-up, taken only from recorded visits. */
+/**
+ * Factual context for a drafted follow-up. It says where the interval comes
+ * from: only a measured visit pattern may be described as the customer's habit.
+ */
 function followUpContext(rebook) {
-  return `Due to rebook: last completed visit ${shortDay(rebook.lastVisit)}; usually every ${rebook.intervalDays} days.`;
+  const days = rebook.intervalDays;
+  const basis = {
+    personal: `they usually return about every ${days} days (measured from their completed visits)`,
+    personal_single: `one gap of ${days} days between their two completed visits so far`,
+    override: `the owner set a ${days}-day rebooking interval for this customer`,
+    workspace: `only one completed visit recorded; planning uses this business's typical ${days}-day interval, not a habit of this customer`,
+    default: `only one completed visit recorded; planning uses a standard ${days}-day interval, not a habit of this customer`,
+  }[rebook.basis] || `planning uses a ${days}-day interval`;
+  return `Due to rebook: last completed visit ${shortDay(rebook.lastVisit)}; ${basis}.`;
 }
 
 export default function RetentionCommandCenter({ leads = [], appointments = [], user, onOpenAutomations, onOpenMessages, onUpdateLead, onOpenImports, onOpenAppointments, onDraftFollowUp, onMarkContacted }) {

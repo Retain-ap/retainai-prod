@@ -182,3 +182,11 @@ describe("outreach days are compared in the workspace's own time zone", () => {
     expect(suggest("2026-11-07T10:00:00Z", "Europe/London").contactedOn).toBe("");
   });
 });
+
+test("reviewer case: a Toronto follow-up at 10 pm Nov 12 (03:00 UTC Nov 13) is waiting on Nov 12, not due", () => {
+  const lead = { id: "r", last_outreach_at: "2026-11-13T03:00:00Z" };
+  const suggestions = rebookingSuggestions({ leads: [lead], appointments: [done(lead, "2026-10-01")], user: { businessType: "Barber shop" }, today: "2026-11-12", timeZone: "America/Toronto" });
+  expect(suggestions[0].daysUntilDue).toBeLessThan(0); // overdue since Oct 29
+  expect(dueForRebooking(suggestions)).toHaveLength(0);
+  expect(waitingToBook(suggestions)).toHaveLength(1);
+});
