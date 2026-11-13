@@ -313,7 +313,7 @@ def calendly_sync():
         return jsonify({"error": "Calendly connection details can't be read right now."}), 503
 
     index = cal.email_index(load_user_leads(workspace))
-    timezone_name = ctx["owner"].get("timezone") or "UTC"
+    timezone_name = ctx["timezone"]
     finished = step["state"] in ("complete", "truncated")
     results = {"events": step["events"], "invitees": len(step["pairs"]), "imported": 0, "updated": 0, "unchanged": 0,
                "unmatched": 0, "skipped": 0, "cancelled": 0, "rescheduled": 0,

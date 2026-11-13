@@ -84,6 +84,7 @@ def _owner_context():
         return None, (jsonify({"error": "owner_required"}), 403)
     workspace = vr._email(workspace)
     return {"email": email, "workspace": workspace, "owner": owner or {}, "account_id": account_id or "",
+            "timezone": core._workspace_appointment_timezone(workspace),
             "guard": workspace_guard(workspace, vr.workspace_generation(owner))}, None
 
 
@@ -93,7 +94,7 @@ def _receipt_for(ctx):
     args = request.args
     window_days = vr.parse_window(args.get("window_days"))
     start, end, since, until, zone = vr.parse_period(
-        args.get("since"), args.get("until"), ctx["owner"].get("timezone"), _now()
+        args.get("since"), args.get("until"), ctx["timezone"], _now()
     )
     workspace = ctx["workspace"]
     notifications = (core.load_notifications() or {}).get(workspace) or []
@@ -203,7 +204,7 @@ def record_payment():
 
         record, created = revenue_store.add_manual(
             ctx["workspace"], body, lead=lead, recorded_by=ctx["email"], now=_now(),
-            timezone_name=ctx["owner"].get("timezone") or "UTC",
+            timezone_name=ctx["timezone"],
             bookings=(core.load_appointments() or {}).get(ctx["workspace"]) or [], guard=ctx["guard"],
         )
     except vr.EvidenceError as exc:

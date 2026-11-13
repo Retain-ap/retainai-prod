@@ -13,6 +13,7 @@ import {
 } from "react-icons/fa";
 import { API_BASE } from "../apiBase";
 import { getWorkspaceEmail } from "../workspaceIdentity";
+import { appointmentStatus, appointmentTimezoneLabel } from "./appointmentStatus";
 import { createLeadsApi, diffLeads, hasChanges, saveFreshLeadChanges } from "../leadSync";
 import {
   addDaysToDateKey,
@@ -175,7 +176,7 @@ function normalizeBackend(raw, fallbackTimezone = "") {
   const timeZone = raw?.timezone || fallbackTimezone;
   const parts = appointmentDateTimeParts(raw?.appointment_time, timeZone);
   if (!dt || !parts) return null;
-  const status = normText(raw?.status).replace(/-/g, "_");
+  const status = appointmentStatus(raw);
 
   return {
     _backend: raw,
@@ -186,8 +187,8 @@ function normalizeBackend(raw, fallbackTimezone = "") {
     timeZone,
     sortKey: dt.getTime(),
     status,
-    cancelled: status === "cancelled" || status === "canceled",
-    done: !!(raw.done ?? raw.completed ?? raw.is_done) || status === "completed",
+    cancelled: status === "cancelled",
+    done: status !== "scheduled",
     notes: raw.notes || "",
     lead: {
       id: raw.lead_id || "",
@@ -217,7 +218,6 @@ function getAppointments(leads = [], backendRows = [], fallbackTimezone = "") {
 
   const backendSignatures = new Set();
   (backendRows || []).forEach((appointment) => {
-    if (appointment.cancelled) return;
     const dt = parseDateSafe(appointment?._backend?.appointment_time) ||
       parseDateSafe(`${appointment.date}T${appointment.time || "00:00"}`);
     if (!dt) return;
@@ -241,8 +241,11 @@ function getAppointments(leads = [], backendRows = [], fallbackTimezone = "") {
     (lead.appointments || []).forEach((app, idx) => {
       const dt = parseDateSafe(`${app.date}T${app.time || "00:00"}`);
       if (!dt) return;
+      const status = appointmentStatus(app);
       const normalized = {
         ...app,
+        status,
+        done: status !== "scheduled",
         _local: true,
         _localKey: localAppointmentKey(lead.id, app, idx),
         _hasStoredKey: Boolean(app._localKey),
@@ -250,7 +253,7 @@ function getAppointments(leads = [], backendRows = [], fallbackTimezone = "") {
         timeZone: fallbackTimezone,
         sortKey: dt.getTime(),
         isOverdue:
-          !app.done &&
+          status === "scheduled" &&
           compareAppointmentToNow(app.date, app.time || "00:00", fallbackTimezone, now) < 0,
       };
       if (!backendSignatures.has(normalizedSignature(normalized))) list.push(normalized);
@@ -262,10 +265,18 @@ function getAppointments(leads = [], backendRows = [], fallbackTimezone = "") {
 }
 
 function categorize(appointments) {
-  const buckets = { overdue: [], today: [], next7: [], later: [], done: [] };
+  const buckets = { overdue: [], today: [], next7: [], later: [], done: [], cancelled: [], noShow: [] };
   const now = new Date();
 
   appointments.forEach((a) => {
+    if (a.status === "cancelled") {
+      buckets.cancelled.push(a);
+      return;
+    }
+    if (a.status === "no_show") {
+      buckets.noShow.push(a);
+      return;
+    }
     if (a.done) {
       buckets.done.push(a);
       return;
@@ -294,6 +305,8 @@ function monthLabel(dateStr) {
 }
 
 function statusMeta(appt) {
+  if (appt.status === "cancelled") return { label: "Cancelled", color: SUBTEXT };
+  if (appt.status === "no_show") return { label: "No-show", color: RED };
   if (appt.done) return { label: "Done", color: GREEN };
   if (appt.isOverdue) return { label: "Overdue", color: RED };
   return { label: "Scheduled", color: GOLD };
@@ -676,17 +689,13 @@ export default function Appointments({ user, leads = [], setLeads, saveLeads }) 
     const sid = serverIdOf(appt);
     if (!userEmail || !sid) throw new Error("This appointment is missing its server ID.");
 
+    const status = updates.status || (updates.done === true ? "completed" : updates.done === false ? "scheduled" : undefined);
     const body = {
       ...updates,
       done: updates.done,
       is_done: updates.done,
-      completed: updates.done,
-      status:
-        updates.done === true
-          ? "completed"
-          : updates.done === false
-          ? "scheduled"
-          : undefined,
+      completed: status ? status === "completed" : undefined,
+      status,
       appointment_time: updates.appointment_time,
       date: updates.appointment_time ? updates.appointment_time.slice(0, 10) : undefined,
       time: updates.appointment_time ? updates.appointment_time.slice(11, 16) : undefined,
@@ -755,6 +764,7 @@ export default function Appointments({ user, leads = [], setLeads, saveLeads }) 
   }
 
   async function toggleDone(appt) {
+    if (["cancelled", "no_show"].includes(appt.status)) return;
     const markingComplete = !appt.done;
     const actionId = `done:${keyFor(appt)}`;
     if (busyAction) return;
@@ -785,7 +795,7 @@ export default function Appointments({ user, leads = [], setLeads, saveLeads }) 
             ...l,
             appointments: (l.appointments || []).map((x, index) =>
               localAppointmentKey(l.id, x, index) === String(appt._localKey)
-                ? { ...x, done: !x.done }
+                ? { ...x, done: markingComplete, ...(x.status ? { status: markingComplete ? "completed" : "scheduled" } : {}) }
                 : x
             ),
           };
@@ -814,6 +824,7 @@ export default function Appointments({ user, leads = [], setLeads, saveLeads }) 
   async function saveVisitNote() {
     if (!noteAppointment) return;
     const capturedAt = new Date().toISOString();
+    const outcomeStatus = visitNote.outcome === "No-show" ? "no_show" : "completed";
     const lines = [
       `Visit outcome: ${visitNote.outcome}`,
       visitNote.details && `Service notes: ${visitNote.details.trim()}`,
@@ -831,6 +842,7 @@ export default function Appointments({ user, leads = [], setLeads, saveLeads }) 
         const previous = String(noteAppointment.notes || "").trim();
         await apiUpdateBackend(noteAppointment, {
           done: true,
+          status: outcomeStatus,
           title: noteAppointment.title,
           notes: [previous, summary].filter(Boolean).join("\n\n"),
         });
@@ -850,7 +862,7 @@ export default function Appointments({ user, leads = [], setLeads, saveLeads }) 
           if (!isBackend(noteAppointment)) {
             updated.appointments = (lead.appointments || []).map((item, index) => {
               return localAppointmentKey(lead.id, item, index) === String(noteAppointment._localKey)
-                ? { ...item, done: true, notes: [item.notes, summary].filter(Boolean).join("\n\n") }
+                ? { ...item, done: true, status: outcomeStatus, notes: [item.notes, summary].filter(Boolean).join("\n\n") }
                 : item;
             });
           }
@@ -868,6 +880,7 @@ export default function Appointments({ user, leads = [], setLeads, saveLeads }) 
   }
 
   async function reschedule(appt, days) {
+    if (["cancelled", "no_show"].includes(appt.status)) return;
     const actionId = `reschedule:${keyFor(appt)}`;
     if (busyAction) return;
     setBusyAction(actionId);
@@ -963,6 +976,7 @@ export default function Appointments({ user, leads = [], setLeads, saveLeads }) 
   }
 
   function beginEdit(appt) {
+    if (["cancelled", "no_show"].includes(appt.status)) return;
     setForm({
       leadId: String(appt.lead.id || ""),
       title: appt.title,
@@ -1262,7 +1276,7 @@ export default function Appointments({ user, leads = [], setLeads, saveLeads }) 
               cursor: "pointer",
             }}
           >
-            Completed
+            History
           </button>
         </div>
       </div>
@@ -1287,6 +1301,22 @@ export default function Appointments({ user, leads = [], setLeads, saveLeads }) 
         <div className="appointments-empty">
           <strong>No appointments yet</strong>
           <span>Add an appointment to start building your schedule.</span>
+        </div>
+      ) : null}
+
+      {!loadingAppointments && !appointmentsError && filtered.length > 0 && !showCompleted &&
+        buckets.overdue.length + buckets.today.length + buckets.next7.length + buckets.later.length === 0 ? (
+        <div className="appointments-empty">
+          <strong>No active appointments</strong>
+          <span>Completed visits, no-shows and cancelled appointments are in History.</span>
+        </div>
+      ) : null}
+
+      {!loadingAppointments && !appointmentsError && filtered.length > 0 && showCompleted &&
+        buckets.done.length + buckets.noShow.length + buckets.cancelled.length === 0 ? (
+        <div className="appointments-empty">
+          <strong>No appointment history yet</strong>
+          <span>Your scheduled appointments are in Active.</span>
         </div>
       ) : null}
 
@@ -1361,6 +1391,7 @@ export default function Appointments({ user, leads = [], setLeads, saveLeads }) 
           />
         </>
       ) : (
+        <>
         <Section
           title="Completed"
           color={GREEN}
@@ -1377,6 +1408,21 @@ export default function Appointments({ user, leads = [], setLeads, saveLeads }) 
             />
           )}
         />
+        <Section
+          title="No-shows"
+          color={RED}
+          subtitle="Appointments marked as not attended"
+          items={[...buckets.noShow].sort((a, b) => b.sortKey - a.sortKey)}
+          renderItem={(a) => <AppointmentCard appt={a} onDelete={() => remove(a)} disabled={!!busyAction} />}
+        />
+        <Section
+          title="Cancelled"
+          color={SUBTEXT}
+          subtitle="Cancelled appointments stay out of your active schedule"
+          items={[...buckets.cancelled].sort((a, b) => b.sortKey - a.sortKey)}
+          renderItem={(a) => <AppointmentCard appt={a} onDelete={() => remove(a)} disabled={!!busyAction} />}
+        />
+        </>
       )}
 
       {showModal && (
@@ -1604,6 +1650,8 @@ export default function Appointments({ user, leads = [], setLeads, saveLeads }) 
 function StatCard({ icon, label, value, color }) {
   return (
     <div
+      role="group"
+      aria-label={label}
       style={{
         background: CARD,
         border: `1px solid ${BORDER}`,
@@ -1690,6 +1738,8 @@ function AppointmentCard({ appt, onDone, onEdit, onDelete, onResched, disabled =
   return (
     <div
       className="appointment-card"
+      role="article"
+      aria-label={appt.title}
       style={{
         background: CARD,
         border: `1px solid ${BORDER}`,
@@ -1760,6 +1810,11 @@ function AppointmentCard({ appt, onDone, onEdit, onDelete, onResched, disabled =
           }}
         >
           <span>{appt.time ? `${monthLabel(appt.date)} • ${appt.time}` : monthLabel(appt.date)}</span>
+          {appt.time && appt.timeZone ? (
+            <span title={appt.timeZone} style={{ color: SUBTEXT, fontWeight: 600 }}>
+              {appointmentTimezoneLabel(appt.timeZone)}
+            </span>
+          ) : null}
           <span
             style={{
               background: "rgba(255,255,255,0.04)",
@@ -1801,6 +1856,7 @@ function AppointmentCard({ appt, onDone, onEdit, onDelete, onResched, disabled =
       </div>
 
       <div className="appointment-card-actions" style={{ display: "flex", gap: 8, flexWrap: "wrap", justifyContent: "flex-end" }}>
+        {onDone ? (
         <button
           onClick={onDone}
           disabled={disabled}
@@ -1816,7 +1872,9 @@ function AppointmentCard({ appt, onDone, onEdit, onDelete, onResched, disabled =
         >
           {appt.done ? "Undo" : "Done"}
         </button>
+        ) : null}
 
+        {onEdit ? (
         <button
           onClick={onEdit}
           disabled={disabled}
@@ -1832,6 +1890,7 @@ function AppointmentCard({ appt, onDone, onEdit, onDelete, onResched, disabled =
         >
           Edit
         </button>
+        ) : null}
 
         <button
           onClick={onDelete}

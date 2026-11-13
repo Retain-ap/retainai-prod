@@ -11,6 +11,7 @@ import unittest
 import uuid
 from unittest.mock import patch
 from urllib.parse import parse_qs, urlparse
+from zoneinfo import ZoneInfo
 
 _TEST_DATA = tempfile.TemporaryDirectory()
 os.environ.setdefault("DATA_ROOT", _TEST_DATA.name)
@@ -112,7 +113,7 @@ class CalendlyTests(unittest.TestCase):
         self.other = f"other-{uuid.uuid4().hex[:8]}@example.com"
         self.member = f"member-{uuid.uuid4().hex[:8]}@example.com"
         self.users = {
-            self.owner: {"email": self.owner, "role": "owner", "org_id": self.owner, "status": "active", "security_version": 0, "timezone": "America/Toronto"},
+            self.owner: {"email": self.owner, "role": "owner", "org_id": self.owner, "status": "active", "security_version": 0},
             self.other: {"email": self.other, "role": "owner", "org_id": self.other, "status": "active", "security_version": 0},
             self.member: {"email": self.member, "role": "member", "org_id": self.owner, "status": "active", "security_version": 0},
             f"user::{self.member}": {"email": self.member, "role": "member", "org_id": self.owner, "security_version": 0},
@@ -120,6 +121,8 @@ class CalendlyTests(unittest.TestCase):
         patcher = patch.object(retainai, "load_users", side_effect=lambda: self.users)
         patcher.start()
         self.addCleanup(patcher.stop)
+        # Automation preferences are stored separately from the login account.
+        retainai.save_user_profile(self.owner, {"timezone": "America/Toronto"})
         storage.save_user_leads(self.owner, [{"id": "ana", "name": "Ana", "email": "ana@example.com"}])
         storage.save_user_leads(self.other, [{"id": "xu", "name": "Xu", "email": "ana@example.com"}])
         self.fake = FakeCalendly()
@@ -295,6 +298,59 @@ class CalendlyTests(unittest.TestCase):
         data = retainai.load_appointments()
         data[self.owner][0].update(changes)
         retainai.save_appointments(data)
+
+    def test_sync_uses_profile_timezone_before_account_across_dst_and_date_rollover(self):
+        self.assertNotIn("timezone", self.users[self.owner])
+        self.users[self.owner]["timezone"] = "UTC"  # legacy account value must not win
+        cases = {
+            "BEFORE-DST": ("2026-11-01T04:30:00Z", "2026-11-01T00:30:00"),
+            "AFTER-DST": ("2026-11-01T08:30:00Z", "2026-11-01T03:30:00"),
+            "PREVIOUS-DAY": ("2026-11-02T02:30:00Z", "2026-11-01T21:30:00"),
+        }
+        self.fake.events = [dict(event(key, 1), start_time=start,
+                                 end_time=cal._iso(cal._utc(start) + dt.timedelta(minutes=10)))
+                            for key, (start, _) in cases.items()]
+        self.fake.invitees = {key: [invitee(key, "I1")] for key in cases}
+        fixed_now = dt.datetime(2026, 10, 31, 12, tzinfo=dt.timezone.utc)
+        with patch.object(app_calendly, "_now", return_value=fixed_now):
+            client, _, _ = self.connect()
+            with patch.object(retainai, "_workspace_appointment_timezone",
+                              wraps=retainai._workspace_appointment_timezone) as resolved:
+                response = self.sync(client)
+            self.assertEqual(response.status_code, 200)
+            resolved.assert_called_once_with(self.owner)
+        self.assertEqual(response.get_json()["imported"], 3)
+        rows = {row["calendly_event_id"]: row for row in self.appointments()}
+        for key, (start, local_time) in cases.items():
+            with self.subTest(event=key):
+                self.assertEqual((rows[key]["timezone"], rows[key]["appointment_time"]), ("America/Toronto", local_time))
+                self.assertEqual(rows[key]["calendly_start_utc"], start)
+
+    def test_resync_repairs_legacy_utc_time_without_changing_instant_notes_or_owner_status(self):
+        start = "2026-11-14T15:00:00Z"
+        self.fake.events = [dict(event("QA-TIME", 1), start_time=start, end_time="2026-11-14T15:10:00Z")]
+        self.fake.invitees = {"QA-TIME": [invitee("QA-TIME", "I1")]}
+        fixed_now = dt.datetime(2026, 11, 13, 8, tzinfo=dt.timezone.utc)
+        with patch.object(app_calendly, "_now", return_value=fixed_now):
+            client, _, _ = self.connect()
+            retainai.save_user_profile(self.owner, {"timezone": "UTC"})
+            self.assertEqual(self.sync(client).get_json()["imported"], 1)
+            original = self.appointments()[0]
+            original_id = original["id"]
+            self.strip_baseline(status="no-show", done=True, is_done=True, completed=False, notes="Owner's private note")
+            retainai.save_user_profile(self.owner, {"timezone": "America/Toronto"})
+            result = self.sync(client).get_json()
+            self.assertEqual((result["imported"], result["updated"], result["unchanged"]), (0, 1, 0))
+            self.assertEqual(len(self.appointments()), 1)
+            row = self.appointments()[0]
+            self.assertEqual((row["id"], row["lead_id"], row["calendly_start_utc"]), (original_id, "ana", start))
+            self.assertEqual((row["created_at"], row["updated_at"]), (original["created_at"], original["updated_at"]))
+            self.assertEqual((row["appointment_time"], row["timezone"]), ("2026-11-14T10:00:00", "America/Toronto"))
+            local = dt.datetime.fromisoformat(row["appointment_time"]).replace(tzinfo=ZoneInfo(row["timezone"]))
+            self.assertEqual(local.astimezone(dt.timezone.utc), cal._utc(start))
+            self.assertEqual((row["status"], row["notes"], row["completed"]), ("no-show", "Owner's private note", False))
+            again = self.sync(client).get_json()
+            self.assertEqual((again["imported"], again["updated"], again["unchanged"]), (0, 0, 1))
 
     def test_owner_status_and_notes_on_an_imported_booking_survive_re_sync(self):
         self.fake.events = [event("PAST", -2)]

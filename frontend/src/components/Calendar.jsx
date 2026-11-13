@@ -13,6 +13,7 @@ import {
   FaTrash,
 } from "react-icons/fa";
 import { getWorkspaceEmail } from "../workspaceIdentity";
+import { appointmentStatus, appointmentStatusLabel, appointmentTimezoneLabel } from "./appointmentStatus";
 import {
   appointmentDateTimeParts,
   dateKeyFromParts,
@@ -129,7 +130,7 @@ function normalizeBackendAppointment(raw, fallbackTimezone = "") {
     timeKey: timeKeyFromParts(parts),
     timeZone,
     allDay: false,
-    done: !!(raw?.done ?? raw?.completed ?? raw?.is_done),
+    status: appointmentStatus(raw),
   };
 }
 
@@ -155,7 +156,7 @@ function normalizeLocalAppointments(leads = [], fallbackTimezone = "") {
         timeKey: appt.time || "00:00",
         timeZone: fallbackTimezone,
         allDay: !appt.time,
-        done: !!appt?.done,
+        status: appointmentStatus(appt),
       });
     });
   });
@@ -249,10 +250,11 @@ function itemTimeLabel(item) {
 
 function itemMeta(item) {
   if (item.kind === "appointment") {
+    const outcome = item.status !== "scheduled" ? appointmentStatusLabel(item.status) : "";
     return {
       icon: <FaCalendarAlt />,
-      color: GREEN,
-      label: item.done ? "Completed appointment" : "Appointment",
+      color: item.status === "cancelled" ? SUBTEXT : item.status === "no_show" ? CAKE : GREEN,
+      label: outcome ? `${outcome} appointment` : "Appointment",
     };
   }
   if (item.kind === "google") {
@@ -1098,6 +1100,11 @@ function TimelineCard({ item, onEditNote, onDeleteNote }) {
         <div style={{ color: TEXT, fontWeight: 900, fontSize: 16 }}>{item.title}</div>
         <div style={{ color: meta.color, fontWeight: 800, fontSize: 13, marginTop: 4 }}>
           {itemTimeLabel(item)}
+          {!item.allDay && item.timeZone ? (
+            <span title={item.timeZone} style={{ color: SUBTEXT, fontWeight: 600, marginLeft: 8 }}>
+              {appointmentTimezoneLabel(item.timeZone)}
+            </span>
+          ) : null}
         </div>
 
         {item.leadName ? (
@@ -1117,9 +1124,9 @@ function TimelineCard({ item, onEditNote, onDeleteNote }) {
           </div>
         ) : null}
 
-        {item.kind === "appointment" && item.done ? (
-          <div style={{ color: GREEN, marginTop: 6, fontSize: 12, fontWeight: 800 }}>
-            Completed
+        {item.kind === "appointment" && item.status !== "scheduled" ? (
+          <div style={{ color: meta.color, marginTop: 6, fontSize: 12, fontWeight: 800 }}>
+            {appointmentStatusLabel(item.status)}
           </div>
         ) : null}
       </div>

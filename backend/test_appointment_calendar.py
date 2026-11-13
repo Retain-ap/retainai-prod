@@ -202,6 +202,41 @@ class AppointmentTimeTests(unittest.TestCase):
         self.assertTrue(updated["completed"])
         self.assertTrue(updated["is_done"])
 
+    def test_explicit_no_show_takes_precedence_over_completion_flags(self):
+        appointments = {"owner@example.com": [{
+            "id": "appointment-1",
+            "appointment_time": "2030-01-02T10:30:00-05:00",
+            "timezone": "America/Toronto",
+            "duration": 30,
+            "title": "Consultation",
+            "status": "scheduled",
+        }]}
+        saved = {}
+        with patch.object(retainai, "load_users", return_value=_users()), patch.object(
+            retainai, "load_user_profile", return_value={"timezone": "America/Toronto"}
+        ), patch.object(retainai, "load_appointments", return_value=appointments), patch.object(
+            retainai, "save_appointments", side_effect=lambda rows: saved.update(rows)
+        ), patch.object(retainai, "create_ics_file"), patch.object(retainai, "add_notification"):
+            response = self._client().put(
+                "/api/appointments/owner@example.com/appointment-1",
+                json={
+                    "status": "no_show",
+                    "done": True,
+                    "is_done": True,
+                    "completed": False,
+                    "notes": "Customer did not attend; contact before rebooking.",
+                },
+            )
+
+        self.assertEqual(response.status_code, 200)
+        updated = saved["owner@example.com"][0]
+        self.assertEqual(updated["status"], "no-show")
+        self.assertTrue(updated["done"])
+        self.assertTrue(updated["is_done"])
+        self.assertFalse(updated["completed"])
+        self.assertEqual(updated["notes"], "Customer did not attend; contact before rebooking.")
+        self.assertEqual(response.get_json()["appointment"], updated)
+
 
 class GoogleCalendarContractTests(unittest.TestCase):
     def _client(self):
