@@ -25,11 +25,11 @@ initial `/partners` HTML.
 
 ## Approach for these 14 days
 
-**Free public posts and inbound leads only.** No cold email, no cold DMs, no
-purchased or scraped lists, no paid ads, and no scheduled outreach of any
-kind. People find RetainAI through useful public posts and the website; they
-reach out or sign up themselves, and every later message goes only to people
-who asked for it.
+The continuing acquisition plan is useful public content and inbound leads.
+The five individually reviewed responses to explicit collaboration invitations
+above do not authorize a general cold-email, DM or automated follow-up campaign.
+Each future route is reviewed on its own facts. No purchased or scraped lists,
+paid ads or scheduled outreach are enabled.
 
 ### Gate before unsolicited commercial outreach (not met today)
 
@@ -61,7 +61,7 @@ customers who quietly stop rebooking, follow-ups kept in the owner's head.
 
 - C$20/month for the full workspace, with a 14-day trial (`/pricing`).
 - Import contacts from a CSV or vCard file, with presets for common CRM
-  exports (Settings > Imports).
+  exports (Import contacts, `/app/import`).
 - AI-drafted follow-ups that the owner reviews before anything is sent
   (AI Studio: "AI never sends until you choose to").
 - Rebooking suggestions from completed-visit intervals, and a Value Receipt
@@ -74,6 +74,14 @@ customers who quietly stop rebooking, follow-ups kept in the owner's head.
 - Canadian and owner-run, with a 10-minute setup walkthrough that people can
   book themselves (`publicContent.bookingUrl`).
 
+Internal acceptance evidence, November 13: one owner-only Calendly Sandbox
+booking imported, repeated sync created no duplicate, and provider cancellation
+propagated. This does not establish production OAuth approval. PR74 corrected
+the discovered workspace-timezone and cancelled-status display defects; a fresh
+owner-browser re-sync is blocked by session/control access and is not claimed.
+The existing event type reported a disconnected Zoom location. Repair and verify
+it, or select a working location, before promising a Zoom walkthrough.
+
 Do not claim: customer counts, testimonials, revenue-uplift percentages,
 "automatic" sending, integrations not listed above, or awards and audits.
 
@@ -84,8 +92,9 @@ approved:
 
 - RetainAI's own website. retainai.ca has no blog yet, so each guide is a new
   public page that goes through a reviewed code change before it is published.
-- App-owned social and publishing accounts, **once they are supplied**. They
-  do not exist yet, so drafts wait.
+- App-owned social and publishing accounts, once authenticated. An app-owned
+  publishing identity is not available in this session; prepared posts remain
+  unpublished. This is not evidence that no such account exists elsewhere.
 - Community spaces (local business groups, niche forums, subreddits) **only
   where self-promotion is explicitly permitted**. Read and follow each
   space's rules; prefer useful answers over announcements.
@@ -96,7 +105,7 @@ approved:
 |---|---|---|
 | 1 | Groundwork | List 10 community spaces where these businesses gather, and record each one's self-promotion rules. Keep only those that allow it. |
 | 2 | Proof assets | Record a 90-second screen video on a demo workspace with sample data only: import a file → overdue customers → AI follow-up draft → owner edits and sends. Take 3 screenshots. |
-| 3 | Website guide | Draft, then publish through a reviewed page change, "How to find customers who stopped rebooking (with or without software)" on retainai.ca. It should be useful on its own and link to the trial and the walkthrough booking page. |
+| 3 | Website guide | Completed: `/find-customers-who-stopped-rebooking` is live with trial and walkthrough links. Measure its inbound visits and conversions; do not duplicate the published guide. |
 | 4-5 | Helpful answers | In the permitted spaces, answer real questions about no-shows, rebooking and follow-ups. Mention RetainAI only where the rules allow it and it actually helps. |
 | 6 | Walkthroughs | Run the 10-minute walkthroughs people booked themselves. Set up their import live, using only their own data and with their permission. |
 | 7 | Review | Count inbound walkthroughs, trials started and which post brought each. Keep what worked. |
@@ -120,6 +129,8 @@ walkthrough bookings, trials started, trials converted, source of each.
 
 - No commercial email, DM or text to anyone who has not contacted RetainAI or
   given express consent, until the outreach gate above is met.
+- The five documented responses to explicit collaboration invitations are the
+  narrow assessed exception above, not permission for automated follow-ups.
 - No purchased lists, scraping, automated messaging or paid ads.
 - Demo only with sample data; never show a real customer's records.
 - The partner offer is quoted exactly as above, never rounded up or extended.

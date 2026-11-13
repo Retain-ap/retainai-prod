@@ -2,7 +2,9 @@
 
 Audit: https://app.heycatch.ai/audit/hck_pk_qjz4tFpR_LvQkTRpBRn87x0WnOpJVrBJ?surface=website
 
-Read in full on 11 November 2026. Public-site work follows Quick wins, then Do this quarter. The existing full-score pain copy (D1.2), vocabulary (D1.6), one-click pricing (D4.1), heading structure (D5.2) and lightweight dependency set (D5.4) are preserved.
+Read in full on 11 November 2026 and again on 13 November at 15:08 UTC, including all six expanded dimensions and all 13 ordered actions. The current shared report still quotes the old nine-step signup and duplicated page metadata: this was a fresh reading, not a new HeyCatch scan. All 22 below-maximum coded scores match the November 11 baseline; D4.B explicitly requires no comparison table for a single plan. Public-site work follows Quick wins, then Do this quarter. The existing full-score pain copy (D1.2), vocabulary (D1.6), one-click pricing (D4.1), heading structure (D5.2) and lightweight dependency set (D5.4) are preserved.
+
+The report displays Trust as 4/20 even though its listed subcriteria sum to 2/20. Preserve the report's exact per-finding scores; do not silently reconcile that discrepancy. The full fresh insights, action order and comparison receipt are archived privately in the task workspace under `outputs/night-20261113/heycatch-fresh`. No new score or conversion uplift is claimed.
 
 ## Evidence that cannot be invented
 
@@ -52,18 +54,20 @@ Audit hypotheses are not results. Compare homepage-to-trial and walkthrough comp
 | D3.4 | 2/4 | Names Stripe beside trial CTA, repeats cancel/export controls and preserves honest card requirement; no new refund guarantee. |
 | D3.5 | 0/3 | Dated third-party link slot is gated off until a real mention exists. |
 | D5.3 | 3/4 | Indexable service-business category page, site navigation links and sitemap entry. |
-| D2.5 | 1/4 | Reachable phone navigation, compact category kicker and stacked pricing. Root verified the homepage at 375×812: no horizontal overflow and the trial CTA visible within the first screen. Final combined signup UI verification remains with root. |
+| D2.5 | 1/4 | Reachable phone navigation, compact category kicker and stacked pricing. November 11 verification covered home and all four email-signup stages at 375×812 without horizontal overflow; the homepage trial CTA was visible in the first screen. |
 | D1.5 | 2/3 | Actual Contacts screenshot replaces the hand-built mock; six fictional contacts, clear example-data caption, descriptive alt, no private production data. |
 | D1.4 | 2/3 | All FAQ answers remain in DOM, trial answer expanded by default with cancellation/card/eligibility details. Signup shortening is a separate integration. |
 | D4.2 | 3/4 | Trial gating stated on home and pricing; existing monthly model preserved. |
 | D2.B | +0/2 | Category page explicitly identifies large enterprise sales rollouts as outside the intended fit. |
-| D2.3 | 3/5 | Existing page flow retained; clearer billing text contrast and native FAQ controls. Parent visual review pending. |
-| D2.4 | 3/4 | Combined frontend includes four-step email signup (Google skips the password step), with business details deferred until after login. See HEYCATCH_SIGNUP_20261111.md. Deploy the compatible backend first. |
+| D2.3 | 3/5 | Existing page flow retained; clearer billing text contrast and native FAQ controls. Desktop visual review completed for the November 11 release. |
+| D2.4 | 3/4 | Live four-step email signup (Google skips the password step), with business details deferred until after login. Compatible backend PR51 preceded frontend PR52; see HEYCATCH_SIGNUP_20261111.md. |
 | D4.B | +0/1 | No change: audit itself says comparison table is not required for the one-tier product. |
 | Brief fit | 8/10 | Category/buyer and trial framing addressed through mapped findings above; no invented finding code. |
 
-Local verification before integration: all 32 frontend suites / 160 tests passed; changed-file ESLint passed; production build and prerender succeeded. The extra route-metadata lifecycle regression added afterward passed (7-test targeted suite). Screenshot replacement then passed a 36-test targeted suite and a production build/prerender. The local asset remains the original 79 KB capture; no new runtime dependencies were added. Parent is responsible for combined-branch tests, actual responsive review, hosting configuration and post-deploy URLs.
+Historical pre-integration verification: all 32 frontend suites / 160 tests passed; changed-file ESLint passed; production build and prerender succeeded. The extra route-metadata lifecycle regression added afterward passed (7-test targeted suite). Screenshot replacement then passed a 36-test targeted suite and a production build/prerender. The local asset remains the original 79 KB capture; no new runtime dependencies were added. The combined release and live checks below supersede those intermediate counts.
 
 ## Combined frontend release
 
-Prepared on `codex/heycatch-frontend-release-20261111` from GitHub's `b3313a3` deploy head and rebased onto the merged backward-compatible backend release `a31bbb7` (PR51). It combines public-site commits `c8330d9` and `611fd5a` with frontend signup commit `e3f1d82`. The frontend must not be deployed before the backward-compatible signup backend from PR51 is live. Root owns merging, deploying, final combined signup UI checks, route rewrite configuration and live URL verification. Combined local verification passed: 33 frontend suites / 168 tests, full-source ESLint with zero warnings, production build and prerender for every public route. The rebase changes backend files only; the tested frontend tree is unchanged. Final 375×812 signup UI and live release checks remain with root.
+PR51's backward-compatible backend became live before PR52's combined frontend on November 11. PR52 combined public-site commits `c8330d9` and `611fd5a` with signup commit `e3f1d82`; 33 frontend suites / 168 tests, lint and production build passed. Five public-page rewrite pairs were saved, 20/20 live route checks passed, and home plus every email-signup stage were checked at 375×812. PR53 then added the business-name send guard and passed 190 frontend / 255 backend tests with 21 route/metadata/bundle checks. The dated release record is `chats/2026-11-11-audit-release-and-launch-gates.md`.
+
+On November 13, all 27 current anonymous public-route HTML checks passed at 15:09 UTC, including distinct initial metadata, canonical URLs and indexing rules. Later PR74's frontend and backend became live at 15:11 UTC; its runtime changes do not rewrite the audited marketing copy. Final anonymous checks passed for both apps. A new browser pass stalled on session/control access, so no fresh mobile screenshot or post-PR74 Calendly re-sync is claimed. November 11 responsive evidence remains dated, not silently relabeled as today's test. Current release details are in `chats/2026-11-13-followup-release.md`.
