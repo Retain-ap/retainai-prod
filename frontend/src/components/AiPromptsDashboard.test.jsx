@@ -248,3 +248,22 @@ describe("opening from the rebooking list with the dashboard clearing the reques
     expect(await screen.findByDisplayValue("Held words.")).toBeInTheDocument();
   });
 });
+
+test("a request for a customer who was removed shows that, and an unrelated held draft does not appear", async () => {
+  const scope = heldDraftScope("ai-studio", { email: "owner@example.com" });
+  holdDraft(scope, { leadId: "lead-1", draft: "Unrelated held words.", playbook: "reengage" });
+  function Host() {
+    const [initialFocus, setInitialFocus] = React.useState({ leadId: "deleted-customer", playbook: "followup", context: "Due to rebook." });
+    return <AiPromptsDashboard leads={[lead]} user={{ email: "owner@example.com" }} initialFocus={initialFocus} onFocusApplied={() => setInitialFocus(null)} />;
+  }
+  render(<Host />);
+  expect(await screen.findByRole("heading", { name: "That customer is no longer in your contacts" })).toBeInTheDocument();
+  await act(async () => { await new Promise((resolve) => setTimeout(resolve, 20)); });
+  expect(screen.queryByText("Writing for")).not.toBeInTheDocument();
+  expect(screen.queryByDisplayValue("Unrelated held words.")).not.toBeInTheDocument();
+  expect(sessionStorage.getItem(scope)).not.toBeNull();
+  // Choosing a customer clears the notice.
+  fireEvent.click(screen.getByRole("button", { name: /Jordan/ }));
+  expect(screen.queryByText("That customer is no longer in your contacts")).not.toBeInTheDocument();
+  sessionStorage.clear();
+});

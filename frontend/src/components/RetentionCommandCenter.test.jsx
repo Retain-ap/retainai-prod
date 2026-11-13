@@ -234,3 +234,21 @@ describe("draft context only calls a measured visit pattern the customer's habit
     expect(context).toMatch(/they usually return about every 30 days \(measured from their completed visits\)\.$/);
   });
 });
+
+test("Mark contacted right after a same-day visit moves the customer to waiting", async () => {
+  // Owner interval of 7 days and a completed visit today at 00:00 UTC: due today.
+  const today = { id: "t", name: "Tia Today", email: "tia@example.com", rebook_interval_days: 7 };
+  const visits = [{ lead: today, date: daysAgo(0), time: "00:00", status: "completed", _backend: {} }];
+  function Host() {
+    const [lead, setLead] = React.useState(today);
+    // Mirrors the server: marking records last_outreach_at, and the list reloads.
+    const onMarkContacted = async () => setLead({ ...lead, last_outreach_at: new Date().toISOString() });
+    return <RetentionCommandCenter leads={[lead]} appointments={visits.map((item) => ({ ...item, lead }))} user={{ timezone: "UTC" }} onMarkContacted={onMarkContacted} />;
+  }
+  render(<Host />);
+  fireEvent.click(screen.getByRole("tab", { name: "Revenue Opportunities" }));
+  expect(screen.getByText(/Rebooking due in 7 days/)).toBeInTheDocument();
+  fireEvent.click(screen.getByRole("button", { name: "Mark contacted" }));
+  expect(await screen.findByRole("heading", { name: "Contacted, waiting to book (1)" })).toBeInTheDocument();
+  expect(screen.getByText("No one is due right now")).toBeInTheDocument();
+});

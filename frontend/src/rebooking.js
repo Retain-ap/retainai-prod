@@ -7,7 +7,7 @@
 //   3. the typical interval across this workspace's customers
 //   4. a default for the business type (salon/barber presets, else general)
 
-import { dayKeyNow } from "./components/appointmentDateTime";
+import { dayKeyNow, timeKeyNow } from "./components/appointmentDateTime";
 
 const DAY = 24 * 60 * 60 * 1000;
 // After the owner contacts a due customer, give them this long to book before
@@ -73,8 +73,14 @@ export function visitsByLead(appointments = [], todayMs = null) {
     const markedDone = fromBackend ? status === "completed" : Boolean(appt?.done);
     const completed = markedDone && (todayMs === null || day <= todayMs);
     const upcoming = !markedDone && !appt?.done && !["completed", "cancelled", "canceled", "no-show"].includes(status);
-    const entry = out.get(key) || { completed: [], upcoming: [] };
-    if (completed) entry.completed.push(day);
+    const entry = out.get(key) || { completed: [], upcoming: [], startTimes: new Map() };
+    if (completed) {
+      entry.completed.push(day);
+      // Latest known start time per completed day; "" once any visit that day has none.
+      const time = /^\d{2}:\d{2}/.test(String(appt?.time || "")) ? String(appt.time).slice(0, 5) : "";
+      const known = entry.startTimes.get(day);
+      entry.startTimes.set(day, known === undefined ? time : known && time ? (time > known ? time : known) : "");
+    }
     else if (upcoming) entry.upcoming.push(day);
     out.set(key, entry);
   });
@@ -154,7 +160,11 @@ export function rebookingSuggestions({ leads = [], appointments = [], user, toda
     // last_outreach_at is a UTC instant: take its calendar day in the workspace
     // zone, the same zone `today` uses (a Toronto evening is already tomorrow in UTC).
     const contactDay = lead?.last_outreach_at ? dayStart(dayKeyNow(timeZone, lead.last_outreach_at)) : null;
-    const contacted = contactDay !== null && contactDay > lastVisit && contactDay <= todayMs ? contactDay : null;
+    // Outreach on the day of the last visit counts when it was at or after the
+    // visit's start time, or when that visit has no recorded time.
+    const visitTime = entry.startTimes.get(lastVisit) || "";
+    const sameDayAfterVisit = contactDay === lastVisit && (!visitTime || timeKeyNow(timeZone, lead.last_outreach_at) >= visitTime);
+    const contacted = contactDay !== null && (contactDay > lastVisit || sameDayAfterVisit) && contactDay <= todayMs ? contactDay : null;
     out.push({
       lead,
       intervalDays: interval,

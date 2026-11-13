@@ -37,6 +37,7 @@ export default function AiPromptsDashboard({ leads = [], user = {}, onSendAIProm
   const [status, setStatus] = useState("");
   const [error, setError] = useState("");
   const [needsBusinessName, setNeedsBusinessName] = useState(false);
+  const [missingFocus, setMissingFocus] = useState(false);
 
   // The backend uses the saved business name; no placeholder name is sent.
   const brandName = user.businessName || user.business || "";
@@ -81,9 +82,16 @@ export default function AiPromptsDashboard({ leads = [], user = {}, onSendAIProm
   // owner can edit. This only prepares the screen: nothing is generated or sent.
   useEffect(() => {
     if (!initialFocus?.leadId || !leads.length) return;
+    // Any explicit request, even for a customer who no longer exists, keeps an
+    // unrelated held draft from appearing in its place.
+    focusAppliedRef.current = true;
     const lead = leads.find((item) => String(item.id) === String(initialFocus.leadId));
-    if (lead) {
-      focusAppliedRef.current = true;
+    setMissingFocus(!lead);
+    if (!lead) {
+      setFocusedLead(null);
+      setDraft("");
+      setContext("");
+    } else {
       setFocusedLead(lead);
       if (PLAYBOOKS.some((playbook) => playbook.key === initialFocus.playbook)) setActivePlaybook(initialFocus.playbook);
       setContext(String(initialFocus.context || "").slice(0, 800));
@@ -110,6 +118,7 @@ export default function AiPromptsDashboard({ leads = [], user = {}, onSendAIProm
   };
 
   const selectLead = (lead) => {
+    setMissingFocus(false);
     setFocusedLead(lead);
     setDraft("");
     setContext("");
@@ -218,7 +227,7 @@ export default function AiPromptsDashboard({ leads = [], user = {}, onSendAIProm
           </div>
         </aside>
         <main className="ai-compose-panel">
-          {!focusedLead ? <div className="ai-welcome"><FaMagic /><h3>Choose a customer to begin</h3><p>RetainAI will use their saved notes, tags, and relationship context to prepare a personalized draft.</p></div> : (
+          {!focusedLead ? <div className="ai-welcome"><FaMagic />{missingFocus ? <><h3>That customer is no longer in your contacts</h3><p role="status">They may have been removed or merged. Choose a customer from the list to start a draft.</p></> : <><h3>Choose a customer to begin</h3><p>RetainAI will use their saved notes, tags, and relationship context to prepare a personalized draft.</p></>}</div> : (
             <>
               <div className="ai-selected-customer"><span className="ai-avatar">{(focusedLead.name || "C").charAt(0).toUpperCase()}</span><div><small>Writing for</small><strong>{focusedLead.name || "Unnamed customer"}</strong><span>{focusedLead.email || "No email address"}</span></div></div>
               <div className="ai-step"><div className="ai-step-title"><span>2</span><div><strong>Select a playbook</strong><small>Start with a proven relationship moment.</small></div></div><div className="ai-playbooks">{PLAYBOOKS.map((playbook) => <button key={playbook.key} type="button" className={activePlaybook === playbook.key ? "active" : ""} onClick={() => selectPlaybook(playbook.key)}><strong>{playbook.label}</strong><small>{playbook.description}</small></button>)}</div></div>

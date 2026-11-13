@@ -190,3 +190,36 @@ test("reviewer case: a Toronto follow-up at 10 pm Nov 12 (03:00 UTC Nov 13) is w
   expect(dueForRebooking(suggestions)).toHaveLength(0);
   expect(waitingToBook(suggestions)).toHaveLength(1);
 });
+
+describe("explicit outreach on the day of the last visit", () => {
+  // Owner interval of 7 days and a completed visit today (Nov 6) at 10:00 make the customer due now.
+  const suggest = (lastOutreachAt, { time = "10:00", today: day = today } = {}) => {
+    const lead = { id: "d", rebook_interval_days: 7, last_outreach_at: lastOutreachAt };
+    return rebookingSuggestions({ leads: [lead], appointments: [visit(lead, "2026-11-06", { time, status: "completed", _backend: {} })], user: {}, today: day, timeZone: "America/Toronto" });
+  };
+
+  test("reviewer case: contacted at 10 pm Toronto after a 10:00 visit the same day snoozes the customer", () => {
+    const suggestions = suggest("2026-11-07T03:00:00Z"); // Nov 6, 10 pm in Toronto
+    expect(dueForRebooking(suggestions)).toHaveLength(0);
+    expect(waitingToBook(suggestions)).toHaveLength(1);
+    expect(suggestions[0]).toMatchObject({ contactedOn: "2026-11-06", waitingUntil: "2026-11-13" });
+  });
+
+  test("outreach earlier that day, before the visit, is not a follow-up", () => {
+    const suggestions = suggest("2026-11-06T12:00:00Z"); // Nov 6, 7 am in Toronto, before the 10:00 visit
+    expect(dueForRebooking(suggestions)).toHaveLength(1);
+    expect(waitingToBook(suggestions)).toHaveLength(0);
+  });
+
+  test("when the visit has no recorded time, same-day outreach counts", () => {
+    const suggestions = suggest("2026-11-06T12:00:00Z", { time: "" });
+    expect(waitingToBook(suggestions)).toHaveLength(1);
+  });
+
+  test("the snooze still ends exactly seven local days later", () => {
+    expect(waitingToBook(suggest("2026-11-07T03:00:00Z", { today: "2026-11-12" }))).toHaveLength(1);
+    const back = suggest("2026-11-07T03:00:00Z", { today: "2026-11-13" });
+    expect(waitingToBook(back)).toHaveLength(0);
+    expect(dueForRebooking(back)).toHaveLength(1);
+  });
+});
