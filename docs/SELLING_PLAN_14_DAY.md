@@ -1,8 +1,27 @@
 # RetainAI: 14-day selling plan for Calendly service businesses
 
-Draft for root and owner review (2026-11-12). Nothing here has been sent,
-posted or paid for. Every claim must match the live product on the day it is
-used; the "Claims we can make" list is the source of truth.
+Prepared 2026-11-12; execution update 2026-11-13. Every claim must match the
+live product on the day it is used; the "Claims we can make" list remains the
+source of truth.
+
+## Execution checkpoint — November 13
+
+Five tailored proposals have confirmed website-form acknowledgements: Shawn
+Mynar, Forrest & Company, Next Level Coaching, Clarity Business Academy and
+WhizQueen. They responded to current explicit invitations for collaboration
+or partnerships, using Mateo and owner@retainai.ca. The private overnight
+ledger preserves invitation sources, submitted copy and acknowledgements.
+No partnership has been accepted, no commission is owed merely for an enquiry,
+and no automatic follow-up sequence has been enabled.
+
+This narrow response workflow was assessed against section 3(b) of
+[SOR/2013-221](https://laws.justice.gc.ca/eng/regulations/SOR-2013-221/FullText.html).
+It is not a general permission for cold email or DMs. A business mailing
+address is still unavailable; the general commercial-outreach gate below
+remains. App-owned social accounts are still required for publishing those
+drafts. The rebooking guide is already live, and PR66 now serves the exact
+30% / first-12-month partner terms and current product capabilities in the
+initial `/partners` HTML.
 
 ## Approach for these 14 days
 
@@ -12,9 +31,9 @@ kind. People find RetainAI through useful public posts and the website; they
 reach out or sign up themselves, and every later message goes only to people
 who asked for it.
 
-### Gate before any commercial outreach (not met today)
+### Gate before unsolicited commercial outreach (not met today)
 
-Direct commercial messages (email, DM, text) stay off until **all** of these
+Unsolicited commercial messages (email, DM, text) stay off until **all** of these
 are verified and recorded by the owner:
 
 1. A lawful consent basis for each recipient under Canada's anti-spam law
