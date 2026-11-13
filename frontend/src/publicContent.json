@@ -65,5 +65,14 @@
         {"heading": "How RetainAI does this for you", "copy": "RetainAI works out rebooking dates from each customer’s completed visits, using the usual time between them, and lists customers whose usual interval has nearly passed. Customers with no completed visit who have been inactive for 90 days or more appear as win-back candidates. AI can draft the follow-up; you review the words and decide what to send. Start by importing a CSV or vCard of the contacts you already have."}
       ]
     }
+  },
+  "partners": {
+    "terms": "Approved partners earn 30% of qualifying base membership payments for the first 12 months after a referred customer’s first successful payment. Commissions have a 30-day hold, with clear attribution and refund rules agreed in writing before you promote.",
+    "benefits": [
+      "Rebooking dates from each customer’s own completed visits, with the reason shown",
+      "AI-assisted follow-up drafts the owner reviews and edits before anything is sent",
+      "Contact import from CSV or vCard, with a preview and a safe undo",
+      "Appointments, invoices and a Value Receipt that traces revenue to recorded payments"
+    ]
   }
 }

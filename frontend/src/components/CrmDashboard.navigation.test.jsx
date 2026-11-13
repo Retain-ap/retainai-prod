@@ -15,13 +15,13 @@ jest.mock("./Appointments", () => () => <div>Appointment list</div>);
 jest.mock("./Messages", () => ({ onOpenBusinessSettings }) => <div>Message inbox<button onClick={onOpenBusinessSettings}>Inbox business settings</button></div>);
 jest.mock("./NotificationsCenter", () => () => null);
 jest.mock("./Notifications", () => () => null);
-jest.mock("./AiPromptsDashboard", () => ({ onOpenBusinessSettings }) => <div>AI Studio<button onClick={onOpenBusinessSettings}>Studio business settings</button></div>);
+jest.mock("./AiPromptsDashboard", () => ({ onOpenBusinessSettings, initialFocus }) => <div>AI Studio<button onClick={onOpenBusinessSettings}>Studio business settings</button>{initialFocus && <output data-testid="studio-focus">{`${initialFocus.leadId}|${initialFocus.playbook}|${initialFocus.context}`}</output>}</div>);
 jest.mock("./Settings", () => ({ initialTab }) => <div>Settings {initialTab || "profile"}</div>);
 jest.mock("./Insights", () => () => null);
 jest.mock("./Invoices", () => () => null);
 jest.mock("./Automations", () => () => <div>Automation playbooks</div>);
 jest.mock("./InviteTeamModal", () => () => null);
-jest.mock("./RetentionCommandCenter", () => ({ onOpenMessages, onOpenAppointments, onOpenImports }) => <div>Retention overview<button onClick={onOpenMessages}>Overview messages shortcut</button><button onClick={onOpenAppointments}>Setup add appointment</button><button onClick={onOpenImports}>Setup import contacts</button></div>);
+jest.mock("./RetentionCommandCenter", () => ({ onOpenMessages, onOpenAppointments, onOpenImports, onDraftFollowUp, onMarkContacted }) => <div>Retention overview<button onClick={onOpenMessages}>Overview messages shortcut</button><button onClick={onOpenAppointments}>Setup add appointment</button><button onClick={onOpenImports}>Setup import contacts</button><button onClick={() => onDraftFollowUp({ id: "lead-1", email: "ava@example.com" }, "Due to rebook: last completed visit Oct 1; usually every 30 days.")}>Rebook draft</button><button onClick={() => onMarkContacted({ id: "lead-1" }).then(() => { global.__marked = "ok"; }, (error) => { global.__marked = error.message; })}>Rebook mark contacted</button></div>);
 jest.mock("./OwnerConsole", () => () => <div>Platform owner console</div>);
 jest.mock("./TrialCommandBar", () => () => null);
 
@@ -181,4 +181,41 @@ test.each([
   expect(screen.getByTestId("location")).toHaveTextContent("/app?tab=profile");
   fireEvent.click(screen.getByRole("button", { name: "Browser back" }));
   expect(screen.getByRole("button", { name: action })).toBeInTheDocument();
+});
+
+test("Draft follow-up opens AI Studio on that customer with its context; nothing is sent", async () => {
+  await mount("/app");
+  fireEvent.click(screen.getByRole("button", { name: "Rebook draft" }));
+  expect(screen.getByTestId("location")).toHaveTextContent("/app?section=ai-prompts");
+  expect(screen.getByTestId("studio-focus")).toHaveTextContent("lead-1|followup|Due to rebook: last completed visit Oct 1; usually every 30 days.");
+  expect(global.fetch.mock.calls.some(([url]) => String(url).includes("send-ai-message"))).toBe(false);
+});
+
+test("Mark contacted records the contact on the server for that one customer and reloads contacts", async () => {
+  await mount("/app");
+  global.fetch.mockClear();
+  global.fetch.mockImplementation(async (url) => String(url).includes("leads/contacted")
+    ? { ok: true, status: 200, json: async () => ({ ok: true, lead: { id: "lead-1" } }) }
+    : { ok: true, json: async () => ({ leads: [], appointments: [], connected: false }) });
+  const reloads = jest.fn();
+  window.addEventListener("leads:changed", reloads);
+  fireEvent.click(screen.getByRole("button", { name: "Rebook mark contacted" }));
+  await waitFor(() => expect(global.__marked).toBe("ok"));
+  const [url, options] = global.fetch.mock.calls.find(([called]) => String(called).includes("leads/contacted"));
+  expect(String(url)).toMatch(/\/api\/leads\/contacted$/);
+  expect(options.method).toBe("POST");
+  expect(JSON.parse(options.body)).toEqual({ leadId: "lead-1" });
+  expect(reloads).toHaveBeenCalled();
+  window.removeEventListener("leads:changed", reloads);
+  delete global.__marked;
+});
+
+test("a refused mark-contacted reports a clear error", async () => {
+  await mount("/app");
+  global.fetch.mockImplementation(async (url) => String(url).includes("leads/contacted")
+    ? { ok: false, status: 404, json: async () => ({ ok: false, error: "lead_not_found" }) }
+    : { ok: true, json: async () => ({ leads: [], appointments: [], connected: false }) });
+  fireEvent.click(screen.getByRole("button", { name: "Rebook mark contacted" }));
+  await waitFor(() => expect(global.__marked).toBe("This customer is no longer in your contacts. Reload and try again."));
+  delete global.__marked;
 });

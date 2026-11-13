@@ -7,7 +7,12 @@
 //   3. the typical interval across this workspace's customers
 //   4. a default for the business type (salon/barber presets, else general)
 
+import { dayKeyNow, timeKeyNow } from "./components/appointmentDateTime";
+
 const DAY = 24 * 60 * 60 * 1000;
+// After the owner contacts a due customer, give them this long to book before
+// the customer comes back to the "contact now" list.
+export const CONTACT_SNOOZE_DAYS = 7;
 export const MIN_INTERVAL_DAYS = 7;
 export const MAX_INTERVAL_DAYS = 365;
 // Visits closer together than this are treated as one visit (split or duplicate records).
@@ -68,8 +73,14 @@ export function visitsByLead(appointments = [], todayMs = null) {
     const markedDone = fromBackend ? status === "completed" : Boolean(appt?.done);
     const completed = markedDone && (todayMs === null || day <= todayMs);
     const upcoming = !markedDone && !appt?.done && !["completed", "cancelled", "canceled", "no-show"].includes(status);
-    const entry = out.get(key) || { completed: [], upcoming: [] };
-    if (completed) entry.completed.push(day);
+    const entry = out.get(key) || { completed: [], upcoming: [], startTimes: new Map() };
+    if (completed) {
+      entry.completed.push(day);
+      // Latest known start time per completed day; "" once any visit that day has none.
+      const time = /^\d{2}:\d{2}/.test(String(appt?.time || "")) ? String(appt.time).slice(0, 5) : "";
+      const known = entry.startTimes.get(day);
+      entry.startTimes.set(day, known === undefined ? time : known && time ? (time > known ? time : known) : "");
+    }
     else if (upcoming) entry.upcoming.push(day);
     out.set(key, entry);
   });
@@ -93,9 +104,10 @@ function formatDay(ms) {
 
 /**
  * Suggestions for every contact with at least one completed visit.
- * `today` is a YYYY-MM-DD string in the workspace's timezone.
+ * `today` is a YYYY-MM-DD string in the workspace's timezone, and `timeZone`
+ * is that zone, so outreach instants are compared as the same local days.
  */
-export function rebookingSuggestions({ leads = [], appointments = [], user, today }) {
+export function rebookingSuggestions({ leads = [], appointments = [], user, today, timeZone = "UTC" }) {
   const todayMs = dayStart(today);
   const visits = visitsByLead(appointments, todayMs);
   const kind = businessKind(user);
@@ -142,6 +154,17 @@ export function rebookingSuggestions({ leads = [], appointments = [], user, toda
     }
     const due = lastVisit + interval * DAY;
     const nextBooked = entry.upcoming.find((day) => day >= todayMs);
+    // Only real outreach (a delivered follow-up or the owner marking the contact)
+    // after the last completed visit counts. last_contacted is not used: it is
+    // also stamped when a contact is first created.
+    // last_outreach_at is a UTC instant: take its calendar day in the workspace
+    // zone, the same zone `today` uses (a Toronto evening is already tomorrow in UTC).
+    const contactDay = lead?.last_outreach_at ? dayStart(dayKeyNow(timeZone, lead.last_outreach_at)) : null;
+    // Outreach on the day of the last visit counts when it was at or after the
+    // visit's start time, or when that visit has no recorded time.
+    const visitTime = entry.startTimes.get(lastVisit) || "";
+    const sameDayAfterVisit = contactDay === lastVisit && (!visitTime || timeKeyNow(timeZone, lead.last_outreach_at) >= visitTime);
+    const contacted = contactDay !== null && (contactDay > lastVisit || sameDayAfterVisit) && contactDay <= todayMs ? contactDay : null;
     out.push({
       lead,
       intervalDays: interval,
@@ -151,6 +174,9 @@ export function rebookingSuggestions({ leads = [], appointments = [], user, toda
       dueDate: new Date(due).toISOString().slice(0, 10),
       daysUntilDue: Math.round((due - todayMs) / DAY),
       bookedFor: nextBooked ? new Date(nextBooked).toISOString().slice(0, 10) : "",
+      contactedOn: contacted !== null ? new Date(contacted).toISOString().slice(0, 10) : "",
+      waitingUntil: contacted !== null ? new Date(contacted + CONTACT_SNOOZE_DAYS * DAY).toISOString().slice(0, 10) : "",
+      contactedRecently: contacted !== null && (todayMs - contacted) / DAY < CONTACT_SNOOZE_DAYS,
       reasons: [
         `Last completed visit ${formatDay(lastVisit)}.`,
         reason,
@@ -161,7 +187,15 @@ export function rebookingSuggestions({ leads = [], appointments = [], user, toda
   return out.sort((a, b) => a.daysUntilDue - b.daysUntilDue);
 }
 
-/** Customers to contact now: due within `aheadDays` or overdue, and not already booked. */
+/**
+ * Customers to contact now: due within `aheadDays` or overdue, not already
+ * booked, and not contacted in the last CONTACT_SNOOZE_DAYS days.
+ */
 export function dueForRebooking(suggestions, aheadDays = 7) {
-  return suggestions.filter((item) => !item.bookedFor && item.daysUntilDue <= aheadDays);
+  return suggestions.filter((item) => !item.bookedFor && item.daysUntilDue <= aheadDays && !item.contactedRecently);
+}
+
+/** Due customers the owner contacted recently, waiting to see if they book. */
+export function waitingToBook(suggestions, aheadDays = 7) {
+  return suggestions.filter((item) => !item.bookedFor && item.daysUntilDue <= aheadDays && item.contactedRecently);
 }

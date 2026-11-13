@@ -1,4 +1,4 @@
-import { businessKind, dayStart, dueForRebooking, rebookingSuggestions, visitsByLead } from "./rebooking";
+import { CONTACT_SNOOZE_DAYS, businessKind, dayStart, dueForRebooking, rebookingSuggestions, visitsByLead, waitingToBook } from "./rebooking";
 
 const visit = (lead, date, extra = {}) => ({ lead, date, time: "10:00", ...extra });
 const done = (lead, date) => visit(lead, date, { status: "completed", _backend: {} });
@@ -104,4 +104,122 @@ test("impossible dates are ignored and visits dated in the future are never comp
   expect(dayStart("2026-02-31")).toBeNull();
   expect(dayStart("2026-02-28")).toBe(Date.UTC(2026, 1, 28));
   expect(rebookingSuggestions({ leads: [ana], appointments: [done(ana, "2026-09-01")], user: {}, today: "not-a-date" })).toEqual([]);
+});
+
+test("a due customer contacted in the last week waits to book instead of staying on the contact list", () => {
+  const leads = [
+    { id: "fresh", last_outreach_at: "2026-11-04T15:00:00Z" }, // contacted 2 days ago
+    { id: "stale", last_outreach_at: "2026-10-26T15:00:00Z" }, // contacted 11 days ago: back on the list
+    { id: "before", last_outreach_at: "2026-09-20T15:00:00Z" }, // contact before the last visit is not a follow-up
+    { id: "never" },
+  ];
+  const suggestions = rebookingSuggestions({
+    leads,
+    appointments: leads.map((lead) => done(lead, "2026-10-01")),
+    user: { businessType: "Barber shop" },
+    today,
+  });
+  const byId = Object.fromEntries(suggestions.map((item) => [item.lead.id, item]));
+  expect(byId.fresh).toMatchObject({ contactedOn: "2026-11-04", waitingUntil: "2026-11-11", contactedRecently: true });
+  expect(byId.stale).toMatchObject({ contactedOn: "2026-10-26", contactedRecently: false });
+  expect(byId.before).toMatchObject({ contactedOn: "", contactedRecently: false });
+  expect(dueForRebooking(suggestions).map((item) => item.lead.id).sort()).toEqual(["before", "never", "stale"]);
+  expect(waitingToBook(suggestions).map((item) => item.lead.id)).toEqual(["fresh"]);
+  expect(CONTACT_SNOOZE_DAYS).toBe(7);
+});
+
+test("a booked customer is neither due nor waiting, even if contacted", () => {
+  const lead = { id: "booked", last_outreach_at: "2026-11-04T15:00:00Z" };
+  const suggestions = rebookingSuggestions({
+    leads: [lead],
+    appointments: [done(lead, "2026-09-01"), visit(lead, "2026-11-20", { status: "scheduled", _backend: {} })],
+    user: {},
+    today,
+  });
+  expect(dueForRebooking(suggestions)).toEqual([]);
+  expect(waitingToBook(suggestions)).toEqual([]);
+});
+
+test("creating a contact (which stamps last_contacted) does not count as following up", () => {
+  const lead = { id: "new", last_contacted: "2026-11-05T09:00:00Z", createdAt: "2026-11-05T09:00:00Z" };
+  const [item] = rebookingSuggestions({ leads: [lead], appointments: [done(lead, "2026-09-01")], user: {}, today });
+  expect(item.contactedRecently).toBe(false);
+  expect(dueForRebooking([item])).toHaveLength(1);
+});
+
+describe("outreach days are compared in the workspace's own time zone", () => {
+  // Visits on Oct 1 with a 28-day barber default: due Oct 29, so overdue on Nov 6.
+  const suggest = (lastOutreachAt, timeZone) => {
+    const lead = { id: "x", last_outreach_at: lastOutreachAt };
+    return rebookingSuggestions({ leads: [lead], appointments: [done(lead, "2026-10-01")], user: { businessType: "Barber shop" }, today, timeZone })[0];
+  };
+
+  test("a Toronto evening follow-up (already tomorrow in UTC) counts today, not tomorrow", () => {
+    const item = suggest("2026-11-07T01:30:00Z", "America/Toronto"); // Nov 6, 8:30 pm in Toronto
+    expect(item).toMatchObject({ contactedOn: "2026-11-06", waitingUntil: "2026-11-13", contactedRecently: true });
+    expect(dueForRebooking([item])).toEqual([]);
+    expect(waitingToBook([item])).toHaveLength(1);
+  });
+
+  test("an Auckland morning follow-up (still yesterday in UTC) uses the Auckland day at the 7-day boundary", () => {
+    const item = suggest("2026-10-30T12:30:00Z", "Pacific/Auckland"); // Oct 31, 1:30 am in Auckland: 6 days ago
+    expect(item).toMatchObject({ contactedOn: "2026-10-31", contactedRecently: true });
+    expect(waitingToBook([item])).toHaveLength(1);
+  });
+
+  test("seven local days after the follow-up the customer is back on the list", () => {
+    const sevenDaysAgo = suggest("2026-10-31T00:30:00Z", "America/Toronto"); // Oct 30, 8:30 pm in Toronto
+    expect(sevenDaysAgo).toMatchObject({ contactedOn: "2026-10-30", waitingUntil: "2026-11-06", contactedRecently: false });
+    expect(dueForRebooking([sevenDaysAgo])).toHaveLength(1);
+    const sixDaysAgo = suggest("2026-10-31T23:30:00Z", "America/Toronto"); // Oct 31, 7:30 pm in Toronto
+    expect(sixDaysAgo).toMatchObject({ contactedOn: "2026-10-31", contactedRecently: true });
+    expect(dueForRebooking([sixDaysAgo])).toEqual([]);
+  });
+
+  test("a follow-up later in the workspace's future day is not counted yet", () => {
+    // 11 pm Nov 6 in Auckland is still Nov 6 for an Auckland workspace, but Nov 7 for one in London.
+    expect(suggest("2026-11-06T10:00:00Z", "Pacific/Auckland").contactedOn).toBe("2026-11-06");
+    expect(suggest("2026-11-07T10:00:00Z", "Europe/London").contactedOn).toBe("");
+  });
+});
+
+test("reviewer case: a Toronto follow-up at 10 pm Nov 12 (03:00 UTC Nov 13) is waiting on Nov 12, not due", () => {
+  const lead = { id: "r", last_outreach_at: "2026-11-13T03:00:00Z" };
+  const suggestions = rebookingSuggestions({ leads: [lead], appointments: [done(lead, "2026-10-01")], user: { businessType: "Barber shop" }, today: "2026-11-12", timeZone: "America/Toronto" });
+  expect(suggestions[0].daysUntilDue).toBeLessThan(0); // overdue since Oct 29
+  expect(dueForRebooking(suggestions)).toHaveLength(0);
+  expect(waitingToBook(suggestions)).toHaveLength(1);
+});
+
+describe("explicit outreach on the day of the last visit", () => {
+  // Owner interval of 7 days and a completed visit today (Nov 6) at 10:00 make the customer due now.
+  const suggest = (lastOutreachAt, { time = "10:00", today: day = today } = {}) => {
+    const lead = { id: "d", rebook_interval_days: 7, last_outreach_at: lastOutreachAt };
+    return rebookingSuggestions({ leads: [lead], appointments: [visit(lead, "2026-11-06", { time, status: "completed", _backend: {} })], user: {}, today: day, timeZone: "America/Toronto" });
+  };
+
+  test("reviewer case: contacted at 10 pm Toronto after a 10:00 visit the same day snoozes the customer", () => {
+    const suggestions = suggest("2026-11-07T03:00:00Z"); // Nov 6, 10 pm in Toronto
+    expect(dueForRebooking(suggestions)).toHaveLength(0);
+    expect(waitingToBook(suggestions)).toHaveLength(1);
+    expect(suggestions[0]).toMatchObject({ contactedOn: "2026-11-06", waitingUntil: "2026-11-13" });
+  });
+
+  test("outreach earlier that day, before the visit, is not a follow-up", () => {
+    const suggestions = suggest("2026-11-06T12:00:00Z"); // Nov 6, 7 am in Toronto, before the 10:00 visit
+    expect(dueForRebooking(suggestions)).toHaveLength(1);
+    expect(waitingToBook(suggestions)).toHaveLength(0);
+  });
+
+  test("when the visit has no recorded time, same-day outreach counts", () => {
+    const suggestions = suggest("2026-11-06T12:00:00Z", { time: "" });
+    expect(waitingToBook(suggestions)).toHaveLength(1);
+  });
+
+  test("the snooze still ends exactly seven local days later", () => {
+    expect(waitingToBook(suggest("2026-11-07T03:00:00Z", { today: "2026-11-12" }))).toHaveLength(1);
+    const back = suggest("2026-11-07T03:00:00Z", { today: "2026-11-13" });
+    expect(waitingToBook(back)).toHaveLength(0);
+    expect(dueForRebooking(back)).toHaveLength(1);
+  });
 });

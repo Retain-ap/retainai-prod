@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import { FaCheck, FaCopy, FaMagic, FaPaperPlane, FaSearch, FaShieldAlt } from "react-icons/fa";
 import { apiUrl } from "../apiBase";
 import { BUSINESS_SETTINGS_PATH, HELD_DRAFT_MAX_CHARS, consumeHeldDraft, heldDraftScope, holdDraft, isBusinessProfileRequired, peekHeldDraft } from "../businessProfile";
@@ -25,7 +25,7 @@ const SUBJECTS = {
   upsell: () => "An option you may find helpful",
 };
 
-export default function AiPromptsDashboard({ leads = [], user = {}, onSendAIPromptEmail, onOpenBusinessSettings }) {
+export default function AiPromptsDashboard({ leads = [], user = {}, onSendAIPromptEmail, onOpenBusinessSettings, initialFocus = null, onFocusApplied }) {
   const [search, setSearch] = useState("");
   const [focusedLead, setFocusedLead] = useState(null);
   const [activePlaybook, setActivePlaybook] = useState(PLAYBOOKS[0].key);
@@ -37,6 +37,7 @@ export default function AiPromptsDashboard({ leads = [], user = {}, onSendAIProm
   const [status, setStatus] = useState("");
   const [error, setError] = useState("");
   const [needsBusinessName, setNeedsBusinessName] = useState(false);
+  const [missingFocus, setMissingFocus] = useState(false);
 
   // The backend uses the saved business name; no placeholder name is sent.
   const brandName = user.businessName || user.business || "";
@@ -57,7 +58,13 @@ export default function AiPromptsDashboard({ leads = [], user = {}, onSendAIProm
   // Put back a draft held while the owner went to Settings to add a business name.
   // It is removed only after it is back on screen for this account's same
   // customer; while customers are still loading it stays where it is.
+  // Set once a rebooking focus has been applied in this visit, so clearing the
+  // focus afterwards cannot let an older held draft replace the chosen customer.
+  const focusAppliedRef = useRef(false);
+
   useEffect(() => {
+    // A customer chosen from the rebooking list wins; a held draft stays stored for later.
+    if (initialFocus || focusAppliedRef.current) return;
     const held = peekHeldDraft(heldScope);
     if (!held) return;
     const lead = leads.find((item) => String(item.id) === String(held.leadId));
@@ -69,7 +76,32 @@ export default function AiPromptsDashboard({ leads = [], user = {}, onSendAIProm
     setContext(String(held.context || ""));
     setDraft(String(held.draft || ""));
     consumeHeldDraft(heldScope, held);
-  }, [heldScope, leads]);
+  }, [heldScope, initialFocus, leads]);
+
+  // Open on a customer chosen from the rebooking list, with factual context the
+  // owner can edit. This only prepares the screen: nothing is generated or sent.
+  useEffect(() => {
+    if (!initialFocus?.leadId || !leads.length) return;
+    // Any explicit request, even for a customer who no longer exists, keeps an
+    // unrelated held draft from appearing in its place.
+    focusAppliedRef.current = true;
+    const lead = leads.find((item) => String(item.id) === String(initialFocus.leadId));
+    setMissingFocus(!lead);
+    if (!lead) {
+      setFocusedLead(null);
+      setDraft("");
+      setContext("");
+    } else {
+      setFocusedLead(lead);
+      if (PLAYBOOKS.some((playbook) => playbook.key === initialFocus.playbook)) setActivePlaybook(initialFocus.playbook);
+      setContext(String(initialFocus.context || "").slice(0, 800));
+      setDraft("");
+      setError("");
+      setNeedsBusinessName(false);
+      setStatus("");
+    }
+    if (typeof onFocusApplied === "function") onFocusApplied();
+  }, [initialFocus, leads, onFocusApplied]);
 
   const showError = (err, fallback) => {
     setStatus("");
@@ -86,6 +118,7 @@ export default function AiPromptsDashboard({ leads = [], user = {}, onSendAIProm
   };
 
   const selectLead = (lead) => {
+    setMissingFocus(false);
     setFocusedLead(lead);
     setDraft("");
     setContext("");
@@ -194,7 +227,7 @@ export default function AiPromptsDashboard({ leads = [], user = {}, onSendAIProm
           </div>
         </aside>
         <main className="ai-compose-panel">
-          {!focusedLead ? <div className="ai-welcome"><FaMagic /><h3>Choose a customer to begin</h3><p>RetainAI will use their saved notes, tags, and relationship context to prepare a personalized draft.</p></div> : (
+          {!focusedLead ? <div className="ai-welcome"><FaMagic />{missingFocus ? <><h3>That customer is no longer in your contacts</h3><p role="status">They may have been removed or merged. Choose a customer from the list to start a draft.</p></> : <><h3>Choose a customer to begin</h3><p>RetainAI will use their saved notes, tags, and relationship context to prepare a personalized draft.</p></>}</div> : (
             <>
               <div className="ai-selected-customer"><span className="ai-avatar">{(focusedLead.name || "C").charAt(0).toUpperCase()}</span><div><small>Writing for</small><strong>{focusedLead.name || "Unnamed customer"}</strong><span>{focusedLead.email || "No email address"}</span></div></div>
               <div className="ai-step"><div className="ai-step-title"><span>2</span><div><strong>Select a playbook</strong><small>Start with a proven relationship moment.</small></div></div><div className="ai-playbooks">{PLAYBOOKS.map((playbook) => <button key={playbook.key} type="button" className={activePlaybook === playbook.key ? "active" : ""} onClick={() => selectPlaybook(playbook.key)}><strong>{playbook.label}</strong><small>{playbook.description}</small></button>)}</div></div>

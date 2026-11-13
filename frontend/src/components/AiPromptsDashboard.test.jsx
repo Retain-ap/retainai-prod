@@ -180,3 +180,90 @@ describe("business name required before customer messages", () => {
     expect(sessionStorage.length).toBe(0);
   });
 });
+
+describe("opening from the rebooking list", () => {
+  afterEach(() => {
+    sessionStorage.clear();
+    delete global.fetch;
+  });
+
+  test("selects the customer with the follow-up playbook and factual context, and generates or sends nothing", async () => {
+    global.fetch = jest.fn();
+    const applied = jest.fn();
+    const send = jest.fn();
+    render(<AiPromptsDashboard leads={[lead]} user={{ email: "owner@example.com" }} onSendAIPromptEmail={send}
+      initialFocus={{ leadId: "lead-1", playbook: "followup", context: "Due to rebook: last completed visit Oct 1; usually every 30 days." }} onFocusApplied={applied} />);
+    expect(await screen.findByText("Writing for")).toBeInTheDocument();
+    expect(screen.getByDisplayValue("Due to rebook: last completed visit Oct 1; usually every 30 days.")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /Follow-up/ })).toHaveClass("active");
+    expect(applied).toHaveBeenCalled();
+    expect(global.fetch).not.toHaveBeenCalled();
+    expect(send).not.toHaveBeenCalled();
+  });
+
+  test("a focus request for a customer who is gone is cleared without selecting anyone", async () => {
+    const applied = jest.fn();
+    render(<AiPromptsDashboard leads={[lead]} user={{ email: "owner@example.com" }} initialFocus={{ leadId: "gone", playbook: "followup", context: "x" }} onFocusApplied={applied} />);
+    await waitFor(() => expect(applied).toHaveBeenCalled());
+    expect(screen.queryByText("Writing for")).not.toBeInTheDocument();
+  });
+
+  test("an explicit focus leaves a held business-name draft stored for later", async () => {
+    holdDraft(heldDraftScope("ai-studio", { email: "owner@example.com" }), { leadId: "lead-1", draft: "Held words.", playbook: "reengage" });
+    render(<AiPromptsDashboard leads={[lead]} user={{ email: "owner@example.com" }} initialFocus={{ leadId: "lead-1", playbook: "followup", context: "Due to rebook." }} onFocusApplied={jest.fn()} />);
+    expect(await screen.findByDisplayValue("Due to rebook.")).toBeInTheDocument();
+    expect(screen.queryByDisplayValue("Held words.")).not.toBeInTheDocument();
+    expect(sessionStorage.getItem(heldDraftScope("ai-studio", { email: "owner@example.com" }))).not.toBeNull();
+  });
+});
+
+describe("opening from the rebooking list with the dashboard clearing the request", () => {
+  afterEach(() => sessionStorage.clear());
+
+  function Host({ focus }) {
+    // Mirrors CrmDashboard: the request is cleared once AI Studio applies it.
+    const [initialFocus, setInitialFocus] = React.useState(focus);
+    return <AiPromptsDashboard leads={[lead, { id: "lead-2", name: "Riley", email: "riley@example.com" }]} user={{ email: "owner@example.com" }}
+      initialFocus={initialFocus} onFocusApplied={() => setInitialFocus(null)} />;
+  }
+
+  test("an older held draft never replaces the customer and context just requested", async () => {
+    const scope = heldDraftScope("ai-studio", { email: "owner@example.com" });
+    holdDraft(scope, { leadId: "lead-2", draft: "Older held words.", context: "Older context", playbook: "reengage" });
+    render(<Host focus={{ leadId: "lead-1", playbook: "followup", context: "Due to rebook: last completed visit Oct 1." }} />);
+    expect(await screen.findByDisplayValue("Due to rebook: last completed visit Oct 1.")).toBeInTheDocument();
+    // Let the cleared request re-run every effect.
+    await act(async () => { await new Promise((resolve) => setTimeout(resolve, 20)); });
+    expect(screen.getByDisplayValue("Due to rebook: last completed visit Oct 1.")).toBeInTheDocument();
+    expect(screen.queryByDisplayValue("Older held words.")).not.toBeInTheDocument();
+    expect(screen.queryByDisplayValue("Older context")).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /Follow-up/ })).toHaveClass("active");
+    expect(sessionStorage.getItem(scope)).not.toBeNull();
+  });
+
+  test("without a request, a held draft is still restored as before", async () => {
+    const scope = heldDraftScope("ai-studio", { email: "owner@example.com" });
+    holdDraft(scope, { leadId: "lead-2", draft: "Held words.", playbook: "reengage" });
+    render(<Host focus={null} />);
+    expect(await screen.findByDisplayValue("Held words.")).toBeInTheDocument();
+  });
+});
+
+test("a request for a customer who was removed shows that, and an unrelated held draft does not appear", async () => {
+  const scope = heldDraftScope("ai-studio", { email: "owner@example.com" });
+  holdDraft(scope, { leadId: "lead-1", draft: "Unrelated held words.", playbook: "reengage" });
+  function Host() {
+    const [initialFocus, setInitialFocus] = React.useState({ leadId: "deleted-customer", playbook: "followup", context: "Due to rebook." });
+    return <AiPromptsDashboard leads={[lead]} user={{ email: "owner@example.com" }} initialFocus={initialFocus} onFocusApplied={() => setInitialFocus(null)} />;
+  }
+  render(<Host />);
+  expect(await screen.findByRole("heading", { name: "That customer is no longer in your contacts" })).toBeInTheDocument();
+  await act(async () => { await new Promise((resolve) => setTimeout(resolve, 20)); });
+  expect(screen.queryByText("Writing for")).not.toBeInTheDocument();
+  expect(screen.queryByDisplayValue("Unrelated held words.")).not.toBeInTheDocument();
+  expect(sessionStorage.getItem(scope)).not.toBeNull();
+  // Choosing a customer clears the notice.
+  fireEvent.click(screen.getByRole("button", { name: /Jordan/ }));
+  expect(screen.queryByText("That customer is no longer in your contacts")).not.toBeInTheDocument();
+  sessionStorage.clear();
+});

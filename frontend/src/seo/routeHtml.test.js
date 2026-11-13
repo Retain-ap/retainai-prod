@@ -110,3 +110,14 @@ test("the sitemap lists exactly the indexable routes, and the rebooking guide is
   const fromCategory = new DOMParser().parseFromString(buildRouteHtml(homepage, "/retention-crm-for-service-businesses", routeMeta["/retention-crm-for-service-businesses"], { indexable: true }), "text/html");
   expect(fromCategory.querySelector(`a[href="${route}"]`)).not.toBeNull();
 });
+
+test("/partners serves its terms and live product benefits before JavaScript", () => {
+  const doc = new DOMParser().parseFromString(buildRouteHtml(homepage, "/partners", routeMeta["/partners"], { indexable: true }), "text/html");
+  const text = doc.body.textContent;
+  expect(text).toContain("30% of qualifying base membership payments for the first 12 months");
+  expect(text).toContain("30-day hold");
+  publicContent.partners.benefits.forEach((item) => expect(text).toContain(item));
+  expect(doc.querySelector('a[href^="mailto:owner@retainai.ca"]')).not.toBeNull();
+  expect(text).toContain("earnings are not guaranteed");
+  expect(doc.querySelectorAll("h1")).toHaveLength(1);
+});

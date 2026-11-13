@@ -2691,6 +2691,30 @@ def api_save_leads():
         return jsonify({"ok": False, "error": str(e)[:300]}), 500
 
 
+def _record_lead_contacted(owner_email: str, lead_id: str, contacted_at: str) -> Optional[dict]:
+    """Record a completed outreach on one contact; the caller holds leads_lock.
+
+    Uses the same fields as POST /api/leads/contacted. last_outreach_at is set
+    only by real outreach (a delivered follow-up or the owner marking the
+    contact), never by creating or importing a contact, so the rebooking list
+    can rely on it.
+    """
+    lead_id = str(lead_id or "").strip()
+    if not owner_email or not lead_id:
+        return None
+    leads = load_user_leads(owner_email)
+    for lead in leads:
+        if isinstance(lead, dict) and str(lead.get("id") or "") == lead_id:
+            lead["last_contacted"] = contacted_at
+            lead["last_activity_at"] = contacted_at
+            lead["updated_at"] = contacted_at
+            lead["status"] = "active"
+            lead["last_outreach_at"] = contacted_at
+            save_user_leads(owner_email, leads)
+            return lead
+    return None
+
+
 @app.post("/api/leads/contacted")
 @_holds_leads_lock
 def api_mark_lead_contacted():
@@ -2712,6 +2736,7 @@ def api_mark_lead_contacted():
             lead["last_activity_at"] = contacted_at
             lead["updated_at"] = contacted_at
             lead["status"] = "active"
+            lead["last_outreach_at"] = contacted_at
             updated = lead
             break
     if updated is None:
@@ -8529,6 +8554,17 @@ def send_ai_message():
 
     if owner_email:
         record_followup(owner_email, lead_email=to_email, channel="email", source="ai_email")
+        # A sent follow-up is real contact: record it so the customer is shown as
+        # contacted (and leaves the rebooking list for a while) instead of untouched.
+        try:
+            with leads_lock():
+                _record_lead_contacted(
+                    owner_email,
+                    str(lead.get("id") or ""),
+                    datetime.datetime.now(datetime.timezone.utc).isoformat().replace("+00:00", "Z"),
+                )
+        except Exception:
+            app.logger.exception("[SEND AI MESSAGE] could not record the contact time")
         add_notification(
             user_email=owner_email,
             subject="AI email sent",
