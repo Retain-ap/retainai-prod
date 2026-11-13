@@ -46,12 +46,21 @@ function reasonText(reasons, code) {
   return code ? (reasons?.[code] || REASONS[code] || code) : "";
 }
 
-export default function ImportContacts({ user, focusGoogle = false, initialSource = "apple" }) {
+export default function ImportContacts(props) {
+  const identity = String(props.user?.org_id || props.user?.email || "").toLowerCase();
+  return <ImportWorkspace key={identity} {...props} />;
+}
+
+function ImportWorkspace({ user, focusGoogle = false, initialSource = "apple" }) {
   const userEmail = useMemo(() => String(user?.org_id || user?.email || "").toLowerCase(), [user]);
   const inputRef = useRef(null);
   const popupRef = useRef(null);
+  const popupTimer = useRef(null);
   const googleCardRef = useRef(null);
   const planSeq = useRef(0);
+  const refreshSeq = useRef(0);
+  const mounted = useRef(false);
+  const operation = useRef(null);
   const dirty = useRef(false);
   const [file, setFile] = useState(null);
   const [dragging, setDragging] = useState(false);
@@ -64,6 +73,8 @@ export default function ImportContacts({ user, focusGoogle = false, initialSourc
   const [tag, setTag] = useState("Imported");
   const [plan, setPlan] = useState(null);
   const [planning, setPlanning] = useState(false);
+  const [reviewError, setReviewError] = useState("");
+  const [reviewAttempt, setReviewAttempt] = useState(0);
   const [filter, setFilter] = useState("all");
   const [result, setResult] = useState(null);
   const [googleResult, setGoogleResult] = useState(null);
@@ -74,15 +85,46 @@ export default function ImportContacts({ user, focusGoogle = false, initialSourc
   const [error, setError] = useState("");
 
   useEffect(() => {
+    mounted.current = true;
+    return () => {
+      mounted.current = false;
+      operation.current = null;
+      planSeq.current += 1;
+      refreshSeq.current += 1;
+      if (popupTimer.current) window.clearInterval(popupTimer.current);
+    };
+  }, []);
+
+  function beginOperation(name) {
+    if (!mounted.current || operation.current) return null;
+    const token = {};
+    operation.current = token;
+    setBusy(name);
+    return token;
+  }
+  function currentOperation(token) { return mounted.current && operation.current === token; }
+  function finishOperation(token) {
+    if (!currentOperation(token)) return;
+    operation.current = null;
+    setBusy("");
+  }
+  function contactsChanged() {
+    // A submitted write can finish after navigating away. Only its workspace should reload.
+    window.dispatchEvent(new CustomEvent("leads:changed", { detail: { workspaceEmail: userEmail } }));
+  }
+
+  useEffect(() => {
     setGuide(SOURCES.some(item => item.key === initialSource) ? initialSource : "apple");
   }, [initialSource]);
 
   const refresh = useCallback(async () => {
-    if (!userEmail) return;
+    if (!userEmail || !mounted.current) return;
+    const sequence = ++refreshSeq.current;
     const [historyData, googleData] = await Promise.all([
       request("import/history", {}, userEmail).catch(() => ({ imports: [] })),
       request(`google/status?userEmail=${encodeURIComponent(userEmail)}`, {}, userEmail).catch(() => null),
     ]);
+    if (!mounted.current || sequence !== refreshSeq.current) return;
     setHistory(historyData.imports || []);
     setGoogle(googleData);
   }, [userEmail]);
@@ -109,98 +151,138 @@ export default function ImportContacts({ user, focusGoogle = false, initialSourc
   useEffect(() => {
     if (!preview || !dirty.current) return undefined;
     const seq = ++planSeq.current;
-    if (!hasChannel) { setPlan(null); setPlanning(false); return undefined; }
+    setPlan(null);
+    setReviewError("");
+    if (!hasChannel) { setPlanning(false); return undefined; }
     setPlanning(true);
     const timer = window.setTimeout(async () => {
       try {
         const data = await request("import/file/commit", {
           method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload({ dry_run: true })),
         }, userEmail);
-        if (seq === planSeq.current) setPlan({ summary: data.summary, outcomes: data.outcomes || [] });
+        if (seq === planSeq.current) setPlan({ sequence: seq, summary: data.summary, outcomes: data.outcomes || [] });
       } catch (err) {
-        if (seq === planSeq.current) setError(err.message);
+        if (seq === planSeq.current) setReviewError(err.message);
       } finally {
         if (seq === planSeq.current) setPlanning(false);
       }
     }, 400);
     return () => window.clearTimeout(timer);
-  }, [preview, hasChannel, payload, userEmail]);
+  }, [preview, hasChannel, payload, userEmail, reviewAttempt]);
+
+  function invalidateReview() {
+    // Invalidate synchronously: an old response or click cannot reuse this plan
+    // while React is applying the edited inputs and scheduling their recount.
+    planSeq.current += 1;
+    setPlan(null); setReviewError(""); setPlanning(true);
+    setReviewAttempt((value) => value + 1);
+  }
 
   function edited(setter) {
-    return (value) => { dirty.current = true; setter(value); };
+    return (value) => {
+      if (!mounted.current || operation.current) return;
+      dirty.current = true;
+      invalidateReview();
+      setter(value);
+    };
+  }
+
+  function retryReview() {
+    if (!mounted.current || operation.current || !preview || !hasChannel) return;
+    invalidateReview();
   }
 
   function clearPreview() {
     planSeq.current += 1;
     dirty.current = false;
-    setPreview(null); setRows([]); setPlan(null); setPlanning(false); setFile(null);
+    setPreview(null); setRows([]); setPlan(null); setPlanning(false); setReviewError(""); setFile(null);
   }
 
   async function createPreview(selected) {
     if (!selected) return;
+    const token = beginOperation("preview");
+    if (!token) return;
     clearPreview();
-    setFile(selected); setBusy("preview"); setError(""); setResult(null); setGoogleResult(null); setFilter("all");
+    setFile(selected); setError(""); setResult(null); setGoogleResult(null); setFilter("all");
     try {
       const form = new FormData(); form.append("file", selected);
       const data = await request("import/file/preview", { method: "POST", body: form }, userEmail);
+      if (!currentOperation(token)) return;
       // The server preview uses these defaults; later edits trigger a recount.
       setCountryCode("+1"); setDuplicateMode("skip");
       setPreview(data); setRows(data.rows || []); setMapping(data.mapping || {});
-      setPlan({ summary: data.summary, outcomes: data.outcomes || [] });
+      setPlan({ sequence: planSeq.current, summary: data.summary, outcomes: data.outcomes || [] });
     } catch (err) {
-      setFile(null); setError(err.message);
+      if (currentOperation(token)) { setFile(null); setError(err.message); }
     } finally {
-      setBusy("");
-      if (inputRef.current) inputRef.current.value = "";
+      if (currentOperation(token) && inputRef.current) inputRef.current.value = "";
+      finishOperation(token);
     }
   }
 
   async function commit() {
-    setBusy("commit"); setError("");
+    if (!plan || plan.sequence !== planSeq.current || !hasChannel || !ready || planning) return;
+    const token = beginOperation("commit");
+    if (!token) return;
+    setError("");
     try {
       const data = await request("import/file/commit", {
         method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload()),
       }, userEmail);
+      if (!currentOperation(token)) { contactsChanged(); return; }
       const problems = (data.outcomes || [])
         .filter((item) => item.status === "invalid" || (item.status === "skipped" && item.reason !== "not_selected") || (item.reason && item.status !== "skipped"))
         .map((item) => ({ ...item, name: rowName(rows[item.index], item, mapping) }));
       setResult({ summary: data.summary || {}, problems, reasons: preview?.reasons });
       clearPreview();
       await refresh();
-      window.dispatchEvent(new Event("leads:changed"));
-    } catch (err) { setError(err.message); } finally { setBusy(""); }
+      contactsChanged();
+    } catch (err) { if (currentOperation(token)) setError(err.message); } finally { finishOperation(token); }
   }
 
   async function undo(id) {
+    if (operation.current) return;
     if (!window.confirm("Undo this import? Contacts it added are removed and contacts it changed go back to how they were. Contacts edited since the import are kept as they are.")) return;
-    setBusy(`undo:${id}`); setError(""); setUndoResult(null);
+    const token = beginOperation(`undo:${id}`);
+    if (!token) return;
+    setError(""); setUndoResult(null);
     try {
       const data = await request(`import/${encodeURIComponent(id)}/undo`, { method: "POST" }, userEmail);
+      if (!currentOperation(token)) { contactsChanged(); return; }
       setUndoResult(data);
-      await refresh(); window.dispatchEvent(new Event("leads:changed"));
-    } catch (err) { setError(err.message); } finally { setBusy(""); }
+      await refresh(); contactsChanged();
+    } catch (err) { if (currentOperation(token)) setError(err.message); } finally { finishOperation(token); }
   }
 
   function connectGoogle() {
+    if (!mounted.current || operation.current) return;
     const redirect = `${window.location.origin}/app/import`;
     popupRef.current = window.open(apiUrl(`google/authorize?userEmail=${encodeURIComponent(userEmail)}&redirect=${encodeURIComponent(redirect)}`), "google_contacts", "width=540,height=700");
-    const timer = setInterval(() => { if (!popupRef.current || popupRef.current.closed) { clearInterval(timer); refresh(); } }, 800);
+    if (popupTimer.current) window.clearInterval(popupTimer.current);
+    popupTimer.current = window.setInterval(() => { if (!popupRef.current || popupRef.current.closed) { window.clearInterval(popupTimer.current); popupTimer.current = null; refresh(); } }, 800);
   }
 
   async function importGoogle() {
-    setBusy("google"); setError(""); setResult(null);
+    const token = beginOperation("google");
+    if (!token) return;
+    setError(""); setResult(null);
     try {
       const data = await request("google/import-now", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ userEmail }) }, userEmail);
-      setGoogleResult(data.summary || {}); await refresh(); window.dispatchEvent(new Event("leads:changed"));
-    } catch (err) { setError(err.message); } finally { setBusy(""); }
+      if (!currentOperation(token)) { contactsChanged(); return; }
+      setGoogleResult(data.summary || {}); await refresh(); contactsChanged();
+    } catch (err) { if (currentOperation(token)) setError(err.message); } finally { finishOperation(token); }
   }
 
   async function disconnectGoogle() {
-    setBusy("google-disconnect"); setError("");
+    const token = beginOperation("google-disconnect");
+    if (!token) return;
+    setError("");
     try {
       await request("google/disconnect", { method: "POST" }, userEmail);
+      if (!currentOperation(token)) return;
+      refreshSeq.current += 1;
       setGoogle((current) => ({ ...(current || {}), google_connected: false, has_refresh_token: false, sync_token_present: false }));
-    } catch (err) { setError(err.message); } finally { setBusy(""); }
+    } catch (err) { if (currentOperation(token)) setError(err.message); } finally { finishOperation(token); }
   }
 
   const outcomes = plan?.outcomes || [];
@@ -233,10 +315,10 @@ export default function ImportContacts({ user, focusGoogle = false, initialSourc
       <div className="import-grid">
         <section className="product-card">
           <div className="product-card-header"><div><h2>Upload a contact file</h2><p className="product-card-copy">CSV or vCard (.vcf), up to 5 MB and 5,000 contacts.</p></div></div>
-          <button type="button" className={`import-dropzone ${dragging ? "dragging" : ""}`} disabled={busy === "preview"} onClick={() => inputRef.current?.click()} onDragOver={(event) => { event.preventDefault(); setDragging(true); }} onDragLeave={() => setDragging(false)} onDrop={(event) => { event.preventDefault(); setDragging(false); createPreview(event.dataTransfer.files?.[0]); }}>
+          <button type="button" className={`import-dropzone ${dragging ? "dragging" : ""}`} disabled={Boolean(busy)} onClick={() => inputRef.current?.click()} onDragOver={(event) => { event.preventDefault(); setDragging(true); }} onDragLeave={() => setDragging(false)} onDrop={(event) => { event.preventDefault(); setDragging(false); createPreview(event.dataTransfer.files?.[0]); }}>
             <FaCloudUploadAlt aria-hidden="true" /><strong>{busy === "preview" ? "Reading file…" : file?.name || "Drop a .csv or .vcf file here"}</strong><span>or tap to choose a file</span>
           </button>
-          <input ref={inputRef} hidden type="file" data-testid="import-file" accept=".csv,.tsv,.txt,.vcf,.vcard,text/csv,text/vcard,text/x-vcard" onChange={(event) => createPreview(event.target.files?.[0])} />
+          <input ref={inputRef} hidden type="file" data-testid="import-file" disabled={Boolean(busy)} accept=".csv,.tsv,.txt,.vcf,.vcard,text/csv,text/vcard,text/x-vcard" onChange={(event) => createPreview(event.target.files?.[0])} />
         </section>
 
         <section className="product-card">
@@ -255,17 +337,21 @@ export default function ImportContacts({ user, focusGoogle = false, initialSourc
         </div></div>
 
         <div className="import-summary ra-keep-grid" aria-live="polite" data-testid="import-summary">
-          {[["New", summary.imported], ["Update", (summary.updated || 0) + (summary.merged || 0)], ["Skip", summary.skipped], ["Needs fixing", summary.invalid]].map(([label, value]) => <div key={label}><strong>{planning ? "…" : value || 0}</strong><span>{label}</span></div>)}
+          {[["New", summary.imported], ["Update", (summary.updated || 0) + (summary.merged || 0)], ["Skip", summary.skipped], ["Needs fixing", summary.invalid]].map(([label, value]) => <div key={label}><strong>{planning ? "…" : plan ? value || 0 : "—"}</strong><span>{label}</span></div>)}
         </div>
+        {reviewError && <div className="product-alert danger" role="alert">
+          <p>Review could not be updated. {reviewError} Retry the review before importing these contacts.</p>
+          <button type="button" className="product-button" disabled={Boolean(busy) || planning || !hasChannel} onClick={retryReview}>Retry review</button>
+        </div>}
 
         <h3 className="import-subhead">Match columns</h3>
-        <div className="mapping-grid">{FIELDS.map(([key, label]) => <label key={key}>{label}<select className="product-input" value={mapping[key] || ""} onChange={(event) => edited(setMapping)({ ...mapping, [key]: event.target.value })}><option value="">Not imported</option>{preview.headers.map((header) => <option key={header} value={header}>{header}</option>)}</select></label>)}</div>
+        <div className="mapping-grid">{FIELDS.map(([key, label]) => <label key={key}>{label}<select className="product-input" disabled={Boolean(busy)} value={mapping[key] || ""} onChange={(event) => edited(setMapping)({ ...mapping, [key]: event.target.value })}><option value="">Not imported</option>{preview.headers.map((header) => <option key={header} value={header}>{header}</option>)}</select></label>)}</div>
         {!hasChannel && <div className="product-alert danger" role="alert">Match an Email or Phone column. Every contact needs one so it can be matched and reached.</div>}
 
         <div className="import-options">
-          <label>Country code for local numbers<input className="product-input" value={countryCode} inputMode="tel" onChange={(event) => edited(setCountryCode)(event.target.value)} /></label>
-          <label>If a contact already exists<select className="product-input" value={duplicateMode} onChange={(event) => edited(setDuplicateMode)(event.target.value)}><option value="skip">Skip it</option><option value="merge">Fill in its blank fields</option><option value="update">Replace with file values</option></select></label>
-          <label>Tag imported contacts<input className="product-input" value={tag} maxLength={80} onChange={(event) => setTag(event.target.value)} /></label>
+          <label>Country code for local numbers<input className="product-input" disabled={Boolean(busy)} value={countryCode} inputMode="tel" onChange={(event) => edited(setCountryCode)(event.target.value)} /></label>
+          <label>If a contact already exists<select className="product-input" disabled={Boolean(busy)} value={duplicateMode} onChange={(event) => edited(setDuplicateMode)(event.target.value)}><option value="skip">Skip it</option><option value="merge">Fill in its blank fields</option><option value="update">Replace with file values</option></select></label>
+          <label>Tag imported contacts<input className="product-input" disabled={Boolean(busy)} value={tag} maxLength={80} onChange={(event) => edited(setTag)(event.target.value)} /></label>
         </div>
         <div className="product-alert import-consent" role="note" data-testid="import-consent">
           <strong>Email consent</strong>
@@ -277,14 +363,14 @@ export default function ImportContacts({ user, focusGoogle = false, initialSourc
         </div>
         <div className="owner-table-wrap"><table className="owner-table import-table">
           <thead><tr>
-            <th><input type="checkbox" aria-label="Select all rows" checked={rows.length > 0 && selectedCount === rows.length} onChange={(event) => edited(setRows)(rows.map((row) => ({ ...row, selected: event.target.checked })))} /></th>
+            <th><input type="checkbox" aria-label="Select all rows" disabled={Boolean(busy)} checked={rows.length > 0 && selectedCount === rows.length} onChange={(event) => edited(setRows)(rows.map((row) => ({ ...row, selected: event.target.checked })))} /></th>
             <th>Name</th><th>Email</th><th>Phone</th><th>Result</th>
           </tr></thead>
           <tbody>{visible.slice(0, ROW_LIMIT).map(({ row, index, outcome }) => {
             const [label, tone] = STATUS[outcome?.status] || ["—", "import-skip"];
             const raw = row.raw || {};
             return <tr key={index}>
-              <td><input type="checkbox" aria-label={`Import row ${index + 1}`} checked={row.selected !== false} onChange={() => edited(setRows)(rows.map((item, itemIndex) => (itemIndex === index ? { ...item, selected: item.selected === false } : item)))} /></td>
+              <td><input type="checkbox" aria-label={`Import row ${index + 1}`} disabled={Boolean(busy)} checked={row.selected !== false} onChange={() => edited(setRows)(rows.map((item, itemIndex) => (itemIndex === index ? { ...item, selected: item.selected === false } : item)))} /></td>
               <td>{rowName(row, outcome, mapping)}</td>
               <td>{outcome?.contact?.email || (mapping.email && raw[mapping.email]) || "—"}</td>
               <td>{outcome?.contact?.phone || (mapping.phone && raw[mapping.phone]) || "—"}</td>
@@ -295,7 +381,7 @@ export default function ImportContacts({ user, focusGoogle = false, initialSourc
         {visible.length > ROW_LIMIT && <p className="product-card-copy">Showing the first {ROW_LIMIT} of {visible.length} rows. Every selected row is processed.</p>}
         {!visible.length && <p className="product-card-copy">No rows match this filter.</p>}
         <div className="owner-account-creator-actions">
-          <button type="button" className="product-button" onClick={clearPreview}>Cancel</button>
+          <button type="button" className="product-button" disabled={Boolean(busy)} onClick={() => { if (!operation.current) clearPreview(); }}>Cancel</button>
           <button type="button" className="product-button primary" disabled={!hasChannel || !ready || planning || Boolean(busy)} onClick={commit}>{busy === "commit" ? "Importing…" : `Import ${ready} contact${ready === 1 ? "" : "s"}`}</button>
         </div>
       </section>}

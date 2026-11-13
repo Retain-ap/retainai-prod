@@ -407,10 +407,14 @@ function CrmDashboard({ authenticatedUser }) {
   const [leadsReloadToken, setLeadsReloadToken] = useState(0);
 
   useEffect(() => {
-    const reload = () => setLeadsReloadToken((value) => value + 1);
+    const reload = (event) => {
+      const workspace = event.detail?.workspaceEmail;
+      if (workspace && workspace !== effectiveEmail) return;
+      setLeadsReloadToken((value) => value + 1);
+    };
     window.addEventListener("leads:changed", reload);
     return () => window.removeEventListener("leads:changed", reload);
-  }, []);
+  }, [effectiveEmail]);
 
   useEffect(() => {
     leadsRef.current = leads;
@@ -995,7 +999,12 @@ function CrmDashboard({ authenticatedUser }) {
     } catch {}
   }, [effectiveEmail, user, setUser]);
 
+  const appointmentsRequest = useRef(0);
+  const appointmentsMounted = useRef(false);
+  const appointmentsLifetime = useRef(0);
   const refreshAppointments = useCallback(async () => {
+    if (!appointmentsMounted.current) return;
+    const sequence = ++appointmentsRequest.current;
     if (!effectiveEmail) {
       setBackendAppointments([]);
       setAppointmentsTimezone("");
@@ -1007,11 +1016,16 @@ function CrmDashboard({ authenticatedUser }) {
     );
     if (!response.ok) throw new Error(`Appointments request failed (${response.status})`);
     const payload = await response.json().catch(() => ({}));
+    if (!appointmentsMounted.current || sequence !== appointmentsRequest.current) return;
     setBackendAppointments(Array.isArray(payload?.appointments) ? payload.appointments : []);
     setAppointmentsTimezone(payload?.timezone || "");
   }, [effectiveEmail]);
 
   useEffect(() => {
+    appointmentsMounted.current = true;
+    appointmentsLifetime.current += 1;
+    setBackendAppointments([]);
+    setAppointmentsTimezone("");
     let cancelled = false;
     const load = async () => {
       try {
@@ -1023,6 +1037,9 @@ function CrmDashboard({ authenticatedUser }) {
     load();
     window.addEventListener("appointments:changed", load);
     return () => {
+      appointmentsMounted.current = false;
+      appointmentsLifetime.current += 1;
+      appointmentsRequest.current += 1;
       cancelled = true;
       window.removeEventListener("appointments:changed", load);
     };
@@ -1170,6 +1187,8 @@ function CrmDashboard({ authenticatedUser }) {
 
   async function handleQuickAddSave({ leadId, title, time }) {
     if (!leadId || !title || !quickAddDate) return;
+    const lifetime = appointmentsLifetime.current;
+    const stillCurrent = () => appointmentsMounted.current && lifetime === appointmentsLifetime.current;
     try {
       const date = localDateKey(quickAddDate);
       const appointmentTime = buildAppointmentTimestamp(date, time);
@@ -1192,12 +1211,14 @@ function CrmDashboard({ authenticatedUser }) {
       );
       const payload = await response.json().catch(() => ({}));
       if (!response.ok) throw new Error(payload?.error || "Could not create the appointment.");
+      if (!stillCurrent()) return;
       await refreshAppointments();
+      if (!stillCurrent()) return;
       window.dispatchEvent(new Event("appointments:changed"));
       setShowQuickAdd(false);
       setQuickAddDate(null);
     } catch (error) {
-      alert(error?.message || "Could not create the appointment. Please try again.");
+      if (stillCurrent()) alert(error?.message || "Could not create the appointment. Please try again.");
     }
   }
 
