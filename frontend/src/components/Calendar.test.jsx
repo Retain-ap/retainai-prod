@@ -75,4 +75,42 @@ test("places offset and all-day events on their workspace calendar day", async (
   expect(await screen.findByText("Evening consultation")).toBeInTheDocument();
   expect(screen.getByText("Team holiday")).toBeInTheDocument();
   expect(screen.getByText("All day")).toBeInTheDocument();
+  expect(screen.getByText("Toronto time")).toHaveAttribute("title", "America/Toronto");
+});
+
+test.each([
+  ["cancelled", "Cancelled"],
+  ["no_show", "No-show"],
+])("provider %s is displayed as its actual outcome, not completed", async (status, label) => {
+  global.fetch = jest.fn().mockResolvedValue(jsonResponse({
+    timezone: "America/Toronto",
+    appointments: [{ id: "visit", title: "Provider visit", appointment_time: "2026-11-14T10:00:00", timezone: "America/Toronto", status, done: true, is_done: true }],
+  }));
+  render(<Calendar user={{ email: "owner@example.com" }} selectedDate={new Date(2026, 10, 14, 12)} setSelectedDate={jest.fn()} onDayClick={jest.fn()} />);
+  expect(await screen.findByText(`${label} appointment`)).toBeInTheDocument();
+  expect(screen.getByText(label)).toBeInTheDocument();
+  expect(screen.queryByText("Completed")).not.toBeInTheDocument();
+  expect(screen.queryByText("Completed appointment")).not.toBeInTheDocument();
+  expect(screen.getByText("Toronto time")).toBeInTheDocument();
+});
+
+test("local no-show status also overrides done while legacy completed visits remain completed", async () => {
+  global.fetch = jest.fn().mockResolvedValue(jsonResponse({ timezone: "America/Toronto", appointments: [] }));
+  const leads = [{ id: "ana", name: "Ana", appointments: [
+    { title: "Missed local visit", date: "2026-11-14", time: "10:00", status: "no-show", done: true },
+    { title: "Finished legacy visit", date: "2026-11-14", time: "11:00", done: true },
+  ] }];
+  render(<Calendar user={{ email: "owner@example.com" }} leads={leads} selectedDate={new Date(2026, 10, 14, 12)} setSelectedDate={jest.fn()} onDayClick={jest.fn()} />);
+  expect(await screen.findByText("No-show appointment")).toBeInTheDocument();
+  expect(screen.getByText("Completed appointment")).toBeInTheDocument();
+  expect(screen.getAllByText("Completed")).toHaveLength(1);
+});
+
+test("an older UTC record retains its recorded wall time and explicitly displays UTC", async () => {
+  global.fetch = jest.fn().mockResolvedValue(jsonResponse({ timezone: "America/Toronto", appointments: [
+    { id: "old", title: "Older UTC visit", appointment_time: "2026-11-14T15:00:00", timezone: "UTC" },
+  ] }));
+  render(<Calendar user={{ email: "owner@example.com" }} selectedDate={new Date(2026, 10, 14, 12)} setSelectedDate={jest.fn()} onDayClick={jest.fn()} />);
+  expect(await screen.findByText("UTC")).toHaveAttribute("title", "UTC");
+  expect(screen.queryByText("Toronto time")).not.toBeInTheDocument();
 });

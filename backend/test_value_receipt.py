@@ -299,7 +299,7 @@ class ValueReceiptApiTests(unittest.TestCase):
         self.other = f"other-{uuid.uuid4().hex[:8]}@example.com"
         self.users = {
             self.owner: {"email": self.owner, "role": "owner", "org_id": self.owner, "status": "active",
-                         "security_version": 0, "stripe_account_id": "acct_owner", "timezone": "America/Toronto"},
+                         "security_version": 0, "stripe_account_id": "acct_owner"},
             self.other: {"email": self.other, "role": "owner", "org_id": self.other, "status": "active",
                          "security_version": 0, "stripe_account_id": "acct_other"},
             f"user::{self.member}": {"email": self.member, "role": "member", "org_id": self.owner, "security_version": 0},
@@ -308,6 +308,7 @@ class ValueReceiptApiTests(unittest.TestCase):
         patcher = patch.object(retainai, "load_users", side_effect=lambda: self.users)
         patcher.start()
         self.addCleanup(patcher.stop)
+        retainai.save_user_profile(self.owner, {"timezone": "America/Toronto"})
         storage.save_user_leads(self.owner, [{"id": "a", "name": "Ana", "email": "ana@example.com"}])
         storage.save_user_leads(self.other, [{"id": "x", "name": "Xu", "email": "ana@example.com"}])
 
@@ -323,6 +324,54 @@ class ValueReceiptApiTests(unittest.TestCase):
         with patch.object(retainai.stripe.Invoice, "list", return_value=FakeListing(invoices)) as listed:
             response = self.client(email).post("/api/value-receipt/sync", headers=ORIGIN)
         return response, listed
+
+    def test_receipt_uses_saved_profile_timezone_before_legacy_account_fallback(self):
+        self.assertNotIn("timezone", self.users[self.owner])
+        client = self.client(self.owner)
+        self.assertEqual(client.get("/api/value-receipt").get_json()["period"]["timezone"], "America/Toronto")
+        self.users[self.owner]["timezone"] = "America/Vancouver"
+        self.assertEqual(client.get("/api/value-receipt").get_json()["period"]["timezone"], "America/Toronto")
+        retainai.save_user_profile(self.owner, {})
+        self.assertEqual(client.get("/api/value-receipt").get_json()["period"]["timezone"], "America/Vancouver")
+
+    def test_local_receipt_day_includes_evening_payment_after_utc_midnight(self):
+        fixed_now = dt.datetime(2026, 11, 14, 5, 30, tzinfo=UTC)
+        invoices = [
+            invoice("in_local_evening", paid="2026-11-14T03:30:00", created="2026-11-13T12:00:00"),
+            invoice("in_previous_local_day", paid="2026-11-13T04:30:00", created="2026-11-12T12:00:00"),
+        ]
+        with patch.object(app_value, "_now", return_value=fixed_now):
+            response, _ = self.sync(self.owner, invoices)
+            self.assertEqual(response.status_code, 200)
+            receipt = self.client(self.owner).get("/api/value-receipt?since=2026-11-13&until=2026-11-13")
+        self.assertEqual(receipt.status_code, 200)
+        body = receipt.get_json()
+        self.assertEqual(body["period"], {"since": "2026-11-13", "until": "2026-11-13", "timezone": "America/Toronto"})
+        self.assertEqual([item["id"] for item in body["items"]], ["stripe:in_local_evening"])
+        self.assertEqual(body["totals"]["cad"]["paid_verified_minor"], 12000)
+
+    def test_manual_payment_uses_local_time_and_rejects_tomorrow_before_local_midnight(self):
+        client = self.client(self.owner)
+        fixed_now = dt.datetime(2026, 11, 14, 2, 30, tzinfo=UTC)  # still Nov 13 in Toronto
+        payment = {"lead_id": "a", "amount": "25", "currency": "cad", "paid_at": "2026-11-13",
+                   "paid_time": "21:00", "idempotency_key": "local-time-0001"}
+        with patch.object(app_value, "_now", return_value=fixed_now):
+            accepted = client.post("/api/value-receipt/payments", json=payment, headers=ORIGIN)
+            day_only = client.post("/api/value-receipt/payments", json={**payment, "paid_time": "",
+                                   "idempotency_key": "local-day-0001"}, headers=ORIGIN)
+            tomorrow = client.post("/api/value-receipt/payments", json={**payment, "paid_at": "2026-11-14",
+                                   "paid_time": "", "idempotency_key": "future-day-0001"}, headers=ORIGIN)
+            future_time = client.post("/api/value-receipt/payments", json={**payment, "paid_time": "23:00",
+                                      "idempotency_key": "future-local-time-0001"}, headers=ORIGIN)
+        self.assertEqual(accepted.status_code, 201)
+        self.assertEqual(accepted.get_json()["record"]["paid_at"], "2026-11-14T02:00:00Z")
+        self.assertEqual(day_only.status_code, 201)
+        record = day_only.get_json()["record"]
+        self.assertEqual((record["paid_at"], record["paid_day_end"]), ("2026-11-13T05:00:00Z", "2026-11-14T05:00:00Z"))
+        self.assertEqual(tomorrow.status_code, 400)
+        self.assertIn("date can't be in the future", tomorrow.get_json()["error"])
+        self.assertEqual(future_time.status_code, 400)
+        self.assertIn("time can't be in the future", future_time.get_json()["error"])
 
     def test_only_the_workspace_owner_can_read_or_change_revenue(self):
         anonymous = retainai.app.test_client().get("/api/value-receipt")

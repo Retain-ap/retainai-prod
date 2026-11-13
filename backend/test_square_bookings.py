@@ -8,6 +8,7 @@ import unittest
 import uuid
 from unittest.mock import patch
 from urllib.parse import parse_qs, urlparse
+from zoneinfo import ZoneInfo
 
 _TEST_DATA = tempfile.TemporaryDirectory()
 os.environ.setdefault("DATA_ROOT", _TEST_DATA.name)
@@ -90,7 +91,7 @@ class SquareTests(unittest.TestCase):
         self.other = f"other-{uuid.uuid4().hex[:8]}@example.com"
         self.member = f"member-{uuid.uuid4().hex[:8]}@example.com"
         self.users = {
-            self.owner: {"email": self.owner, "role": "owner", "org_id": self.owner, "status": "active", "security_version": 0, "timezone": "America/Toronto"},
+            self.owner: {"email": self.owner, "role": "owner", "org_id": self.owner, "status": "active", "security_version": 0},
             self.other: {"email": self.other, "role": "owner", "org_id": self.other, "status": "active", "security_version": 0},
             self.member: {"email": self.member, "role": "member", "org_id": self.owner, "status": "active", "security_version": 0},
             f"user::{self.member}": {"email": self.member, "role": "member", "org_id": self.owner, "security_version": 0},
@@ -98,6 +99,7 @@ class SquareTests(unittest.TestCase):
         patcher = patch.object(retainai, "load_users", side_effect=lambda: self.users)
         patcher.start()
         self.addCleanup(patcher.stop)
+        retainai.save_user_profile(self.owner, {"timezone": "America/Toronto"})
         storage.save_user_leads(self.owner, [{"id": "ana", "name": "Ana", "email": "ana@example.com", "phone": "+1 416 555 0101"}])
         storage.save_user_leads(self.other, [{"id": "xu", "name": "Xu", "email": "ana@example.com"}])
         self.square = FakeSquare()
@@ -132,6 +134,100 @@ class SquareTests(unittest.TestCase):
 
     def appointments(self, workspace=None):
         return (retainai.load_appointments() or {}).get(workspace or self.owner) or []
+
+    def sync(self, client):
+        with patch.dict(os.environ, CONFIG):
+            return client.post("/api/square/sync", headers=ORIGIN)
+
+    def test_sync_uses_profile_timezone_before_account_across_dst_and_date_rollover(self):
+        self.assertNotIn("timezone", self.users[self.owner])
+        self.users[self.owner]["timezone"] = "UTC"
+        cases = {
+            "before-dst": ("2026-11-01T04:30:00Z", "2026-11-01T00:30:00"),
+            "after-dst": ("2026-11-01T08:30:00Z", "2026-11-01T03:30:00"),
+            "previous-day": ("2026-11-02T02:30:00Z", "2026-11-01T21:30:00"),
+        }
+        self.square.bookings = [dict(booking(key, 1), start_at=start) for key, (start, _) in cases.items()]
+        fixed_now = dt.datetime(2026, 10, 31, 12, tzinfo=dt.timezone.utc)
+        with patch.object(app_square, "_now", return_value=fixed_now):
+            client, _, _ = self.connect()
+            with patch.object(retainai, "_workspace_appointment_timezone",
+                              wraps=retainai._workspace_appointment_timezone) as resolved:
+                response = self.sync(client)
+            self.assertEqual(response.status_code, 200)
+            resolved.assert_called_once_with(self.owner)
+        self.assertEqual(response.get_json()["imported"], 3)
+        rows = {row["square_booking_id"]: row for row in self.appointments()}
+        for key, (start, local_time) in cases.items():
+            with self.subTest(booking=key):
+                self.assertEqual((rows[key]["timezone"], rows[key]["appointment_time"]), ("America/Toronto", local_time))
+                local = dt.datetime.fromisoformat(local_time).replace(tzinfo=ZoneInfo("America/Toronto"))
+                self.assertEqual(local.astimezone(dt.timezone.utc), sq._utc(start))
+
+    def test_legacy_utc_resync_keeps_owner_edits_and_provider_cancellation_wins(self):
+        start = "2026-11-14T15:00:00Z"
+        self.square.bookings = [dict(booking("qa-time", 1), start_at=start)]
+        fixed_now = dt.datetime(2026, 11, 13, 8, tzinfo=dt.timezone.utc)
+        with patch.object(app_square, "_now", return_value=fixed_now):
+            client, _, _ = self.connect()
+            for owner_status in ("completed", "no-show"):
+                with self.subTest(status=owner_status):
+                    retainai.save_user_profile(self.owner, {"timezone": "UTC"})
+                    self.sync(client)
+                    data = retainai.load_appointments()
+                    original = data[self.owner][0]
+                    original.pop("square_synced_status", None)
+                    original.update(status=owner_status, done=True, is_done=True,
+                                    completed=owner_status == "completed", notes="Keep the owner's note")
+                    retainai.save_appointments(data)
+                    original_id = original["id"]
+                    retainai.save_user_profile(self.owner, {"timezone": "America/Toronto"})
+                    result = self.sync(client).get_json()
+                    self.assertEqual((result["imported"], result["updated"], result["unchanged"]), (0, 1, 0))
+                    self.assertEqual(len(self.appointments()), 1)
+                    row = self.appointments()[0]
+                    self.assertEqual((row["id"], row["lead_id"], row["square_booking_id"]), (original_id, "ana", "qa-time"))
+                    self.assertEqual((row["created_at"], row["updated_at"]), (original["created_at"], original["updated_at"]))
+                    self.assertEqual((row["appointment_time"], row["timezone"]), ("2026-11-14T10:00:00", "America/Toronto"))
+                    local = dt.datetime.fromisoformat(row["appointment_time"]).replace(tzinfo=ZoneInfo(row["timezone"]))
+                    self.assertEqual(local.astimezone(dt.timezone.utc), sq._utc(start))
+                    self.assertEqual((row["status"], row["notes"], row["completed"]),
+                                     (owner_status, "Keep the owner's note", owner_status == "completed"))
+                    again = self.sync(client).get_json()
+                    self.assertEqual((again["imported"], again["updated"], again["unchanged"]), (0, 0, 1))
+            self.square.bookings[0].update(status="CANCELLED_BY_SELLER", version=2)
+            self.assertEqual(self.sync(client).get_json()["updated"], 1)
+            row = self.appointments()[0]
+            self.assertEqual((row["status"], row["notes"], row["completed"]), ("cancelled", "Keep the owner's note", False))
+            self.assertTrue(row["done"])
+            self.assertEqual(len(self.appointments()), 1)
+
+    def test_legacy_scheduled_rows_advance_with_provider_and_stay_idempotent(self):
+        self.square.bookings = [dict(booking("legacy-scheduled", 1), start_at="2026-11-14T15:00:00Z")]
+        before = dt.datetime(2026, 11, 13, 8, tzinfo=dt.timezone.utc)
+        after = dt.datetime(2026, 11, 15, 8, tzinfo=dt.timezone.utc)
+        with patch.object(app_square, "_now", return_value=before):
+            client, _, _ = self.connect()
+            self.assertEqual(self.sync(client).get_json()["imported"], 1)
+        legacy = dict(self.appointments()[0])
+        legacy.pop("square_synced_status")
+        legacy["notes"] = "Keep the appointment note"
+        self.assertEqual(legacy["status"], "scheduled")
+        for provider_status, expected in (("ACCEPTED", "completed"), ("NO_SHOW", "no-show")):
+            with self.subTest(provider_status=provider_status), patch.object(app_square, "_now", return_value=after):
+                data = retainai.load_appointments()
+                data[self.owner] = [dict(legacy)]
+                retainai.save_appointments(data)
+                self.square.bookings[0]["status"] = provider_status
+                result = self.sync(client).get_json()
+                self.assertEqual((result["imported"], result["updated"]), (0, 1))
+                row = self.appointments()[0]
+                self.assertEqual((row["status"], row["square_synced_status"]), (expected, expected))
+                self.assertEqual((row["done"], row["is_done"], row["completed"]), (True, True, expected == "completed"))
+                self.assertEqual((row["id"], row["notes"]), (legacy["id"], legacy["notes"]))
+                again = self.sync(client).get_json()
+                self.assertEqual((again["imported"], again["updated"], again["unchanged"]), (0, 0, 1))
+                self.assertEqual(len(self.appointments()), 1)
 
     def test_without_credentials_square_is_honestly_unavailable(self):
         client = self.client(self.owner)

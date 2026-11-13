@@ -244,6 +244,7 @@ def square_sync():
         return jsonify({"error": "Square connection details can't be read right now."}), 503
 
     by_email, by_phone = sq.contact_index(load_user_leads(workspace))
+    timezone_name = ctx["timezone"]
     customers, lookups = {}, 0
     results = {"read": len(bookings), "imported": 0, "updated": 0, "unchanged": 0, "unmatched": 0,
                "skipped": 0, "lookup_limit": 0, "truncated": truncated}
@@ -269,7 +270,9 @@ def square_sync():
             # Only existing contacts are updated; nobody is added from Square.
             results["unmatched"] += 1
             continue
-        mapped.append(sq.to_appointment(booking, lead, workspace=workspace, timezone_name=ctx["owner"].get("timezone"), status=status))
+        appointment = sq.to_appointment(booking, lead, workspace=workspace, timezone_name=timezone_name, status=status)
+        appointment["square_synced_status"] = status
+        mapped.append(appointment)
 
     appointments_path = os.path.join(DATA_ROOT, "appointments.json")
     with vr._locked(appointments_path):
@@ -285,11 +288,14 @@ def square_sync():
                 results["imported"] += 1
                 continue
             existing = rows[position]
-            fields = ("status", "appointment_time", "duration", "square_version", "square_status", "lead_id")
-            if all(existing.get(field) == appointment.get(field) for field in fields):
+            merged = _merge_owner_edits(existing, appointment)
+            fields = ("status", "appointment_time", "duration", "square_version", "square_status", "lead_id", "timezone")
+            if all(existing.get(field) == merged.get(field) for field in fields):
                 results["unchanged"] += 1
+                if existing.get("square_synced_status") != merged.get("square_synced_status"):
+                    rows[position] = merged
                 continue
-            rows[position] = {**existing, **appointment}
+            rows[position] = merged
             results["updated"] += 1
         all_appointments[workspace] = rows
         core.save_appointments(all_appointments)
@@ -302,6 +308,25 @@ def square_sync():
 
     _update(workspace, remember, ctx["guard"])
     return jsonify({"ok": True, **results}), 200
+
+
+def _merge_owner_edits(existing, synced):
+    """Re-localize provider bookings without erasing owner notes or status edits.
+
+    A provider cancellation remains authoritative. Older rows have no baseline:
+    a scheduled row must still advance with Square, while a terminal override
+    is preserved conservatively because its author is no longer distinguishable.
+    """
+    merged = {**existing, **synced}
+    merged["notes"] = existing.get("notes") or ""
+    owner_status = existing.get("status")
+    baseline = existing.get("square_synced_status")
+    if baseline is None:
+        baseline = owner_status if owner_status in (None, "", "scheduled") else synced.get("status")
+    if owner_status and owner_status != baseline and synced.get("status") != "cancelled":
+        terminal = owner_status in ("completed", "cancelled", "no-show")
+        merged.update(status=owner_status, done=terminal, is_done=terminal, completed=owner_status == "completed")
+    return merged
 
 
 def revoke_workspace(workspace):

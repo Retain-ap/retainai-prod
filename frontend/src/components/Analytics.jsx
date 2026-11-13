@@ -1,5 +1,6 @@
 // src/components/Analytics.jsx
 import React, { useEffect, useMemo, useState } from "react";
+import { appointmentStatus } from "./appointmentStatus";
 import { API_BASE } from "../apiBase";
 import {
   FunnelChart,
@@ -93,7 +94,7 @@ function normalizeBackendAppointment(raw, fallbackTimezone = "") {
   const timeZone = raw?.timezone || fallbackTimezone;
   const parts = appointmentDateTimeParts(raw?.appointment_time, timeZone);
   if (!dt || !parts) return null;
-  const status = String(raw?.status || "").toLowerCase().replace(/-/g, "_");
+  const status = appointmentStatus(raw);
 
   return {
     source: "backend",
@@ -117,8 +118,8 @@ function normalizeBackendAppointment(raw, fallbackTimezone = "") {
     timeKey: timeKeyFromParts(parts),
     timeZone,
     status,
-    cancelled: status === "cancelled" || status === "canceled",
-    done: !!(raw?.done ?? raw?.completed ?? raw?.is_done) || status === "completed",
+    cancelled: status === "cancelled",
+    done: status === "completed",
   };
 }
 
@@ -129,6 +130,7 @@ function normalizeLocalAppointmentsFromLeads(leads = [], fallbackTimezone = "") 
     (lead.appointments || []).forEach((appt, idx) => {
       const dt = safeDate(`${appt.date}T${appt.time || "00:00"}`);
       if (!dt) return;
+      const status = appointmentStatus(appt);
 
       out.push({
         source: "local",
@@ -141,8 +143,9 @@ function normalizeLocalAppointmentsFromLeads(leads = [], fallbackTimezone = "") 
         dayKey: appt?.date || "",
         timeKey: appt?.time || "00:00",
         timeZone: fallbackTimezone,
-        status: String(appt?.status || "").toLowerCase().replace(/-/g, "_"),
-        done: !!appt?.done,
+        status,
+        cancelled: status === "cancelled",
+        done: status === "completed",
       });
     });
   });
@@ -156,9 +159,8 @@ function dedupeAppointments(appointments = []) {
 
   appointments.forEach((appt) => {
     const key = [
-      appt.lead_id || "",
-      appt.lead_email || "",
-      appt.title || "",
+      String(appt.lead_id || appt.lead_email || "").trim().toLowerCase(),
+      String(appt.title || "Appointment").trim().toLowerCase(),
       `${appt.dayKey || ""}T${appt.timeKey || "00:00"}`,
     ].join("|");
 
@@ -285,9 +287,15 @@ function getAppointmentsSummary(appointments = [], fallbackTimezone = "") {
   let next7 = 0;
   let later = 0;
   let done = 0;
+  let noShow = 0;
 
   appointments.forEach((appt) => {
     if (!appt.dateObj || appt.cancelled) return;
+
+    if (appt.status === "no_show") {
+      noShow++;
+      return;
+    }
 
     if (appt.done) {
       done++;
@@ -321,7 +329,7 @@ function getAppointmentsSummary(appointments = [], fallbackTimezone = "") {
     later++;
   });
 
-  return { overdue, today, next7, later, done };
+  return { overdue, today, next7, later, done, noShow };
 }
 
 function getLeaderboard(leads = [], appointments = []) {
@@ -579,9 +587,11 @@ export default function Analytics({ leads = [], user }) {
     const visibleBackend = backendAppointmentsWorkspace === effectiveEmail ? backendAppointments : [];
     const backendNormalized = (visibleBackend || [])
       .map((raw) => normalizeBackendAppointment(raw, effectiveTimezone))
-      .filter((appointment) => appointment && !appointment.cancelled);
+      .filter(Boolean);
 
-    return dedupeAppointments([...localAppointments, ...backendNormalized]);
+    // The server's provider outcome wins over an older local mirror.
+    return dedupeAppointments([...backendNormalized, ...localAppointments])
+      .filter((appointment) => !appointment.cancelled);
   }, [backendAppointments, backendAppointmentsWorkspace, effectiveEmail, effectiveTimezone, leads]);
 
   const funnelStats = useMemo(() => getConversionStats(leads, allAppointments), [leads, allAppointments]);
@@ -862,6 +872,7 @@ export default function Analytics({ leads = [], user }) {
               <Metric label="Closed" value={funnelStats[3].value} />
               <Metric label="Overdue appts" value={apptSummary.overdue} small />
               <Metric label="Completed appts" value={apptSummary.done} small />
+              <Metric label="No-shows" value={apptSummary.noShow} small />
             </div>
           </div>
         </div>
@@ -873,6 +884,8 @@ export default function Analytics({ leads = [], user }) {
 function Metric({ label, value, small }) {
   return (
     <div
+      role="group"
+      aria-label={label}
       style={{
         background: "#1e2326",
         border: `1px solid ${BORDER}`,

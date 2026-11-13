@@ -1,5 +1,5 @@
 import React from "react";
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import Appointments, { localAppointmentKey } from "./Appointments";
 
 const user = { email: "owner@example.com" };
@@ -157,4 +157,82 @@ test("localAppointmentKey keeps stored keys and tells identical legacy appointme
   expect(localAppointmentKey("ana", { ...legacy, _localKey: "stored" }, 4)).toBe("stored");
   expect(localAppointmentKey("ana", legacy, 0)).not.toBe(localAppointmentKey("ana", legacy, 1));
   expect(localAppointmentKey("ana", legacy, 0)).not.toBe(localAppointmentKey("ben", legacy, 0));
+});
+
+test("cancelled and missed visits appear only in history with truthful outcomes and no reinstate controls", async () => {
+  localStorage.clear();
+  const visit = (id, status) => ({ id, title: id, lead_id: "ana", lead_email: "ana@example.com", appointment_time: "2026-11-14T10:00:00", timezone: "America/Toronto", status, done: true, is_done: true });
+  global.fetch = jest.fn().mockResolvedValue({ ok: true, status: 200, json: async () => ({ timezone: "America/Toronto", appointments: [
+    visit("Missed visit", "no_show"), visit("Cancelled visit", "cancelled"), visit("Attended visit", "completed"),
+  ] }) });
+  const staleMirror = { id: "ana", email: "ana@example.com", appointments: [
+    { title: "Cancelled visit", date: "2026-11-14", time: "10:00", done: false },
+  ] };
+  render(<Appointments user={user} leads={[staleMirror]} setLeads={jest.fn()} />);
+  await waitFor(() => expect(screen.queryByText("Loading appointments…")).not.toBeInTheDocument());
+  expect(screen.queryByText("Missed visit")).not.toBeInTheDocument();
+  expect(screen.queryByText("Cancelled visit")).not.toBeInTheDocument();
+  expect(screen.getByText("No active appointments")).toBeInTheDocument();
+  expect(within(screen.getByRole("group", { name: "Completed" })).getByText("1")).toBeInTheDocument();
+  expect(within(screen.getByRole("group", { name: "All upcoming" })).getByText("0")).toBeInTheDocument();
+  fireEvent.click(screen.getByRole("button", { name: "History" }));
+  const missed = within(await screen.findByRole("article", { name: "Missed visit" }));
+  const cancelled = within(screen.getByRole("article", { name: "Cancelled visit" }));
+  expect(missed.getByText("No-show")).toBeInTheDocument();
+  expect(cancelled.getByText("Cancelled")).toBeInTheDocument();
+  expect(missed.queryByRole("button", { name: "Undo" })).not.toBeInTheDocument();
+  expect(cancelled.queryByRole("button", { name: "Edit" })).not.toBeInTheDocument();
+  expect(missed.getByText("Toronto time")).toBeInTheDocument();
+  expect(screen.getAllByRole("button", { name: "Undo" })).toHaveLength(1);
+  expect(screen.getAllByRole("article", { name: "Cancelled visit" })).toHaveLength(1);
+});
+
+test("undoing a locally completed visit clears its explicit completed status", async () => {
+  localStorage.clear();
+  const completedLead = { ...lead, appointments: [{ ...appointment, done: true, status: "completed" }] };
+  mockServer([completedLead]);
+  const saveLeads = jest.fn(async (next) => ({ leads: next, conflicts: [] }));
+  render(<Appointments user={user} leads={[completedLead]} setLeads={jest.fn()} saveLeads={saveLeads} />);
+  fireEvent.click(screen.getByRole("button", { name: "History" }));
+  fireEvent.click(await screen.findByRole("button", { name: "Undo" }));
+  await waitFor(() => expect(saveLeads).toHaveBeenCalledTimes(1));
+  expect(saveLeads.mock.calls[0][0][0].appointments[0]).toMatchObject({ done: false, status: "scheduled" });
+});
+
+test("saving a no-show note records the outcome on a local appointment", async () => {
+  localStorage.clear();
+  mockServer([lead]);
+  const saveLeads = jest.fn(async (next) => ({ leads: next, conflicts: [] }));
+  render(<Appointments user={user} leads={[lead]} setLeads={jest.fn()} saveLeads={saveLeads} />);
+  fireEvent.click(await screen.findByRole("button", { name: "Done" }));
+  const dialog = within(await screen.findByRole("dialog", { name: "Add post-appointment note" }));
+  fireEvent.click(dialog.getByRole("button", { name: "No-show" }));
+  fireEvent.click(dialog.getByRole("button", { name: "Save to customer" }));
+  await waitFor(() => expect(saveLeads).toHaveBeenCalledTimes(2));
+  expect(saveLeads.mock.calls[1][0][0].appointments[0]).toMatchObject({ status: "no_show", done: true, notes: "Visit outcome: No-show" });
+});
+
+test("saving a no-show note sends the actual outcome to the server", async () => {
+  localStorage.clear();
+  const stored = { id: "server-visit", title: "Provider visit", lead_id: lead.id, lead_email: lead.email, appointment_time: "2099-01-15T10:00:00", timezone: "America/Toronto", status: "scheduled", done: false };
+  const writes = [];
+  global.fetch = jest.fn(async (url, options = {}) => {
+    if (options.method === "PUT") {
+      const body = JSON.parse(options.body);
+      writes.push(body);
+      Object.assign(stored, body);
+      return { ok: true, json: async () => ({ appointment: stored }) };
+    }
+    return { ok: true, json: async () => ({ timezone: "America/Toronto", appointments: [stored] }) };
+  });
+  render(<Appointments user={user} leads={[]} setLeads={jest.fn()} saveLeads={jest.fn(async (next) => ({ leads: next }))} />);
+  fireEvent.click(await screen.findByRole("button", { name: "Done" }));
+  const dialog = within(await screen.findByRole("dialog", { name: "Add post-appointment note" }));
+  fireEvent.click(dialog.getByRole("button", { name: "No-show" }));
+  fireEvent.click(dialog.getByRole("button", { name: "Save to customer" }));
+  await waitFor(() => expect(writes).toHaveLength(2));
+  expect(writes[1]).toMatchObject({ status: "no_show", done: true, is_done: true, completed: false });
+  await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+  fireEvent.click(screen.getByRole("button", { name: "History" }));
+  expect(within(screen.getByRole("article", { name: "Provider visit" })).getByText("No-show")).toBeInTheDocument();
 });
