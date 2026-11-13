@@ -1,3 +1,4 @@
+import { vi } from "vitest";
 import React from "react";
 import { fireEvent, render, screen } from "@testing-library/react";
 import OwnerConsole from "./OwnerConsole";
@@ -11,7 +12,7 @@ function response(body, status = 200) {
 }
 
 test("accepts a strong tester password and rejects passwords missing a required character class", async () => {
-  global.fetch = jest.fn().mockResolvedValue(response({ accounts: [], recorded_mrr: {}, integrations: {} }));
+  global.fetch = vi.fn().mockResolvedValue(response({ accounts: [], recorded_mrr: {}, integrations: {} }));
   render(<OwnerConsole />);
   fireEvent.click(await screen.findByRole("tab", { name: "Customer Accounts" }));
   fireEvent.click(screen.getByRole("button", { name: "Add complimentary account" }));
@@ -27,7 +28,7 @@ test("accepts a strong tester password and rejects passwords missing a required 
 });
 
 test("keeps available owner-console data visible when one section fails", async () => {
-  global.fetch = jest.fn().mockImplementation((url) => {
+  global.fetch = vi.fn().mockImplementation((url) => {
     const value = String(url);
     if (value.includes("owner/audit")) return Promise.resolve(response({ error: "unavailable" }, 503));
     if (value.includes("owner/overview")) {
@@ -61,7 +62,7 @@ test("keeps available owner-console data visible when one section fails", async 
 });
 
 test("explains the MFA requirement and links to Security instead of reporting an outage", async () => {
-  global.fetch = jest.fn().mockResolvedValue(response({
+  global.fetch = vi.fn().mockResolvedValue(response({
     error: "owner_mfa_required",
     message: "Enable and verify two-factor authentication before using the Owner Console.",
   }, 403));
@@ -80,7 +81,7 @@ test("explains the MFA requirement and links to Security instead of reporting an
 });
 
 test("hides owner data when one response requires MFA even if other requests succeeded", async () => {
-  global.fetch = jest.fn().mockImplementation(url => Promise.resolve(
+  global.fetch = vi.fn().mockImplementation(url => Promise.resolve(
     String(url).includes("owner/overview")
       ? response({ accounts_total: 999, recorded_mrr: {}, integrations: {} })
       : response({ error: "owner_mfa_required" }, 403)
@@ -95,7 +96,7 @@ test("hides owner data when one response requires MFA even if other requests suc
 
 test("verifies a stored backup on request and says plainly that archives are not encrypted on the disk", async () => {
   const backup = { name: "retainai-backup-20261106T032000Z.zip", bytes: 1048576, created_at: "2026-11-06T03:20:03Z", sha256: "a".repeat(64) };
-  global.fetch = jest.fn().mockImplementation((url, options = {}) => {
+  global.fetch = vi.fn().mockImplementation((url, options = {}) => {
     const value = String(url);
     if (value.includes("/verify") && options.method === "POST") {
       return Promise.resolve(response({ ok: true, files: 15, checksum_file_matched: true, sqlite_integrity: "ok" }));

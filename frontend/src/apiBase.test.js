@@ -1,4 +1,5 @@
 import fs from "fs";
+import { fileURLToPath } from "node:url";
 import path from "path";
 import { API_BASE, apiUrl } from "./apiBase";
 
@@ -18,7 +19,7 @@ test("defaults to the production API origin", () => {
 test("every file that reads an API env variable falls back to the shared API_BASE", () => {
   // A build without REACT_APP_API_BASE must still reach api.retainai.ca, never
   // the website origin or a literal "undefined".
-  const root = __dirname;
+  const root = path.dirname(fileURLToPath(import.meta.url));
   const offenders = sourceFiles(root)
     .filter((file) => path.basename(file) !== "apiBase.js")
     .filter((file) => {

@@ -1,0 +1,1220 @@
+{
+  "originalBaselineCommit": "e9efa777bd6b600f76ff1a39ac40bb40df8d3e1b",
+  "baselineCommit": "1c1210a42988b69c7939097d1042154e3efa9833",
+  "mergedBaselineCommit": "21a54df490ab0467fd87c47a1dfb18ef77a7606b",
+  "baselineFrontendTree": "ad162520ff2bd6c271a8aa9a86a29cc4198a51af",
+  "tests": [
+    {
+      "file": "src/components/RetentionCommandCenter.test.jsx",
+      "name": "rebooking opportunities use each customer's visit rhythm and save an owner interval"
+    },
+    {
+      "file": "src/components/RetentionCommandCenter.test.jsx",
+      "name": "no value is invented: only values the owner recorded are shown or added up"
+    },
+    {
+      "file": "src/components/RetentionCommandCenter.test.jsx",
+      "name": "a due customer can be drafted for review or marked contacted; nothing is sent from the list"
+    },
+    {
+      "file": "src/components/RetentionCommandCenter.test.jsx",
+      "name": "a failed mark-contacted shows the reason and keeps the customer on the list"
+    },
+    {
+      "file": "src/components/RetentionCommandCenter.test.jsx",
+      "name": "unsubscribed or email-less customers get no email draft action"
+    },
+    {
+      "file": "src/components/RetentionCommandCenter.test.jsx",
+      "name": "a customer followed up this week waits to book instead of staying on the contact list"
+    },
+    {
+      "file": "src/components/RetentionCommandCenter.test.jsx",
+      "name": "rejects an invalid interval without saving"
+    },
+    {
+      "file": "src/components/RetentionCommandCenter.test.jsx",
+      "name": "the Value Receipt keeps estimates separate and makes no protected-value claim"
+    },
+    {
+      "file": "src/components/RetentionCommandCenter.test.jsx",
+      "name": "general mode is the default service-business setup; Calendly is optional for the booking step"
+    },
+    {
+      "file": "src/components/RetentionCommandCenter.test.jsx",
+      "name": "appointments added in RetainAI complete the booking step without Calendly"
+    },
+    {
+      "file": "src/components/RetentionCommandCenter.test.jsx",
+      "name": "with no bookings yet, the booking step offers Add appointment, separate from contact import"
+    },
+    {
+      "file": "src/components/RetentionCommandCenter.test.jsx",
+      "name": "bookings synced from Calendly tick the booking step and are counted, not named"
+    },
+    {
+      "file": "src/components/RetentionCommandCenter.test.jsx",
+      "name": "the salon preset adds a checklist, count-only metrics and review-only playbooks"
+    },
+    {
+      "file": "src/components/RetentionCommandCenter.test.jsx",
+      "name": "draft context only calls a measured visit pattern the customer's habit one completed visit uses a labelled standard interval, never 'usually'"
+    },
+    {
+      "file": "src/components/RetentionCommandCenter.test.jsx",
+      "name": "draft context only calls a measured visit pattern the customer's habit an owner-set interval is attributed to the owner, not the customer"
+    },
+    {
+      "file": "src/components/RetentionCommandCenter.test.jsx",
+      "name": "draft context only calls a measured visit pattern the customer's habit two visits describe the single measured gap, not a habit"
+    },
+    {
+      "file": "src/components/RetentionCommandCenter.test.jsx",
+      "name": "draft context only calls a measured visit pattern the customer's habit three or more visits may state the measured cadence"
+    },
+    {
+      "file": "src/components/RetentionCommandCenter.test.jsx",
+      "name": "Mark contacted right after a same-day visit moves the customer to waiting"
+    },
+    {
+      "file": "src/components/AiPromptsDashboard.test.jsx",
+      "name": "does not report success when the delivery callback resolves false"
+    },
+    {
+      "file": "src/components/AiPromptsDashboard.test.jsx",
+      "name": "reports success only after the delivery callback confirms success"
+    },
+    {
+      "file": "src/components/AiPromptsDashboard.test.jsx",
+      "name": "business name required before customer messages a refused send keeps the draft, clears Sending\u2026 and holds the draft for this account"
+    },
+    {
+      "file": "src/components/AiPromptsDashboard.test.jsx",
+      "name": "business name required before customer messages a draft edited after the refusal is held as last typed"
+    },
+    {
+      "file": "src/components/AiPromptsDashboard.test.jsx",
+      "name": "business name required before customer messages a 4500-character draft survives Settings whole, and the box allows the 5000 the send accepts"
+    },
+    {
+      "file": "src/components/AiPromptsDashboard.test.jsx",
+      "name": "business name required before customer messages a draft over the send limit is refused visibly instead of being cut short"
+    },
+    {
+      "file": "src/components/AiPromptsDashboard.test.jsx",
+      "name": "business name required before customer messages a refused draft request shows the Settings action and leaves an existing draft alone"
+    },
+    {
+      "file": "src/components/AiPromptsDashboard.test.jsx",
+      "name": "business name required before customer messages other errors do not show the Settings action"
+    },
+    {
+      "file": "src/components/AiPromptsDashboard.test.jsx",
+      "name": "business name required before customer messages a held draft waits for customers to load, then returns once and is removed"
+    },
+    {
+      "file": "src/components/AiPromptsDashboard.test.jsx",
+      "name": "business name required before customer messages another person never receives a held draft for the same customer id"
+    },
+    {
+      "file": "src/components/AiPromptsDashboard.test.jsx",
+      "name": "business name required before customer messages the same person in another workspace never receives a held draft for the same customer id"
+    },
+    {
+      "file": "src/components/AiPromptsDashboard.test.jsx",
+      "name": "business name required before customer messages an unknown account never receives a held draft for the same customer id"
+    },
+    {
+      "file": "src/components/AiPromptsDashboard.test.jsx",
+      "name": "business name required before customer messages an unknown account holds nothing"
+    },
+    {
+      "file": "src/components/AiPromptsDashboard.test.jsx",
+      "name": "opening from the rebooking list selects the customer with the follow-up playbook and factual context, and generates or sends nothing"
+    },
+    {
+      "file": "src/components/AiPromptsDashboard.test.jsx",
+      "name": "opening from the rebooking list a focus request for a customer who is gone is cleared without selecting anyone"
+    },
+    {
+      "file": "src/components/AiPromptsDashboard.test.jsx",
+      "name": "opening from the rebooking list an explicit focus leaves a held business-name draft stored for later"
+    },
+    {
+      "file": "src/components/AiPromptsDashboard.test.jsx",
+      "name": "opening from the rebooking list with the dashboard clearing the request an older held draft never replaces the customer and context just requested"
+    },
+    {
+      "file": "src/components/AiPromptsDashboard.test.jsx",
+      "name": "opening from the rebooking list with the dashboard clearing the request without a request, a held draft is still restored as before"
+    },
+    {
+      "file": "src/components/AiPromptsDashboard.test.jsx",
+      "name": "a request for a customer who was removed shows that, and an unrelated held draft does not appear"
+    },
+    {
+      "file": "src/components/CrmDashboard.navigation.test.jsx",
+      "name": "browser back restores the initial overview and forward restores contacts"
+    },
+    {
+      "file": "src/components/CrmDashboard.navigation.test.jsx",
+      "name": "a regular Calendar visit resets a previous appointments deep link"
+    },
+    {
+      "file": "src/components/CrmDashboard.navigation.test.jsx",
+      "name": "command palette changes the URL and history restores Settings"
+    },
+    {
+      "file": "src/components/CrmDashboard.navigation.test.jsx",
+      "name": "an overview shortcut and team shortcut keep their destinations in the URL"
+    },
+    {
+      "file": "src/components/CrmDashboard.navigation.test.jsx",
+      "name": "the owner can navigate to Overview and restore the owner landing page with Back"
+    },
+    {
+      "file": "src/components/CrmDashboard.navigation.test.jsx",
+      "name": "calendar view buttons participate in browser history"
+    },
+    {
+      "file": "src/components/CrmDashboard.navigation.test.jsx",
+      "name": "onboarding shortcuts preserve their destination when leaving an import deep link"
+    },
+    {
+      "file": "src/components/CrmDashboard.navigation.test.jsx",
+      "name": "navigation events cannot open a privileged page for a standard team member"
+    },
+    {
+      "file": "src/components/CrmDashboard.navigation.test.jsx",
+      "name": "Google Calendar prompts open Settings > Integrations, not the Contacts importer, and authorize nothing"
+    },
+    {
+      "file": "src/components/CrmDashboard.navigation.test.jsx",
+      "name": "contact import shortcuts open the multi-source importer without the Google-only deep link"
+    },
+    {
+      "file": "src/components/CrmDashboard.navigation.test.jsx",
+      "name": "the chosen contact source survives navigation and unknown values use the generic importer"
+    },
+    {
+      "file": "src/components/CrmDashboard.navigation.test.jsx",
+      "name": "the setup checklist's Add appointment opens the appointment list; contact import stays separate"
+    },
+    {
+      "file": "src/components/CrmDashboard.navigation.test.jsx",
+      "name": "a business-name prompt in /app?section=ai-prompts opens Settings > Profile"
+    },
+    {
+      "file": "src/components/CrmDashboard.navigation.test.jsx",
+      "name": "a business-name prompt in /app?section=messages opens Settings > Profile"
+    },
+    {
+      "file": "src/components/CrmDashboard.navigation.test.jsx",
+      "name": "Draft follow-up opens AI Studio on that customer with its context; nothing is sent"
+    },
+    {
+      "file": "src/components/CrmDashboard.navigation.test.jsx",
+      "name": "Mark contacted records the contact on the server for that one customer and reloads contacts"
+    },
+    {
+      "file": "src/components/CrmDashboard.navigation.test.jsx",
+      "name": "a refused mark-contacted reports a clear error"
+    },
+    {
+      "file": "src/components/Appointments.test.jsx",
+      "name": "standalone: completing an appointment saves only that change onto the latest list"
+    },
+    {
+      "file": "src/components/Appointments.test.jsx",
+      "name": "inside the dashboard: hands the change to the shared save instead of posting itself"
+    },
+    {
+      "file": "src/components/Appointments.test.jsx",
+      "name": "shows an error and changes nothing when the latest list cannot be loaded"
+    },
+    {
+      "file": "src/components/Appointments.test.jsx",
+      "name": "appointments saved before keys were stored Done changes only the clicked appointment, not its identical twin or the other contact's"
+    },
+    {
+      "file": "src/components/Appointments.test.jsx",
+      "name": "appointments saved before keys were stored reschedule moves only the clicked appointment"
+    },
+    {
+      "file": "src/components/Appointments.test.jsx",
+      "name": "appointments saved before keys were stored delete removes only the clicked appointment"
+    },
+    {
+      "file": "src/components/Appointments.test.jsx",
+      "name": "appointments saved before keys were stored edit replaces only the clicked appointment and gives it a key of its own"
+    },
+    {
+      "file": "src/components/Appointments.test.jsx",
+      "name": "localAppointmentKey keeps stored keys and tells identical legacy appointments apart"
+    },
+    {
+      "file": "src/components/Appointments.test.jsx",
+      "name": "cancelled and missed visits appear only in history with truthful outcomes and no reinstate controls"
+    },
+    {
+      "file": "src/components/Appointments.test.jsx",
+      "name": "undoing a locally completed visit clears its explicit completed status"
+    },
+    {
+      "file": "src/components/Appointments.test.jsx",
+      "name": "saving a no-show note records the outcome on a local appointment"
+    },
+    {
+      "file": "src/components/Appointments.test.jsx",
+      "name": "saving a no-show note sends the actual outcome to the server"
+    },
+    {
+      "file": "src/components/ImportContacts.races.test.jsx",
+      "name": "a pending commit owns the review and refuses picker, drop and cancel changes"
+    },
+    {
+      "file": "src/components/ImportContacts.races.test.jsx",
+      "name": "a refused commit keeps the reviewed file and releases the lock without automatically retrying"
+    },
+    {
+      "file": "src/components/ImportContacts.races.test.jsx",
+      "name": "a completed import after unmount notifies only its original workspace without restarting importer reads"
+    },
+    {
+      "file": "src/components/ImportContacts.races.test.jsx",
+      "name": "a late preview success cannot replace another workspace's new review"
+    },
+    {
+      "file": "src/components/ImportContacts.races.test.jsx",
+      "name": "a late preview failure cannot replace another workspace's new review"
+    },
+    {
+      "file": "src/components/ImportContacts.races.test.jsx",
+      "name": "a current preview failure releases the upload lock for a deliberate retry"
+    },
+    {
+      "file": "src/components/ImportContacts.races.test.jsx",
+      "name": "a failed recount after editing Email blocks import until an explicit review retry succeeds"
+    },
+    {
+      "file": "src/components/ImportContacts.races.test.jsx",
+      "name": "a failed recount after editing If a contact already exists blocks import until an explicit review retry succeeds"
+    },
+    {
+      "file": "src/components/ImportContacts.races.test.jsx",
+      "name": "a late retry success cannot replace the review of a newer mapping"
+    },
+    {
+      "file": "src/components/ImportContacts.races.test.jsx",
+      "name": "a late retry failure cannot replace the review of a newer mapping"
+    },
+    {
+      "file": "src/components/ImportContacts.races.test.jsx",
+      "name": "a recount success from the old workspace cannot change the new file's review"
+    },
+    {
+      "file": "src/components/ImportContacts.races.test.jsx",
+      "name": "a recount failure from the old workspace cannot change the new file's review"
+    },
+    {
+      "file": "src/rebooking.test.js",
+      "name": "uses the customer's own completed-visit rhythm and explains it"
+    },
+    {
+      "file": "src/rebooking.test.js",
+      "name": "ignores cancelled, no-show and duplicate visits, and treats legacy done flags as completed"
+    },
+    {
+      "file": "src/rebooking.test.js",
+      "name": "falls back from one interval, to the workspace rhythm, to a business default"
+    },
+    {
+      "file": "src/rebooking.test.js",
+      "name": "an interval the owner set wins, and booked or not-yet-due customers are not flagged"
+    },
+    {
+      "file": "src/rebooking.test.js",
+      "name": "customers without a completed visit get no rebooking date"
+    },
+    {
+      "file": "src/rebooking.test.js",
+      "name": "impossible dates are ignored and visits dated in the future are never completion evidence"
+    },
+    {
+      "file": "src/rebooking.test.js",
+      "name": "a due customer contacted in the last week waits to book instead of staying on the contact list"
+    },
+    {
+      "file": "src/rebooking.test.js",
+      "name": "a booked customer is neither due nor waiting, even if contacted"
+    },
+    {
+      "file": "src/rebooking.test.js",
+      "name": "creating a contact (which stamps last_contacted) does not count as following up"
+    },
+    {
+      "file": "src/rebooking.test.js",
+      "name": "outreach days are compared in the workspace's own time zone a Toronto evening follow-up (already tomorrow in UTC) counts today, not tomorrow"
+    },
+    {
+      "file": "src/rebooking.test.js",
+      "name": "outreach days are compared in the workspace's own time zone an Auckland morning follow-up (still yesterday in UTC) uses the Auckland day at the 7-day boundary"
+    },
+    {
+      "file": "src/rebooking.test.js",
+      "name": "outreach days are compared in the workspace's own time zone seven local days after the follow-up the customer is back on the list"
+    },
+    {
+      "file": "src/rebooking.test.js",
+      "name": "outreach days are compared in the workspace's own time zone a follow-up later in the workspace's future day is not counted yet"
+    },
+    {
+      "file": "src/rebooking.test.js",
+      "name": "reviewer case: a Toronto follow-up at 10 pm Nov 12 (03:00 UTC Nov 13) is waiting on Nov 12, not due"
+    },
+    {
+      "file": "src/rebooking.test.js",
+      "name": "explicit outreach on the day of the last visit reviewer case: contacted at 10 pm Toronto after a 10:00 visit the same day snoozes the customer"
+    },
+    {
+      "file": "src/rebooking.test.js",
+      "name": "explicit outreach on the day of the last visit outreach earlier that day, before the visit, is not a follow-up"
+    },
+    {
+      "file": "src/rebooking.test.js",
+      "name": "explicit outreach on the day of the last visit when the visit has no recorded time, same-day outreach counts"
+    },
+    {
+      "file": "src/rebooking.test.js",
+      "name": "explicit outreach on the day of the last visit the snooze still ends exactly seven local days later"
+    },
+    {
+      "file": "src/leadSync.test.js",
+      "name": "a normal save sends the confirmed revision and keeps the stored list with its revision"
+    },
+    {
+      "file": "src/leadSync.test.js",
+      "name": "never sends an unversioned save: loads a fresh list first, or fails without sending"
+    },
+    {
+      "file": "src/leadSync.test.js",
+      "name": "a 428 from the server reloads the list and retries with a revision"
+    },
+    {
+      "file": "src/leadSync.test.js",
+      "name": "a save built before an import keeps the imported contact and the user's edit"
+    },
+    {
+      "file": "src/leadSync.test.js",
+      "name": "the stored list keeps a customer's unsubscribe, so the next save cannot drop it"
+    },
+    {
+      "file": "src/leadSync.test.js",
+      "name": "two tabs saving from the same revision keep both edits, field by field"
+    },
+    {
+      "file": "src/leadSync.test.js",
+      "name": "a pending debounced edit survives an import reload and saves without reverting it"
+    },
+    {
+      "file": "src/leadSync.test.js",
+      "name": "queued and failed edits are kept and sent in order with the next save"
+    },
+    {
+      "file": "src/leadSync.test.js",
+      "name": "deleting a contact that changed elsewhere keeps it and says so"
+    },
+    {
+      "file": "src/leadSync.test.js",
+      "name": "an unchanged deletion and a new contact apply cleanly"
+    },
+    {
+      "file": "src/leadSync.test.js",
+      "name": "gives up with a clear error if the list keeps changing"
+    },
+    {
+      "file": "src/leadSync.test.js",
+      "name": "createLeadsApi + saveFreshLeadChanges: loads first, patches one contact, sends the revision"
+    },
+    {
+      "file": "src/leadSync.test.js",
+      "name": "a field patch never recreates a contact deleted elsewhere"
+    },
+    {
+      "file": "src/components/ImportContacts.test.jsx",
+      "name": "accepts vCard and CSV files and explains WhatsApp honestly"
+    },
+    {
+      "file": "src/components/ImportContacts.test.jsx",
+      "name": "the chosen source opens its guide and updates when navigation changes"
+    },
+    {
+      "file": "src/components/ImportContacts.test.jsx",
+      "name": "previews a file with detected source, per-row outcomes and a consent notice"
+    },
+    {
+      "file": "src/components/ImportContacts.test.jsx",
+      "name": "requires an email or phone column and recounts after mapping changes"
+    },
+    {
+      "file": "src/components/ImportContacts.test.jsx",
+      "name": "commits the reviewed rows with the chosen options and reports skipped rows"
+    },
+    {
+      "file": "src/components/ImportContacts.test.jsx",
+      "name": "shows the server's reason when a file is rejected"
+    },
+    {
+      "file": "src/components/ImportContacts.test.jsx",
+      "name": "explains consent before importing and that existing contacts keep theirs"
+    },
+    {
+      "file": "src/components/ImportContacts.test.jsx",
+      "name": "reports contacts kept by undo and hides undo for older imports"
+    },
+    {
+      "file": "src/components/Settings.test.jsx",
+      "name": "keeps an unsaved profile draft editable when the backend rejects it"
+    },
+    {
+      "file": "src/components/Settings.test.jsx",
+      "name": "does not restart profile polling when the refresh callback identity changes"
+    },
+    {
+      "file": "src/components/Settings.test.jsx",
+      "name": "allows leaving the route-selected Import Contacts tab"
+    },
+    {
+      "file": "src/components/Settings.test.jsx",
+      "name": "settings tabs and help shortcuts update the URL so reload and Back match the visible tab"
+    },
+    {
+      "file": "src/components/Settings.test.jsx",
+      "name": "tab links respect role restrictions and never put a hidden tab in the URL"
+    },
+    {
+      "file": "src/components/Settings.test.jsx",
+      "name": "the owner can choose the optional salon and barber preset; general is the default"
+    },
+    {
+      "file": "src/components/Settings.test.jsx",
+      "name": "opening the importer from Contacts starts at the file importer, not the Google card"
+    },
+    {
+      "file": "src/components/Settings.test.jsx",
+      "name": "only a Google prompt (?source=google) highlights the Google Contacts card"
+    },
+    {
+      "file": "src/components/Settings.test.jsx",
+      "name": "a source chosen before navigation opens its matching file guide"
+    },
+    {
+      "file": "src/components/ValueReceipt.test.jsx",
+      "name": "keeps Stripe-verified and owner-recorded revenue apart and shows the evidence chain"
+    },
+    {
+      "file": "src/components/ValueReceipt.test.jsx",
+      "name": "says when the last Stripe update was partial and which refunds were not re-checked"
+    },
+    {
+      "file": "src/components/ValueReceipt.test.jsx",
+      "name": "records an owner payment with an idempotency key and reads Stripe on request"
+    },
+    {
+      "file": "src/components/ValueReceipt.test.jsx",
+      "name": "tells team members that revenue is owner-only"
+    },
+    {
+      "file": "src/components/ValueReceipt.test.jsx",
+      "name": "requests the chosen period and formats currencies without mixing them"
+    },
+    {
+      "file": "src/components/CrmDashboard.appointment-races.test.jsx",
+      "name": "a slow initial appointment list cannot replace a newer appointments-changed result"
+    },
+    {
+      "file": "src/components/CrmDashboard.appointment-races.test.jsx",
+      "name": "failed overlapping refreshes keep the last confirmed list and never revive an older result"
+    },
+    {
+      "file": "src/components/CrmDashboard.appointment-races.test.jsx",
+      "name": "changing workspace clears its appointments and ignores the previous workspace's delayed response"
+    },
+    {
+      "file": "src/components/CrmDashboard.appointment-races.test.jsx",
+      "name": "unmount invalidates the pending read and removes its refresh listener"
+    },
+    {
+      "file": "src/components/CrmDashboard.appointment-races.test.jsx",
+      "name": "import completion reloads its own workspace while legacy notifications remain compatible"
+    },
+    {
+      "file": "src/components/CrmDashboard.appointment-races.test.jsx",
+      "name": "late quick-add success after unmount does not refresh or alert another workspace"
+    },
+    {
+      "file": "src/components/CrmDashboard.appointment-races.test.jsx",
+      "name": "late quick-add failure after unmount does not refresh or alert another workspace"
+    },
+    {
+      "file": "src/components/Signup.test.jsx",
+      "name": "email signup has four steps and defers all business questions until after sign-in"
+    },
+    {
+      "file": "src/components/Signup.test.jsx",
+      "name": "email and password validation remain visible before advancing"
+    },
+    {
+      "file": "src/components/Signup.test.jsx",
+      "name": "a final review cannot submit without explicit terms consent"
+    },
+    {
+      "file": "src/components/Signup.test.jsx",
+      "name": "Google signup skips password and submits the signed credential for server verification"
+    },
+    {
+      "file": "src/components/Signup.test.jsx",
+      "name": "an expired or rejected Google credential returns to account selection"
+    },
+    {
+      "file": "src/components/Signup.test.jsx",
+      "name": "Back keeps entered details but switching away from Google requires an email password"
+    },
+    {
+      "file": "src/components/Signup.test.jsx",
+      "name": "a missing checkout response never signs the visitor into a fabricated local account"
+    },
+    {
+      "file": "src/seo/routeHtml.test.js",
+      "name": "/partners gets its own indexable title, description and canonical before JavaScript"
+    },
+    {
+      "file": "src/seo/routeHtml.test.js",
+      "name": "/signup gets its own indexable title, description and canonical before JavaScript"
+    },
+    {
+      "file": "src/seo/routeHtml.test.js",
+      "name": "/privacy-policy gets its own indexable title, description and canonical before JavaScript"
+    },
+    {
+      "file": "src/seo/routeHtml.test.js",
+      "name": "/terms-of-service gets its own indexable title, description and canonical before JavaScript"
+    },
+    {
+      "file": "src/seo/routeHtml.test.js",
+      "name": "/refund-policy gets its own indexable title, description and canonical before JavaScript"
+    },
+    {
+      "file": "src/seo/routeHtml.test.js",
+      "name": "/pricing gets its own indexable title, description and canonical before JavaScript"
+    },
+    {
+      "file": "src/seo/routeHtml.test.js",
+      "name": "/about gets its own indexable title, description and canonical before JavaScript"
+    },
+    {
+      "file": "src/seo/routeHtml.test.js",
+      "name": "/features gets its own indexable title, description and canonical before JavaScript"
+    },
+    {
+      "file": "src/seo/routeHtml.test.js",
+      "name": "/customers gets its own indexable title, description and canonical before JavaScript"
+    },
+    {
+      "file": "src/seo/routeHtml.test.js",
+      "name": "/retention-crm-for-service-businesses gets its own indexable title, description and canonical before JavaScript"
+    },
+    {
+      "file": "src/seo/routeHtml.test.js",
+      "name": "/find-customers-who-stopped-rebooking gets its own indexable title, description and canonical before JavaScript"
+    },
+    {
+      "file": "src/seo/routeHtml.test.js",
+      "name": "/login is noindex from the first byte"
+    },
+    {
+      "file": "src/seo/routeHtml.test.js",
+      "name": "/accept-invite is noindex from the first byte"
+    },
+    {
+      "file": "src/seo/routeHtml.test.js",
+      "name": "the homepage keeps its full summary and gets the app's homepage metadata"
+    },
+    {
+      "file": "src/seo/routeHtml.test.js",
+      "name": "values are HTML-escaped and a missing tag fails instead of shipping wrong metadata"
+    },
+    {
+      "file": "src/seo/routeHtml.test.js",
+      "name": "every prerendered route has metadata, and structured data matches the visible launch price"
+    },
+    {
+      "file": "src/seo/routeHtml.test.js",
+      "name": "the install manifests do not advertise placeholder screenshots"
+    },
+    {
+      "file": "src/seo/routeHtml.test.js",
+      "name": "/ serves the exact visible FAQ answers and schema before JavaScript"
+    },
+    {
+      "file": "src/seo/routeHtml.test.js",
+      "name": "/pricing serves the exact visible FAQ answers and schema before JavaScript"
+    },
+    {
+      "file": "src/seo/routeHtml.test.js",
+      "name": "category content and internal links are present before JavaScript"
+    },
+    {
+      "file": "src/seo/routeHtml.test.js",
+      "name": "the sitemap lists exactly the indexable routes, and the rebooking guide is linked before JavaScript"
+    },
+    {
+      "file": "src/seo/routeHtml.test.js",
+      "name": "/partners serves its terms and live product benefits before JavaScript"
+    },
+    {
+      "file": "src/components/OwnerConsole.test.jsx",
+      "name": "accepts a strong tester password and rejects passwords missing a required character class"
+    },
+    {
+      "file": "src/components/OwnerConsole.test.jsx",
+      "name": "keeps available owner-console data visible when one section fails"
+    },
+    {
+      "file": "src/components/OwnerConsole.test.jsx",
+      "name": "explains the MFA requirement and links to Security instead of reporting an outage"
+    },
+    {
+      "file": "src/components/OwnerConsole.test.jsx",
+      "name": "hides owner data when one response requires MFA even if other requests succeeded"
+    },
+    {
+      "file": "src/components/OwnerConsole.test.jsx",
+      "name": "verifies a stored backup on request and says plainly that archives are not encrypted on the disk"
+    },
+    {
+      "file": "src/RouteMetadata.test.jsx",
+      "name": "/partners keeps the partner page's own metadata and canonical"
+    },
+    {
+      "file": "src/RouteMetadata.test.jsx",
+      "name": "/partners/ keeps the partner page's own metadata and canonical"
+    },
+    {
+      "file": "src/RouteMetadata.test.jsx",
+      "name": "/partners// keeps the partner page's own metadata and canonical"
+    },
+    {
+      "file": "src/RouteMetadata.test.jsx",
+      "name": "/login stays noindex with its own title"
+    },
+    {
+      "file": "src/RouteMetadata.test.jsx",
+      "name": "/login/ stays noindex with its own title"
+    },
+    {
+      "file": "src/RouteMetadata.test.jsx",
+      "name": "the homepage keeps its canonical and the workspace stays noindex"
+    },
+    {
+      "file": "src/RouteMetadata.test.jsx",
+      "name": "unknown path /not-a-page is noindex, not a copy of the homepage"
+    },
+    {
+      "file": "src/RouteMetadata.test.jsx",
+      "name": "unknown path /not-a-page/ is noindex, not a copy of the homepage"
+    },
+    {
+      "file": "src/RouteMetadata.test.jsx",
+      "name": "unknown path /pricing/extra is noindex, not a copy of the homepage"
+    },
+    {
+      "file": "src/RouteMetadata.test.jsx",
+      "name": "unknown path /r/code/extra is noindex, not a copy of the homepage"
+    },
+    {
+      "file": "src/RouteMetadata.test.jsx",
+      "name": "known public route /partners stays indexable"
+    },
+    {
+      "file": "src/RouteMetadata.test.jsx",
+      "name": "known public route / stays indexable"
+    },
+    {
+      "file": "src/RouteMetadata.test.jsx",
+      "name": "known public route /signup stays indexable"
+    },
+    {
+      "file": "src/RouteMetadata.test.jsx",
+      "name": "known public route /privacy-policy stays indexable"
+    },
+    {
+      "file": "src/RouteMetadata.test.jsx",
+      "name": "known public route /terms-of-service stays indexable"
+    },
+    {
+      "file": "src/RouteMetadata.test.jsx",
+      "name": "known public route /refund-policy stays indexable"
+    },
+    {
+      "file": "src/RouteMetadata.test.jsx",
+      "name": "known public route /pricing stays indexable"
+    },
+    {
+      "file": "src/RouteMetadata.test.jsx",
+      "name": "known public route /about stays indexable"
+    },
+    {
+      "file": "src/RouteMetadata.test.jsx",
+      "name": "known public route /features stays indexable"
+    },
+    {
+      "file": "src/RouteMetadata.test.jsx",
+      "name": "known public route /customers stays indexable"
+    },
+    {
+      "file": "src/RouteMetadata.test.jsx",
+      "name": "known public route /retention-crm-for-service-businesses stays indexable"
+    },
+    {
+      "file": "src/RouteMetadata.test.jsx",
+      "name": "known public route /find-customers-who-stopped-rebooking stays indexable"
+    },
+    {
+      "file": "src/RouteMetadata.test.jsx",
+      "name": "partner referral link /r/salon-coach is not treated as a missing page"
+    },
+    {
+      "file": "src/RouteMetadata.test.jsx",
+      "name": "partner referral link /r/SalonCoach is not treated as a missing page"
+    },
+    {
+      "file": "src/RouteMetadata.test.jsx",
+      "name": "partner referral link /R/SalonCoach is not treated as a missing page"
+    },
+    {
+      "file": "src/RouteMetadata.test.jsx",
+      "name": "/PRICING gets /pricing metadata and its lowercase canonical"
+    },
+    {
+      "file": "src/RouteMetadata.test.jsx",
+      "name": "/Pricing/ gets /pricing metadata and its lowercase canonical"
+    },
+    {
+      "file": "src/RouteMetadata.test.jsx",
+      "name": "/%70ricing gets /pricing metadata and its lowercase canonical"
+    },
+    {
+      "file": "src/RouteMetadata.test.jsx",
+      "name": "/%50RICING gets /pricing metadata and its lowercase canonical"
+    },
+    {
+      "file": "src/RouteMetadata.test.jsx",
+      "name": "/Privacy-Policy gets /privacy-policy metadata and its lowercase canonical"
+    },
+    {
+      "file": "src/RouteMetadata.test.jsx",
+      "name": "/retention%2Dcrm%2Dfor%2Dservice%2Dbusinesses gets /retention-crm-for-service-businesses metadata and its lowercase canonical"
+    },
+    {
+      "file": "src/RouteMetadata.test.jsx",
+      "name": "private route /LOGIN stays noindex whatever its case or encoding"
+    },
+    {
+      "file": "src/RouteMetadata.test.jsx",
+      "name": "private route /%6Cogin stays noindex whatever its case or encoding"
+    },
+    {
+      "file": "src/RouteMetadata.test.jsx",
+      "name": "private route /APP/settings stays noindex whatever its case or encoding"
+    },
+    {
+      "file": "src/RouteMetadata.test.jsx",
+      "name": "private route /Accept-Invite stays noindex whatever its case or encoding"
+    },
+    {
+      "file": "src/RouteMetadata.test.jsx",
+      "name": "/pricing%2Fextra, which the router does not match, is a noindex missing page"
+    },
+    {
+      "file": "src/RouteMetadata.test.jsx",
+      "name": "/%E0%A4%A, which the router does not match, is a noindex missing page"
+    },
+    {
+      "file": "src/RouteMetadata.test.jsx",
+      "name": "/pricing%, which the router does not match, is a noindex missing page"
+    },
+    {
+      "file": "src/RouteMetadata.test.jsx",
+      "name": "FAQ schema is reused on pricing and removed when its answers are not on the page"
+    },
+    {
+      "file": "src/components/LeadDrawer.test.jsx",
+      "name": "does not claim a reminder was saved when the parent persistence rejects"
+    },
+    {
+      "file": "src/components/LeadDrawer.test.jsx",
+      "name": "asks before overriding a customer's own unsubscribe"
+    },
+    {
+      "file": "src/components/LeadDrawer.test.jsx",
+      "name": "without a dashboard save handler saves only the edited field onto the latest list with its revision"
+    },
+    {
+      "file": "src/components/LeadDrawer.test.jsx",
+      "name": "without a dashboard save handler never recreates a contact deleted elsewhere and never saves unversioned"
+    },
+    {
+      "file": "src/components/CalendlyBookingsCard.test.jsx",
+      "name": "says plainly when Calendly isn't set up and offers no connect button"
+    },
+    {
+      "file": "src/components/CalendlyBookingsCard.test.jsx",
+      "name": "is hidden from team members"
+    },
+    {
+      "file": "src/components/CalendlyBookingsCard.test.jsx",
+      "name": "connect asks the server for the Calendly authorize address"
+    },
+    {
+      "file": "src/components/CalendlyBookingsCard.test.jsx",
+      "name": "syncs on request and explains unmatched, cancelled and capped reads"
+    },
+    {
+      "file": "src/components/CalendlyBookingsCard.test.jsx",
+      "name": "a bounded or rate-limited sync says progress is saved and how to continue"
+    },
+    {
+      "file": "src/components/CalendlyBookingsCard.test.jsx",
+      "name": "a lost authorization asks to reconnect instead of offering sync"
+    },
+    {
+      "file": "src/components/CalendlyBookingsCard.test.jsx",
+      "name": "shows the callback result from the URL"
+    },
+    {
+      "file": "src/components/Calendar.test.jsx",
+      "name": "surfaces appointment load failures and clears the error after retry"
+    },
+    {
+      "file": "src/components/Calendar.test.jsx",
+      "name": "places offset and all-day events on their workspace calendar day"
+    },
+    {
+      "file": "src/components/Calendar.test.jsx",
+      "name": "provider cancelled is displayed as its actual outcome, not completed"
+    },
+    {
+      "file": "src/components/Calendar.test.jsx",
+      "name": "provider no_show is displayed as its actual outcome, not completed"
+    },
+    {
+      "file": "src/components/Calendar.test.jsx",
+      "name": "local no-show status also overrides done while legacy completed visits remain completed"
+    },
+    {
+      "file": "src/components/Calendar.test.jsx",
+      "name": "an older UTC record retains its recorded wall time and explicitly displays UTC"
+    },
+    {
+      "file": "src/components/Messages.businessProfile.test.jsx",
+      "name": "AI Reply without a business name keeps the typed reply and offers Settings instead of a template"
+    },
+    {
+      "file": "src/components/Messages.businessProfile.test.jsx",
+      "name": "a reply edited after the refusal is held as last typed, with no further AI call"
+    },
+    {
+      "file": "src/components/Messages.businessProfile.test.jsx",
+      "name": "a held reply waits for its customer to load, then returns to its thread once"
+    },
+    {
+      "file": "src/components/Messages.businessProfile.test.jsx",
+      "name": "another person never receives a held reply for the same customer id"
+    },
+    {
+      "file": "src/components/Messages.businessProfile.test.jsx",
+      "name": "the same person in another workspace never receives a held reply for the same customer id"
+    },
+    {
+      "file": "src/components/LandingPage.test.jsx",
+      "name": "the actual product capture is labelled as example data, not customer proof"
+    },
+    {
+      "file": "src/components/LandingPage.test.jsx",
+      "name": "the header keeps the RetainAI wordmark, Log in and the trial CTA"
+    },
+    {
+      "file": "src/components/LandingPage.test.jsx",
+      "name": "walkthroughs are real links and every answer exists even when collapsed"
+    },
+    {
+      "file": "src/components/LandingPage.test.jsx",
+      "name": "empty and unapproved evidence produces no fabricated customer proof"
+    },
+    {
+      "file": "src/components/LandingPage.test.jsx",
+      "name": "owner trust names the actual owner without an invented photo or biography"
+    },
+    {
+      "file": "src/components/LandingPage.test.jsx",
+      "name": "/pricing has distinct content and one h1"
+    },
+    {
+      "file": "src/components/LandingPage.test.jsx",
+      "name": "/about has distinct content and one h1"
+    },
+    {
+      "file": "src/components/LandingPage.test.jsx",
+      "name": "/features has distinct content and one h1"
+    },
+    {
+      "file": "src/components/LandingPage.test.jsx",
+      "name": "/customers has distinct content and one h1"
+    },
+    {
+      "file": "src/components/LandingPage.test.jsx",
+      "name": "/retention-crm-for-service-businesses has distinct content and one h1"
+    },
+    {
+      "file": "src/components/LandingPage.test.jsx",
+      "name": "/find-customers-who-stopped-rebooking has distinct content and one h1"
+    },
+    {
+      "file": "src/components/LeadsDashboard.test.jsx",
+      "name": "Import Leads asks for a source before navigating or authorizing"
+    },
+    {
+      "file": "src/components/LeadsDashboard.test.jsx",
+      "name": "Escape cancels without navigating and returns focus to Import Leads"
+    },
+    {
+      "file": "src/components/LeadsDashboard.test.jsx",
+      "name": "without a handler a choice still opens its import guide, never OAuth"
+    },
+    {
+      "file": "src/components/Invoices.idempotency.test.jsx",
+      "name": "retrying the same invoice form reuses its idempotency key; a new invoice gets a new one"
+    },
+    {
+      "file": "src/businessProfile.test.js",
+      "name": "scopes name the workspace and the signed-in person, and refuse unknown parts"
+    },
+    {
+      "file": "src/businessProfile.test.js",
+      "name": "held text is kept whole up to the send limit and refused beyond it, never cut short"
+    },
+    {
+      "file": "src/businessProfile.test.js",
+      "name": "peeking keeps a held draft, and consuming leaves a newer draft alone"
+    },
+    {
+      "file": "src/businessProfile.test.js",
+      "name": "an expired held draft is not restored"
+    },
+    {
+      "file": "src/components/SquareBookingsCard.test.jsx",
+      "name": "says plainly when Square isn't set up and offers no connect button"
+    },
+    {
+      "file": "src/components/SquareBookingsCard.test.jsx",
+      "name": "is hidden from team members"
+    },
+    {
+      "file": "src/components/SquareBookingsCard.test.jsx",
+      "name": "syncs on request and explains skipped bookings"
+    },
+    {
+      "file": "src/components/SquareBookingsCard.test.jsx",
+      "name": "shows the callback result from the URL"
+    },
+    {
+      "file": "src/components/OnboardingGuide.test.jsx",
+      "name": "starts collapsed on phones and remembers when it is opened"
+    },
+    {
+      "file": "src/components/OnboardingGuide.test.jsx",
+      "name": "starts collapsed on larger screens too and can be minimized again"
+    },
+    {
+      "file": "src/components/OnboardingGuide.test.jsx",
+      "name": "collapses on phones after a step opens its screen"
+    },
+    {
+      "file": "src/components/ProtectedRoute.test.jsx",
+      "name": "ProtectedRoute redirects only when the session endpoint explicitly rejects authentication"
+    },
+    {
+      "file": "src/components/ProtectedRoute.test.jsx",
+      "name": "ProtectedRoute preserves the session and offers retry during a service outage"
+    },
+    {
+      "file": "src/components/Analytics.test.jsx",
+      "name": "completed metrics suppress stale mirrors by stable contact ID even with provider email 'ana-old@example.com'"
+    },
+    {
+      "file": "src/components/Analytics.test.jsx",
+      "name": "completed metrics suppress stale mirrors by stable contact ID even with provider email ''"
+    },
+    {
+      "file": "src/components/WhatsAppHealthCard.test.jsx",
+      "name": "does not report WhatsApp connected when Meta rejects the stored credentials"
+    },
+    {
+      "file": "src/components/WhatsAppHealthCard.test.jsx",
+      "name": "reports connected only when credentials, templates, and webhook are ready"
+    },
+    {
+      "file": "src/components/Automations.onboarding.test.jsx",
+      "name": "opening a playbook does not mark 'Activate your first playbook' as done"
+    },
+    {
+      "file": "src/components/Automations.onboarding.test.jsx",
+      "name": "the step is done while a saved automation is active"
+    },
+    {
+      "file": "src/components/appointmentDateTime.test.js",
+      "name": "appointment date/time contract renders an offset timestamp in the workspace timezone without shifting the day"
+    },
+    {
+      "file": "src/components/appointmentDateTime.test.js",
+      "name": "appointment date/time contract keeps date-only and legacy naive values as wall-clock values"
+    },
+    {
+      "file": "src/components/appointmentDateTime.test.js",
+      "name": "appointment date/time contract builds only valid datetime-local payloads"
+    },
+    {
+      "file": "src/components/appointmentDateTime.test.js",
+      "name": "appointment date/time contract classifies same-day appointments by the workspace wall clock"
+    },
+    {
+      "file": "src/components/appointmentDateTime.test.js",
+      "name": "appointment date/time contract calendar-day math is stable across daylight-saving boundaries"
+    },
+    {
+      "file": "src/components/appointmentDateTime.test.js",
+      "name": "appointment date/time contract rejects invalid timestamps"
+    },
+    {
+      "file": "src/pages/AcceptInvite.test.jsx",
+      "name": "AcceptInvite requires a strong password"
+    },
+    {
+      "file": "src/pages/AcceptInvite.test.jsx",
+      "name": "AcceptInvite posts the confirmed password when accepting an invitation"
+    },
+    {
+      "file": "src/AppRoutes.test.jsx",
+      "name": "an unknown address shows a not-found page and keeps its URL instead of becoming the homepage"
+    },
+    {
+      "file": "src/AppRoutes.test.jsx",
+      "name": "/PRICING shows the pricing page, as its metadata expects"
+    },
+    {
+      "file": "src/AppRoutes.test.jsx",
+      "name": "/%70ricing shows the pricing page, as its metadata expects"
+    },
+    {
+      "file": "src/AppRoutes.test.jsx",
+      "name": "/Pricing/ shows the pricing page, as its metadata expects"
+    },
+    {
+      "file": "src/AppRoutes.test.jsx",
+      "name": "an encoded slash is part of one segment, so /pricing%2Fextra is not the pricing page"
+    },
+    {
+      "file": "src/AppRoutes.test.jsx",
+      "name": "/privacy still reaches /privacy-policy"
+    },
+    {
+      "file": "src/AppRoutes.test.jsx",
+      "name": "/terms still reaches /terms-of-service"
+    },
+    {
+      "file": "src/App.auth.test.js",
+      "name": "passes the server-verified owner capability (true) through the lazy app route"
+    },
+    {
+      "file": "src/App.auth.test.js",
+      "name": "passes the server-verified owner capability (false) through the lazy app route"
+    },
+    {
+      "file": "src/workspaceIdentity.test.js",
+      "name": "workspace identity uses the organization owner for a team member's tenant key"
+    },
+    {
+      "file": "src/workspaceIdentity.test.js",
+      "name": "workspace identity does not grant owner capabilities to a member"
+    },
+    {
+      "file": "src/workspaceIdentity.test.js",
+      "name": "workspace identity shows owner controls only for an explicit owner role"
+    },
+    {
+      "file": "src/components/NotificationsCenter.test.jsx",
+      "name": "uses workspace identity and rolls back a failed optimistic read"
+    },
+    {
+      "file": "src/components/appointmentStatus.test.js",
+      "name": "cancelled is not a completion even when imported terminal flags are true"
+    },
+    {
+      "file": "src/components/appointmentStatus.test.js",
+      "name": "canceled is not a completion even when imported terminal flags are true"
+    },
+    {
+      "file": "src/components/appointmentStatus.test.js",
+      "name": "CANCELLED is not a completion even when imported terminal flags are true"
+    },
+    {
+      "file": "src/components/appointmentStatus.test.js",
+      "name": "no_show is not a completion even when imported terminal flags are true"
+    },
+    {
+      "file": "src/components/appointmentStatus.test.js",
+      "name": "no-show is not a completion even when imported terminal flags are true"
+    },
+    {
+      "file": "src/components/appointmentStatus.test.js",
+      "name": "No show is not a completion even when imported terminal flags are true"
+    },
+    {
+      "file": "src/components/appointmentStatus.test.js",
+      "name": "retains explicitly completed and legacy completed visits"
+    },
+    {
+      "file": "src/components/appointmentStatus.test.js",
+      "name": "timezone labels preserve UTC and IANA Etc offsets"
+    },
+    {
+      "file": "src/pages/PrivacyPolicy.test.jsx",
+      "name": "the AI disclosure names the one fixed model and provider and what can be sent, without overclaiming"
+    },
+    {
+      "file": "src/apiBase.test.js",
+      "name": "defaults to the production API origin"
+    },
+    {
+      "file": "src/apiBase.test.js",
+      "name": "every file that reads an API env variable falls back to the shared API_BASE"
+    },
+    {
+      "file": "src/components/AutomationsService.test.js",
+      "name": "AutomationsService live tests uses the real live endpoint and sends an explicit confirmation"
+    },
+    {
+      "file": "src/components/Login.a11y.test.jsx",
+      "name": "the sign-in fields have accessible names and the password toggle names its action"
+    },
+    {
+      "file": "src/pages/Partners.test.jsx",
+      "name": "the partner page states the exact terms and only live product benefits"
+    },
+    {
+      "file": "src/App.test.js",
+      "name": "renders the RetainAI landing experience"
+    }
+  ]
+}

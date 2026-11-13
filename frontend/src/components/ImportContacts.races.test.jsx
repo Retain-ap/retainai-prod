@@ -1,9 +1,10 @@
+import { vi } from "vitest";
 import React from "react";
 import { act, fireEvent, render, screen, within } from "@testing-library/react";
 import ImportContacts from "./ImportContacts";
 
-jest.mock("./CalendlyBookingsCard", () => () => null);
-jest.mock("./SquareBookingsCard", () => () => null);
+vi.mock("./CalendlyBookingsCard", () => ({ default: () => null }));
+vi.mock("./SquareBookingsCard", () => ({ default: () => null }));
 const user = { email: "member@example.test" };
 const preview = {
   format: "csv", headers: ["Name", "Email"], mapping: { name: "Name", email: "Email" },
@@ -20,7 +21,7 @@ beforeEach(() => {
   previewRequest = () => Promise.resolve(response(preview));
   recountRequest = () => Promise.resolve(response(preview));
   commitRequest = () => Promise.resolve(response({ ok: true, summary: { imported: 1 }, outcomes: [] }));
-  global.fetch = jest.fn((url, options = {}) => {
+  global.fetch = vi.fn((url, options = {}) => {
     const path = String(url).replace(/^.*\/api\//, "");
     requests.push({ path, options });
     if (path === "import/file/preview") return previewRequest(options);
@@ -28,7 +29,7 @@ beforeEach(() => {
     return Promise.resolve(response(path === "import/history" ? { imports: [] } : { google_connected: false }));
   });
 });
-afterEach(() => { global.fetch = originalFetch; jest.restoreAllMocks(); jest.useRealTimers(); });
+afterEach(() => { global.fetch = originalFetch; vi.restoreAllMocks(); vi.useRealTimers(); });
 const choose = (name = "A.csv") => fireEvent.change(screen.getByTestId("import-file"), { target: { files: [new File(["Name,Email\nFictional,contact@example.test"], name, { type: "text/csv" })] } });
 async function review() { const view = render(<ImportContacts user={user} />); choose(); await screen.findByRole("region", { name: "Review import" }); return view; }
 
@@ -70,7 +71,7 @@ test("a completed import after unmount notifies only its original workspace with
   view.unmount();
   render(<ImportContacts user={{ email: "second@example.test" }} />);
   await screen.findByRole("button", { name: "Connect Google" });
-  const before = requests.length; const dispatched = jest.spyOn(window, "dispatchEvent");
+  const before = requests.length; const dispatched = vi.spyOn(window, "dispatchEvent");
   await act(async () => pending.resolve(response({ ok: true, summary: { imported: 1 }, outcomes: [] })));
   expect(requests).toHaveLength(before);
   const notifications = dispatched.mock.calls.filter(([event]) => event.type === "leads:changed");
@@ -106,7 +107,7 @@ const editablePreview = {
   rows: [{ raw: { ...preview.rows[0].raw, "Alternate email": "alternate@example.test" }, selected: true }],
 };
 const recounts = () => requests.filter(item => item.path === "import/file/commit" && JSON.parse(item.options.body).dry_run);
-const advanceReview = () => act(async () => { jest.advanceTimersByTime(400); });
+const advanceReview = () => act(async () => { vi.advanceTimersByTime(400); });
 
 test.each([
   ["Email", "Alternate email", { mapping: { email: "Alternate email" } }],
@@ -114,7 +115,7 @@ test.each([
 ])("a failed recount after editing %s blocks import until an explicit review retry succeeds", async (label, value, expectedOptions) => {
   previewRequest = () => Promise.resolve(response(editablePreview));
   recountRequest = () => Promise.resolve(response({ error: "Review service unavailable" }, 503));
-  await review(); jest.useFakeTimers();
+  await review(); vi.useFakeTimers();
   fireEvent.change(screen.getByLabelText(label), { target: { value } });
   expect(screen.getByRole("button", { name: "Import 0 contacts" })).toBeDisabled();
   expect(within(screen.getByTestId("import-summary")).queryByText("1", { selector: "strong" })).not.toBeInTheDocument();
@@ -123,7 +124,7 @@ test.each([
   expect(screen.getByRole("button", { name: "Import 0 contacts" })).toBeDisabled();
   expect(within(screen.getByTestId("import-summary")).getAllByText("—")).toHaveLength(4);
   fireEvent.click(screen.getByRole("button", { name: "Import 0 contacts" }));
-  await act(async () => { jest.advanceTimersByTime(2000); });
+  await act(async () => { vi.advanceTimersByTime(2000); });
   expect(recounts()).toHaveLength(1);
   expect(requests.filter(item => item.path === "import/file/commit")).toHaveLength(1);
 
@@ -143,7 +144,7 @@ test.each([
 test.each(["success", "failure"])("a late retry %s cannot replace the review of a newer mapping", async outcome => {
   previewRequest = () => Promise.resolve(response(editablePreview));
   recountRequest = () => Promise.reject(new Error("Initial recount failed"));
-  await review(); jest.useFakeTimers();
+  await review(); vi.useFakeTimers();
   fireEvent.change(screen.getByLabelText("If a contact already exists"), { target: { value: "update" } });
   await advanceReview();
   const oldRetry = deferred(); recountRequest = () => oldRetry.promise;
@@ -166,7 +167,7 @@ test.each(["success", "failure"])("a late retry %s cannot replace the review of 
 
 test.each(["success", "failure"])("a recount %s from the old workspace cannot change the new file's review", async outcome => {
   const pending = deferred(); recountRequest = () => pending.promise;
-  const view = await review(); jest.useFakeTimers();
+  const view = await review(); vi.useFakeTimers();
   fireEvent.change(screen.getByLabelText("If a contact already exists"), { target: { value: "update" } });
   await advanceReview();
   view.rerender(<ImportContacts user={{ email: "second@example.test" }} />);

@@ -1,3 +1,4 @@
+import { vi } from "vitest";
 import api from "./AutomationsService";
 
 function jsonResponse(data, ok = true) {
@@ -13,11 +14,11 @@ function jsonResponse(data, ok = true) {
 
 describe("AutomationsService live tests", () => {
   beforeEach(() => {
-    global.fetch = jest.fn().mockResolvedValue(jsonResponse({ ok: true, did: [] }));
+    global.fetch = vi.fn().mockResolvedValue(jsonResponse({ ok: true, did: [] }));
   });
 
   afterEach(() => {
-    jest.restoreAllMocks();
+    vi.restoreAllMocks();
   });
 
   test("uses the real live endpoint and sends an explicit confirmation", async () => {

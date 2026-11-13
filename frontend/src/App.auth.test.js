@@ -1,10 +1,11 @@
+import { vi } from "vitest";
 import { render, screen } from "@testing-library/react";
 import App from "./App";
 
-jest.mock("./components/SettingsContext", () => ({
+vi.mock("./components/SettingsContext", () => ({
   SettingsProvider: ({ children }) => children,
 }));
-jest.mock("./components/CrmDashboard", () => ({
+vi.mock("./components/CrmDashboard", () => ({
   __esModule: true,
   default: ({ authenticatedUser }) => (
     <div>
@@ -34,7 +35,7 @@ test.each([
 ])("passes the server-verified owner capability (%s) through the lazy app route", async (allowed, expected) => {
   // Cached owner access must never override the fresh server response.
   localStorage.setItem("user", JSON.stringify({ email: "stale@example.com", platformOwner: true }));
-  global.fetch = jest.fn()
+  global.fetch = vi.fn()
     .mockResolvedValueOnce({
       ok: true,
       json: async () => ({ authenticated: true, user: { email: "reviewer@example.com", platformOwner: true } }),

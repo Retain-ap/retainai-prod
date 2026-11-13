@@ -1,3 +1,4 @@
+import { vi } from "vitest";
 import React from "react";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import CalendlyBookingsCard from "./CalendlyBookingsCard";
@@ -9,7 +10,7 @@ function respond(status, body) {
 afterEach(() => { delete global.fetch; window.history.replaceState({}, "", "/"); });
 
 test("says plainly when Calendly isn't set up and offers no connect button", async () => {
-  global.fetch = jest.fn(async () => respond(200, { configured: false, connected: false }));
+  global.fetch = vi.fn(async () => respond(200, { configured: false, connected: false }));
   render(<CalendlyBookingsCard />);
   expect(await screen.findByTestId("calendly-unavailable")).toHaveTextContent("Not available yet");
   expect(screen.queryByRole("button", { name: "Connect Calendly" })).not.toBeInTheDocument();
@@ -18,17 +19,17 @@ test("says plainly when Calendly isn't set up and offers no connect button", asy
 });
 
 test("is hidden from team members", async () => {
-  global.fetch = jest.fn(async () => respond(403, { error: "owner_required" }));
+  global.fetch = vi.fn(async () => respond(403, { error: "owner_required" }));
   const { container } = render(<CalendlyBookingsCard />);
   await waitFor(() => expect(container).toBeEmptyDOMElement());
 });
 
 test("connect asks the server for the Calendly authorize address", async () => {
-  const assign = jest.fn();
+  const assign = vi.fn();
   const original = window.location;
   delete window.location;
   window.location = { ...original, assign, search: "" };
-  global.fetch = jest.fn(async (url, options = {}) => {
+  global.fetch = vi.fn(async (url, options = {}) => {
     if (String(url).endsWith("/calendly/connect") && options.method === "POST") return respond(200, { url: "https://auth.calendly.com/oauth/authorize?x=1" });
     return respond(200, { configured: true, connected: false });
   });
@@ -39,7 +40,7 @@ test("connect asks the server for the Calendly authorize address", async () => {
 });
 
 function syncing(result, status = { configured: true, connected: true, account: "…SER1", last_sync: null }) {
-  return jest.fn(async (url, options = {}) => {
+  return vi.fn(async (url, options = {}) => {
     if (String(url).endsWith("/calendly/sync") && options.method === "POST") return respond(200, result);
     return respond(200, status);
   });
@@ -67,7 +68,7 @@ test("a bounded or rate-limited sync says progress is saved and how to continue"
 });
 
 test("a lost authorization asks to reconnect instead of offering sync", async () => {
-  global.fetch = jest.fn(async () => respond(200, { configured: true, connected: false, needs_reconnect: true, account: "…SER1" }));
+  global.fetch = vi.fn(async () => respond(200, { configured: true, connected: false, needs_reconnect: true, account: "…SER1" }));
   render(<CalendlyBookingsCard />);
   expect(await screen.findByText(/no longer accepts RetainAI's access/)).toBeInTheDocument();
   expect(screen.queryByRole("button", { name: "Sync now" })).not.toBeInTheDocument();
@@ -76,7 +77,7 @@ test("a lost authorization asks to reconnect instead of offering sync", async ()
 
 test("shows the callback result from the URL", async () => {
   window.history.replaceState({}, "", "/app/import?calendly_error=missing_scope");
-  global.fetch = jest.fn(async () => respond(200, { configured: true, connected: false }));
+  global.fetch = vi.fn(async () => respond(200, { configured: true, connected: false }));
   render(<CalendlyBookingsCard />);
   expect(await screen.findByText(/didn't grant read access to scheduled events/)).toBeInTheDocument();
 });

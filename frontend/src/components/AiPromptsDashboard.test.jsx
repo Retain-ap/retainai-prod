@@ -1,3 +1,4 @@
+import { vi } from "vitest";
 import React from "react";
 import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import AiPromptsDashboard from "./AiPromptsDashboard";
@@ -22,7 +23,7 @@ function prepareDraft(onSendAIPromptEmail) {
 }
 
 test("does not report success when the delivery callback resolves false", async () => {
-  const send = jest.fn().mockResolvedValue(false);
+  const send = vi.fn().mockResolvedValue(false);
   prepareDraft(send);
 
   expect(await screen.findByText("Message could not be sent.")).toBeInTheDocument();
@@ -30,7 +31,7 @@ test("does not report success when the delivery callback resolves false", async 
 });
 
 test("reports success only after the delivery callback confirms success", async () => {
-  const send = jest.fn().mockResolvedValue(true);
+  const send = vi.fn().mockResolvedValue(true);
   prepareDraft(send);
 
   expect(await screen.findByText("Message sent successfully.")).toBeInTheDocument();
@@ -62,8 +63,8 @@ describe("business name required before customer messages", () => {
   });
 
   test("a refused send keeps the draft, clears Sending… and holds the draft for this account", async () => {
-    const send = jest.fn().mockRejectedValue(Object.assign(new Error(refusal.error), { code: refusal.code }));
-    const openSettings = jest.fn();
+    const send = vi.fn().mockRejectedValue(Object.assign(new Error(refusal.error), { code: refusal.code }));
+    const openSettings = vi.fn();
     render(<AiPromptsDashboard leads={[lead]} user={owner} onSendAIPromptEmail={send} onOpenBusinessSettings={openSettings} />);
     fireEvent.click(screen.getByRole("button", { name: /Jordan/ }));
     fireEvent.change(draftBox(), { target: { value: "Thanks for visiting us." } });
@@ -83,8 +84,8 @@ describe("business name required before customer messages", () => {
   });
 
   test("a draft edited after the refusal is held as last typed", async () => {
-    const send = jest.fn().mockRejectedValue(Object.assign(new Error(refusal.error), { code: refusal.code }));
-    render(<AiPromptsDashboard leads={[lead]} user={owner} onSendAIPromptEmail={send} onOpenBusinessSettings={jest.fn()} />);
+    const send = vi.fn().mockRejectedValue(Object.assign(new Error(refusal.error), { code: refusal.code }));
+    render(<AiPromptsDashboard leads={[lead]} user={owner} onSendAIPromptEmail={send} onOpenBusinessSettings={vi.fn()} />);
     fireEvent.click(screen.getByRole("button", { name: /Jordan/ }));
     fireEvent.change(draftBox(), { target: { value: "First words" } });
     fireEvent.click(screen.getByRole("button", { name: /Send email/ }));
@@ -98,8 +99,8 @@ describe("business name required before customer messages", () => {
   test("a 4500-character draft survives Settings whole, and the box allows the 5000 the send accepts", async () => {
     const long = "Thank you for visiting. ".repeat(187) + "Thanks again";
     expect(long).toHaveLength(4500);
-    const send = jest.fn().mockRejectedValue(Object.assign(new Error(refusal.error), { code: refusal.code }));
-    const { unmount } = render(<AiPromptsDashboard leads={[lead]} user={owner} onSendAIPromptEmail={send} onOpenBusinessSettings={jest.fn()} />);
+    const send = vi.fn().mockRejectedValue(Object.assign(new Error(refusal.error), { code: refusal.code }));
+    const { unmount } = render(<AiPromptsDashboard leads={[lead]} user={owner} onSendAIPromptEmail={send} onOpenBusinessSettings={vi.fn()} />);
     fireEvent.click(screen.getByRole("button", { name: /Jordan/ }));
     expect(draftBox()).toHaveAttribute("maxLength", "5000");
     fireEvent.change(draftBox(), { target: { value: long } });
@@ -115,7 +116,7 @@ describe("business name required before customer messages", () => {
   });
 
   test("a draft over the send limit is refused visibly instead of being cut short", async () => {
-    const send = jest.fn();
+    const send = vi.fn();
     render(<AiPromptsDashboard leads={[lead]} user={owner} onSendAIPromptEmail={send} />);
     fireEvent.click(screen.getByRole("button", { name: /Jordan/ }));
     fireEvent.change(draftBox(), { target: { value: "x".repeat(5001) } });
@@ -126,7 +127,7 @@ describe("business name required before customer messages", () => {
   });
 
   test("a refused draft request shows the Settings action and leaves an existing draft alone", async () => {
-    global.fetch = jest.fn().mockResolvedValue({ ok: false, status: 409, json: async () => refusal });
+    global.fetch = vi.fn().mockResolvedValue({ ok: false, status: 409, json: async () => refusal });
     render(<AiPromptsDashboard leads={[lead]} user={owner} />);
     fireEvent.click(screen.getByRole("button", { name: /Jordan/ }));
     fireEvent.change(draftBox(), { target: { value: "My own words." } });
@@ -138,7 +139,7 @@ describe("business name required before customer messages", () => {
   });
 
   test("other errors do not show the Settings action", async () => {
-    const send = jest.fn().mockRejectedValue(new Error("Message could not be sent."));
+    const send = vi.fn().mockRejectedValue(new Error("Message could not be sent."));
     prepareDraft(send);
     expect(await screen.findByText("Message could not be sent.")).toBeInTheDocument();
     expect(screen.queryByRole("link", { name: "Add business name in Settings" })).not.toBeInTheDocument();
@@ -171,8 +172,8 @@ describe("business name required before customer messages", () => {
   });
 
   test("an unknown account holds nothing", async () => {
-    const send = jest.fn().mockRejectedValue(Object.assign(new Error(refusal.error), { code: refusal.code }));
-    render(<AiPromptsDashboard leads={[lead]} user={{}} onSendAIPromptEmail={send} onOpenBusinessSettings={jest.fn()} />);
+    const send = vi.fn().mockRejectedValue(Object.assign(new Error(refusal.error), { code: refusal.code }));
+    render(<AiPromptsDashboard leads={[lead]} user={{}} onSendAIPromptEmail={send} onOpenBusinessSettings={vi.fn()} />);
     fireEvent.click(screen.getByRole("button", { name: /Jordan/ }));
     fireEvent.change(draftBox(), { target: { value: "Private words." } });
     fireEvent.click(screen.getByRole("button", { name: /Send email/ }));
@@ -188,9 +189,9 @@ describe("opening from the rebooking list", () => {
   });
 
   test("selects the customer with the follow-up playbook and factual context, and generates or sends nothing", async () => {
-    global.fetch = jest.fn();
-    const applied = jest.fn();
-    const send = jest.fn();
+    global.fetch = vi.fn();
+    const applied = vi.fn();
+    const send = vi.fn();
     render(<AiPromptsDashboard leads={[lead]} user={{ email: "owner@example.com" }} onSendAIPromptEmail={send}
       initialFocus={{ leadId: "lead-1", playbook: "followup", context: "Due to rebook: last completed visit Oct 1; usually every 30 days." }} onFocusApplied={applied} />);
     expect(await screen.findByText("Writing for")).toBeInTheDocument();
@@ -202,7 +203,7 @@ describe("opening from the rebooking list", () => {
   });
 
   test("a focus request for a customer who is gone is cleared without selecting anyone", async () => {
-    const applied = jest.fn();
+    const applied = vi.fn();
     render(<AiPromptsDashboard leads={[lead]} user={{ email: "owner@example.com" }} initialFocus={{ leadId: "gone", playbook: "followup", context: "x" }} onFocusApplied={applied} />);
     await waitFor(() => expect(applied).toHaveBeenCalled());
     expect(screen.queryByText("Writing for")).not.toBeInTheDocument();
@@ -210,7 +211,7 @@ describe("opening from the rebooking list", () => {
 
   test("an explicit focus leaves a held business-name draft stored for later", async () => {
     holdDraft(heldDraftScope("ai-studio", { email: "owner@example.com" }), { leadId: "lead-1", draft: "Held words.", playbook: "reengage" });
-    render(<AiPromptsDashboard leads={[lead]} user={{ email: "owner@example.com" }} initialFocus={{ leadId: "lead-1", playbook: "followup", context: "Due to rebook." }} onFocusApplied={jest.fn()} />);
+    render(<AiPromptsDashboard leads={[lead]} user={{ email: "owner@example.com" }} initialFocus={{ leadId: "lead-1", playbook: "followup", context: "Due to rebook." }} onFocusApplied={vi.fn()} />);
     expect(await screen.findByDisplayValue("Due to rebook.")).toBeInTheDocument();
     expect(screen.queryByDisplayValue("Held words.")).not.toBeInTheDocument();
     expect(sessionStorage.getItem(heldDraftScope("ai-studio", { email: "owner@example.com" }))).not.toBeNull();

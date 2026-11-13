@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// Runs after `react-scripts build` (npm "postbuild"). Writes build/<route>/index.html
+// Runs after `vite build` (npm "postbuild"). Writes build/<route>/index.html
 // for each public route with that route's own title, description, canonical URL and
 // a short summary, and aligns the homepage's initial metadata with src/routeMeta.json.
 // If the static host serves a directory's index.html, crawlers get the right

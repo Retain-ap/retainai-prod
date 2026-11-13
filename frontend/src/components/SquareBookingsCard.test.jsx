@@ -1,3 +1,4 @@
+import { vi } from "vitest";
 import React from "react";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import SquareBookingsCard from "./SquareBookingsCard";
@@ -9,7 +10,7 @@ function respond(status, body) {
 afterEach(() => { delete global.fetch; window.history.replaceState({}, "", "/"); });
 
 test("says plainly when Square isn't set up and offers no connect button", async () => {
-  global.fetch = jest.fn(async () => respond(200, { configured: false, connected: false }));
+  global.fetch = vi.fn(async () => respond(200, { configured: false, connected: false }));
   render(<SquareBookingsCard />);
   expect(await screen.findByTestId("square-unavailable")).toHaveTextContent("Not available yet");
   expect(screen.queryByRole("button", { name: "Connect Square" })).not.toBeInTheDocument();
@@ -17,13 +18,13 @@ test("says plainly when Square isn't set up and offers no connect button", async
 });
 
 test("is hidden from team members", async () => {
-  global.fetch = jest.fn(async () => respond(403, { error: "owner_required" }));
+  global.fetch = vi.fn(async () => respond(403, { error: "owner_required" }));
   const { container } = render(<SquareBookingsCard />);
   await waitFor(() => expect(container).toBeEmptyDOMElement());
 });
 
 test("syncs on request and explains skipped bookings", async () => {
-  global.fetch = jest.fn(async (url, options = {}) => {
+  global.fetch = vi.fn(async (url, options = {}) => {
     if (String(url).endsWith("/square/sync") && options.method === "POST") {
       return respond(200, { read: 6, imported: 4, updated: 0, unchanged: 0, unmatched: 1, skipped: 1, truncated: false, lookup_limit: 0 });
     }
@@ -36,7 +37,7 @@ test("syncs on request and explains skipped bookings", async () => {
 
 test("shows the callback result from the URL", async () => {
   window.history.replaceState({}, "", "/app/import?square_error=merchant_linked_elsewhere");
-  global.fetch = jest.fn(async () => respond(200, { configured: true, connected: false }));
+  global.fetch = vi.fn(async () => respond(200, { configured: true, connected: false }));
   render(<SquareBookingsCard />);
   expect(await screen.findByText("That Square account is already connected to another RetainAI workspace.")).toBeInTheDocument();
   expect(await screen.findByRole("button", { name: "Connect Square" })).toBeInTheDocument();
