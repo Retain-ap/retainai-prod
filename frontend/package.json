@@ -2,6 +2,9 @@
   "name": "insta-token-dashboard",
   "version": "0.1.0",
   "private": true,
+  "engines": {
+    "node": ">=24.19.0 <25"
+  },
   "proxy": "http://localhost:5000",
   "dependencies": {
     "@headlessui/react": "^2.2.4",
