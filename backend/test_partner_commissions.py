@@ -70,6 +70,9 @@ class PartnerAccountingTests(unittest.TestCase):
         base_only = ledger.calculate(invoice(), charge(refunded=1130), 2000, first, now, ["price_base"])
         self.assertEqual((base_only["status"], base_only["commissionMinor"]), ("available", 300))
         self.assertEqual(ledger.calculate(invoice(), charge(refunded=1130), 2000, first, now)["status"], "review")
+        for data in ([], [{**invoice()["lines"]["data"][0], "amount": 0}]):
+            missing_base = {**invoice(), "lines": {"has_more": False, "data": data}}
+            self.assertEqual(ledger.calculate(missing_base, charge(refunded=1130), 2000, first, now, ["price_base"])["status"], "review")
         i["total_excluding_tax"] = 2000
         i["lines"]["data"].append({"amount": -1000})
         self.assertEqual(ledger.calculate(i, charge(3000, 1000), 2000, first, now, ["price_base"])["status"], "review")
@@ -83,7 +86,7 @@ class PartnerAccountingTests(unittest.TestCase):
         payout = {"code": "salon-coach", "currency": "cad", "livemode": False, "amountMinor": 100, "reference": "historical-payment", "recordedAt": first}
         with ledger.state_write() as state:
             state["referrals"][0].update({"firstPaidAt": first, "syncedAt": int(time.time()), "error": ""})
-            state["invoices"] = [prior]; state["payouts"] = [payout]
+            state["invoices"] = [prior, {**prior, "invoiceId": "in_legacyzero", "commissionMinor": 0}]; state["payouts"] = [payout]
             self.assertEqual(ledger.available(state, "salon-coach", "cad", False, int(time.time())), -100)
         current_invoice = invoice(total=3000)
         current_invoice["total_excluding_tax"] = 3000
@@ -98,6 +101,8 @@ class PartnerAccountingTests(unittest.TestCase):
             data = self.client.get("/api/owner/partners").get_json()
             self.assertEqual((data["invoices"][0]["status"], data["invoices"][0]["commissionMinor"]), ("review", 0))
             self.assertEqual(data["invoices"][0]["previousCommissionMinor"], 300)
+            self.assertEqual(data["invoices"][1]["status"], "review")
+            self.assertEqual(data["invoices"][1]["previousCommissionMinor"], 0)
             self.assertEqual(data["balances"][0]["amountMinor"], -100); self.assertEqual(data["payouts"], [payout])
             record = {"op": "record", "code": "salon-coach", "currency": "cad", "amountMinor": 200, "reference": "must-not-record"}
             response = self.client.post("/api/owner/partners", json=record)

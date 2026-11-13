@@ -26,7 +26,7 @@ def blank():
 
 
 def needs_refund_refresh(row):
-    return row.get("reason") == "Refund adjusted" and row.get("commissionMinor", 0) > 0 and row.get("refundAllocationVersion") != 1
+    return row.get("reason") == "Refund adjusted" and row.get("refundAllocationVersion") != 1
 
 
 def hold_legacy_refunds(state):
@@ -190,7 +190,9 @@ def calculate(invoice, charge, base, first_paid, now, base_prices=()):
     # refunded. Base-only invoices may include tax without including add-ons.
     lines = invoice.get("lines") or {}
     base_only = (base == invoice.get("total_excluding_tax") and lines.get("has_more") is False
-        and isinstance(lines.get("data"), list) and all(line.get("amount") == 0
+        and isinstance(lines.get("data"), list)
+        and any(line.get("amount", 0) > 0 and ((line.get("pricing") or {}).get("price_details") or {}).get("price") in base_prices for line in lines["data"])
+        and all(line.get("amount") == 0
             or ((line.get("pricing") or {}).get("price_details") or {}).get("price") in base_prices
             for line in lines["data"]))
     if 0 < charge["amount_refunded"] < total and not base_only:
