@@ -52,3 +52,7 @@
 @media(max-width:900px){.rp-hero{grid-template-columns:1fr;gap:42px;padding:56px 0 64px}.rp-hero h1{max-width:690px}.rp-example{max-width:680px;width:100%}.rp-cards{grid-template-columns:1fr}.rp-cards h3{margin-top:14px}.rp-process,.rp-faq{grid-template-columns:1fr;gap:36px}.rp-contact{grid-template-columns:1fr;gap:28px}.rp-section{padding:52px 0}}
 @media(max-width:620px){.rp-hero,.rp-section,.rp-contact{width:calc(100% - 36px)}.rp-page .lp-brand span{display:inline}.rp-page .lp-nav{gap:12px}.rp-page .lp-nav .lp-primary-button{padding:11px 12px;font-size:12px;gap:10px}.rp-hero h1{font-size:clamp(40px,10.5vw,56px)}.rp-intro{font-size:16px}.rp-actions{align-items:flex-start;flex-direction:column;gap:12px}.rp-example h2{font-size:29px}.rp-example-heading{align-items:flex-start;flex-direction:column}.rp-contact{padding:28px 22px}.rp-contact-action .lp-primary-button{width:100%;gap:14px}.rp-page .lp-nav .lp-brand{gap:7px;font-size:17px}.rp-page .lp-nav .lp-brand img{width:31px;height:31px}}
 @media(max-width:350px){.rp-page .lp-nav .lp-primary-button svg{display:none}}
+.rp-benefits { margin: 22px 0 0; padding: 0; list-style: none; display: grid; gap: 14px; max-width: 760px; font-size: 15px; line-height: 1.5; }
+.rp-benefits li { display: flex; gap: 12px; align-items: flex-start; }
+.rp-benefits li svg { flex-shrink: 0; margin-top: 4px; color: var(--lp-gold); }
+.rp-terms { margin: 22px 0 0; max-width: 760px; font-size: 14px; line-height: 1.6; color: var(--lp-muted, #c8cad0); }

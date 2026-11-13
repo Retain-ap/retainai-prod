@@ -1,6 +1,7 @@
 import React from "react";
 import { FaArrowRight, FaCheck, FaHeart } from "react-icons/fa";
 import brandLogo from "../assets/logo.png";
+import publicContent from "../publicContent.json";
 import "../components/LandingPage.css";
 import "./Partners.css";
 
@@ -34,6 +35,13 @@ export default function Partners() {
               <li><span>03</span><div><h3>Keep the next step visible.</h3><p>Track the reply, appointment or follow-up in one workspace.</p></div></li>
             </ol>
           </aside>
+        </section>
+
+        <section className="rp-section rp-today" aria-labelledby="partner-today-title">
+          <p className="rp-eyebrow">Live in RetainAI now</p>
+          <h2 id="partner-today-title">What your clients get today.</h2>
+          <ul className="rp-benefits">{publicContent.partners.benefits.map((item) => <li key={item}><FaCheck aria-hidden="true" /> {item}</li>)}</ul>
+          <p className="rp-terms">{publicContent.partners.terms}</p>
         </section>
 
         <section className="rp-section" aria-labelledby="partner-fit-title">

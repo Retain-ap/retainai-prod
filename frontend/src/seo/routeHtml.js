@@ -52,9 +52,19 @@ function fallbackContent(meta, path) {
     (page ? page.sections.map((section) => `<section><h2>${escapeHtml(section.heading)}</h2><p>${escapeHtml(section.copy)}</p></section>`).join("") : "") +
     (path === "/about" ? '<p>Mateo Zufic — Owner, RetainAI. <a href="mailto:owner@retainai.ca">Contact Mateo</a>.</p>' : "") +
     (path === "/pricing" ? faqFallback() : "") +
+    (path === "/partners" ? partnerFallback() : "") +
     (page ? `<p><a href="/signup">Start your 14-day trial</a> · <a href="${escapeHtml(publicContent.bookingUrl)}">Book a 10-minute walkthrough</a></p><nav aria-label="Explore RetainAI"><a href="/features">Features</a> · <a href="/pricing">Pricing</a> · <a href="/about">About</a> · <a href="/retention-crm-for-service-businesses">Retention CRM for service businesses</a> · <a href="/find-customers-who-stopped-rebooking">Find customers who stopped rebooking</a></nav>` : "") +
     `<p>${action}</p></main>`
   );
+}
+
+// The partner terms and live product benefits, shared with the Partners page so
+// crawlers and no-JavaScript readers see the same offer.
+function partnerFallback() {
+  const partners = publicContent.partners;
+  return `<section aria-label="Partner terms"><h2>Partner terms</h2><p>${escapeHtml(partners.terms)}</p>` +
+    `<h2>What your clients get today</h2><ul>${partners.benefits.map((item) => `<li>${escapeHtml(item)}</li>`).join("")}</ul>` +
+    '<p><a href="mailto:owner@retainai.ca?subject=RetainAI%20partnership%20enquiry">Email your interest</a> · An enquiry alone does not enrol you; earnings are not guaranteed.</p></section>';
 }
 
 function faqFallback() {
