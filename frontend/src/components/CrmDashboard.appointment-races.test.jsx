@@ -1,27 +1,28 @@
+import { vi } from "vitest";
 import React from "react";
 import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { MemoryRouter } from "react-router";
 import CrmDashboard from "./CrmDashboard";
 
-jest.mock("./SettingsContext", () => { const value = { settings: {}, setUser: jest.fn() }; return { useSettings: () => value }; });
-jest.mock("./Sidebar", () => () => null);
-jest.mock("./LeadsDashboard", () => () => null);
-jest.mock("./LeadModal", () => () => null);
-jest.mock("./Calendar", () => ({ onDayClick }) => <button onClick={() => onDayClick(new Date(2026, 10, 14))}>Choose appointment day</button>);
-jest.mock("./Appointments", () => () => null);
-jest.mock("./Messages", () => () => null);
-jest.mock("./NotificationsCenter", () => () => null);
-jest.mock("./Notifications", () => () => null);
-jest.mock("./AiPromptsDashboard", () => () => null);
-jest.mock("./Settings", () => () => null);
-jest.mock("./Insights", () => () => null);
-jest.mock("./Invoices", () => () => null);
-jest.mock("./Automations", () => () => null);
-jest.mock("./InviteTeamModal", () => () => null);
-jest.mock("./RetentionCommandCenter", () => ({ appointments }) => <output data-testid="appointments">{appointments.map(item => item.title).join(",")}</output>);
-jest.mock("./OwnerConsole", () => () => null);
-jest.mock("./TrialCommandBar", () => () => null);
-jest.mock("./OnboardingGuide", () => () => null);
+vi.mock("./SettingsContext", () => { const value = { settings: {}, setUser: vi.fn() }; return { useSettings: () => value }; });
+vi.mock("./Sidebar", () => ({ default: () => null }));
+vi.mock("./LeadsDashboard", () => ({ default: () => null }));
+vi.mock("./LeadModal", () => ({ default: () => null }));
+vi.mock("./Calendar", () => ({ default: ({ onDayClick }) => <button onClick={() => onDayClick(new Date(2026, 10, 14))}>Choose appointment day</button> }));
+vi.mock("./Appointments", () => ({ default: () => null }));
+vi.mock("./Messages", () => ({ default: () => null }));
+vi.mock("./NotificationsCenter", () => ({ default: () => null }));
+vi.mock("./Notifications", () => ({ default: () => null }));
+vi.mock("./AiPromptsDashboard", () => ({ default: () => null }));
+vi.mock("./Settings", () => ({ default: () => null }));
+vi.mock("./Insights", () => ({ default: () => null }));
+vi.mock("./Invoices", () => ({ default: () => null }));
+vi.mock("./Automations", () => ({ default: () => null }));
+vi.mock("./InviteTeamModal", () => ({ default: () => null }));
+vi.mock("./RetentionCommandCenter", () => ({ default: ({ appointments }) => <output data-testid="appointments">{appointments.map(item => item.title).join(",")}</output> }));
+vi.mock("./OwnerConsole", () => ({ default: () => null }));
+vi.mock("./TrialCommandBar", () => ({ default: () => null }));
+vi.mock("./OnboardingGuide", () => ({ default: () => null }));
 
 const member = { email: "member@example.test", role: "owner", platformOwner: false };
 const originalFetch = global.fetch;
@@ -31,8 +32,8 @@ const booking = title => ({ id: title, title, lead_id: "sample", appointment_tim
 let reads, writes;
 beforeEach(() => {
   reads = []; writes = []; localStorage.clear();
-  window.matchMedia = jest.fn(() => ({ matches: false, addEventListener: jest.fn(), removeEventListener: jest.fn() }));
-  global.fetch = jest.fn((url, options = {}) => {
+  window.matchMedia = vi.fn(() => ({ matches: false, addEventListener: vi.fn(), removeEventListener: vi.fn() }));
+  global.fetch = vi.fn((url, options = {}) => {
     if (String(url).includes("/appointments/")) {
       const pending = { url: String(url), ...deferred() };
       (options.method === "POST" ? writes : reads).push(pending); return pending.promise;
@@ -40,7 +41,7 @@ beforeEach(() => {
     return Promise.resolve({ ok: true, json: async () => ({ leads: [{ id: "sample", name: "Fictional client" }], revision: "r1", connected: false }) });
   });
 });
-afterEach(() => { global.fetch = originalFetch; delete window.matchMedia; delete window.RetainAI; localStorage.clear(); jest.restoreAllMocks(); });
+afterEach(() => { global.fetch = originalFetch; delete window.matchMedia; delete window.RetainAI; localStorage.clear(); vi.restoreAllMocks(); });
 const dashboard = (user = member, path = "/app") => <MemoryRouter initialEntries={[path]}><CrmDashboard authenticatedUser={user} /></MemoryRouter>;
 const changed = () => act(() => window.dispatchEvent(new Event("appointments:changed")));
 async function mount() { const view = render(dashboard()); await waitFor(() => expect(reads).toHaveLength(1)); return view; }
@@ -103,7 +104,7 @@ test.each(["success", "failure"])("late quick-add %s after unmount does not refr
   fireEvent.change(screen.getByPlaceholderText("Appointment title"), { target: { value: "Fictional appointment" } });
   fireEvent.click(screen.getByRole("button", { name: "Add", exact: true }));
   expect(writes).toHaveLength(1); view.unmount();
-  const dispatch = jest.spyOn(window, "dispatchEvent"), alert = jest.spyOn(window, "alert").mockImplementation(() => {});
+  const dispatch = vi.spyOn(window, "dispatchEvent"), alert = vi.spyOn(window, "alert").mockImplementation(() => {});
   await act(async () => result === "success" ? writes[0].resolve({ ok: true, json: async () => ({ ok: true }) }) : writes[0].reject(new Error("Old write failed")));
   expect(reads).toHaveLength(1);
   expect(dispatch.mock.calls.some(([event]) => event.type === "appointments:changed")).toBe(false);

@@ -60,6 +60,10 @@ The mechanical adapters are:
   mocked component and props are retained.
 - `requireActual` becomes awaited `importActual`; the one synchronous enclosing
   test becomes async without changing its assertions.
+- Testing Library 10/16 detects fake clocks by checking a global Jest timer API.
+  A test-only bridge exposes only `advanceTimersByTime` from Vitest so existing
+  `findBy`/`waitFor` calls drain their fake-clock microtasks. Other Jest APIs are
+  deliberately not aliased, and the original race-test clock/assertions remain.
 - Filesystem tests derive their directory from `import.meta.url` instead of
   Jest's CommonJS `__dirname`.
 - jest-dom uses its supported Vitest entry point. Existing cleanup behavior is
