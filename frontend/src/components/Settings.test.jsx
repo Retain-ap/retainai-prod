@@ -1,3 +1,4 @@
+import { vi } from "vitest";
 import React from "react";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { MemoryRouter, useLocation, useNavigate } from "react-router";
@@ -25,16 +26,16 @@ function response(body, status = 200) {
 }
 
 test("keeps an unsaved profile draft editable when the backend rejects it", async () => {
-  const warning = jest.spyOn(console, "warn").mockImplementation(() => {});
+  const warning = vi.spyOn(console, "warn").mockImplementation(() => {});
   localStorage.setItem("user", JSON.stringify(user));
-  global.fetch = jest.fn().mockImplementation((_url, options = {}) => {
+  global.fetch = vi.fn().mockImplementation((_url, options = {}) => {
     if (options.method === "POST") return Promise.resolve(response({ error: "unavailable" }, 503));
     return Promise.resolve(response(user));
   });
 
   render(
     <MemoryRouter>
-      <Settings user={user} refreshUser={jest.fn()} />
+      <Settings user={user} refreshUser={vi.fn()} />
     </MemoryRouter>
   );
 
@@ -53,11 +54,11 @@ test("keeps an unsaved profile draft editable when the backend rejects it", asyn
 
 test("does not restart profile polling when the refresh callback identity changes", async () => {
   localStorage.setItem("user", JSON.stringify(user));
-  global.fetch = jest.fn().mockResolvedValue(response(user));
+  global.fetch = vi.fn().mockResolvedValue(response(user));
 
   const view = render(
     <MemoryRouter>
-      <Settings user={user} refreshUser={jest.fn().mockResolvedValue(undefined)} />
+      <Settings user={user} refreshUser={vi.fn().mockResolvedValue(undefined)} />
     </MemoryRouter>
   );
 
@@ -67,7 +68,7 @@ test("does not restart profile polling when the refresh callback identity change
 
   view.rerender(
     <MemoryRouter>
-      <Settings user={user} refreshUser={jest.fn().mockResolvedValue(undefined)} />
+      <Settings user={user} refreshUser={vi.fn().mockResolvedValue(undefined)} />
     </MemoryRouter>
   );
   await Promise.resolve();
@@ -78,14 +79,14 @@ test("does not restart profile polling when the refresh callback identity change
 
 test("allows leaving the route-selected Import Contacts tab", async () => {
   localStorage.setItem("user", JSON.stringify(user));
-  global.fetch = jest.fn().mockResolvedValue(response(user));
+  global.fetch = vi.fn().mockResolvedValue(response(user));
 
   render(
     <MemoryRouter>
       <Settings
         user={user}
         initialTab="imports"
-        refreshUser={jest.fn().mockResolvedValue(undefined)}
+        refreshUser={vi.fn().mockResolvedValue(undefined)}
       />
     </MemoryRouter>
   );
@@ -106,14 +107,14 @@ function RoutedSettings({ profile = user }) {
       <button onClick={() => navigate(-1)}>Browser back</button>
       <button onClick={() => navigate(1)}>Browser forward</button>
       <output data-testid="location">{location.pathname}{location.search}</output>
-      <Settings user={profile} initialTab={initialTab} refreshUser={jest.fn().mockResolvedValue(undefined)} />
+      <Settings user={profile} initialTab={initialTab} refreshUser={vi.fn().mockResolvedValue(undefined)} />
     </>
   );
 }
 
 function renderRouted(path, profile) {
   localStorage.setItem("user", JSON.stringify(profile || user));
-  global.fetch = jest.fn().mockResolvedValue(response(profile || user));
+  global.fetch = vi.fn().mockResolvedValue(response(profile || user));
   return render(
     <MemoryRouter initialEntries={[path]}>
       <RoutedSettings profile={profile} />
@@ -138,7 +139,7 @@ test("settings tabs and help shortcuts update the URL so reload and Back match t
 
   fireEvent.click(screen.getByRole("button", { name: "Help & Support" }));
   expect(screen.getByTestId("location")).toHaveTextContent("/app?tab=help");
-  fireEvent.click(await screen.findByRole("button", { name: /^Integrations .+/ }));
+  fireEvent.click(await screen.findByRole("button", { name: /^Integrations\s*Calendar, Stripe, WhatsApp, and connection status\.$/ }));
   expect(await screen.findByText("Connected accounts")).toBeInTheDocument();
   expect(screen.getByTestId("location")).toHaveTextContent("/app?tab=integrations");
 });
@@ -160,14 +161,14 @@ test("tab links respect role restrictions and never put a hidden tab in the URL"
 
 test("the owner can choose the optional salon and barber preset; general is the default", async () => {
   localStorage.setItem("user", JSON.stringify(user));
-  global.fetch = jest.fn().mockImplementation((_url, options = {}) => {
+  global.fetch = vi.fn().mockImplementation((_url, options = {}) => {
     if (options.method === "POST") return Promise.resolve(response({ ok: true, ...user, setup_preset: "salon_barber" }));
     return Promise.resolve(response(user));
   });
 
   render(
     <MemoryRouter>
-      <Settings user={user} refreshUser={jest.fn()} />
+      <Settings user={user} refreshUser={vi.fn()} />
     </MemoryRouter>
   );
 
@@ -187,10 +188,10 @@ function googleCard() {
 
 function renderImports(path) {
   localStorage.setItem("user", JSON.stringify(user));
-  global.fetch = jest.fn().mockResolvedValue(response(user));
+  global.fetch = vi.fn().mockResolvedValue(response(user));
   render(
     <MemoryRouter initialEntries={[path]}>
-      <Settings user={user} initialTab="imports" refreshUser={jest.fn().mockResolvedValue(undefined)} />
+      <Settings user={user} initialTab="imports" refreshUser={vi.fn().mockResolvedValue(undefined)} />
     </MemoryRouter>
   );
 }

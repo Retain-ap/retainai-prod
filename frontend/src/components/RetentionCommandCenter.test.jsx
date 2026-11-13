@@ -1,3 +1,4 @@
+import { vi } from "vitest";
 import React from "react";
 import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import RetentionCommandCenter from "./RetentionCommandCenter";
@@ -16,13 +17,13 @@ const completed = (lead, days) => ({ lead, date: daysAgo(days), time: "10:00", s
 const appointments = [completed(ana, 100), completed(ana, 70), completed(ana, 40)];
 
 beforeEach(() => {
-  global.fetch = jest.fn(async () => ({ ok: false, status: 403, json: async () => ({ error: "owner_required" }) }));
+  global.fetch = vi.fn(async () => ({ ok: false, status: 403, json: async () => ({ error: "owner_required" }) }));
 });
 afterEach(() => { delete global.fetch; });
 
 test("rebooking opportunities use each customer's visit rhythm and save an owner interval", async () => {
-  const onUpdateLead = jest.fn().mockResolvedValue(undefined);
-  const prompt = jest.spyOn(window, "prompt").mockReturnValue("21");
+  const onUpdateLead = vi.fn().mockResolvedValue(undefined);
+  const prompt = vi.spyOn(window, "prompt").mockReturnValue("21");
   render(<RetentionCommandCenter leads={[ana, ben]} appointments={appointments} user={{ timezone: "UTC" }} onUpdateLead={onUpdateLead} />);
   fireEvent.click(screen.getByRole("tab", { name: "Revenue Opportunities" }));
 
@@ -51,8 +52,8 @@ test("no value is invented: only values the owner recorded are shown or added up
 });
 
 test("a due customer can be drafted for review or marked contacted; nothing is sent from the list", async () => {
-  const onDraftFollowUp = jest.fn();
-  const onMarkContacted = jest.fn().mockResolvedValue({});
+  const onDraftFollowUp = vi.fn();
+  const onMarkContacted = vi.fn().mockResolvedValue({});
   render(<RetentionCommandCenter leads={[ana]} appointments={appointments} user={{ timezone: "UTC" }} onDraftFollowUp={onDraftFollowUp} onMarkContacted={onMarkContacted} />);
   fireEvent.click(screen.getByRole("tab", { name: "Revenue Opportunities" }));
 
@@ -68,7 +69,7 @@ test("a due customer can be drafted for review or marked contacted; nothing is s
 });
 
 test("a failed mark-contacted shows the reason and keeps the customer on the list", async () => {
-  const onMarkContacted = jest.fn().mockRejectedValue(new Error("The contact could not be recorded (HTTP 500)."));
+  const onMarkContacted = vi.fn().mockRejectedValue(new Error("The contact could not be recorded (HTTP 500)."));
   render(<RetentionCommandCenter leads={[ana]} appointments={appointments} user={{ timezone: "UTC" }} onMarkContacted={onMarkContacted} />);
   fireEvent.click(screen.getByRole("tab", { name: "Revenue Opportunities" }));
   fireEvent.click(screen.getByRole("button", { name: "Mark contacted" }));
@@ -80,7 +81,7 @@ test("unsubscribed or email-less customers get no email draft action", () => {
   const optedOut = { ...ana, id: "o", name: "Opted Out", email: "out@example.com", email_opt_out: true };
   const noEmail = { ...ana, id: "n", name: "No Email", email: "" };
   render(<RetentionCommandCenter leads={[optedOut, noEmail]} appointments={[...appointments.map((a) => ({ ...a, lead: optedOut })), ...appointments.map((a) => ({ ...a, lead: noEmail }))]}
-    user={{ timezone: "UTC" }} onDraftFollowUp={jest.fn()} onMarkContacted={jest.fn()} />);
+    user={{ timezone: "UTC" }} onDraftFollowUp={vi.fn()} onMarkContacted={vi.fn()} />);
   fireEvent.click(screen.getByRole("tab", { name: "Revenue Opportunities" }));
   expect(screen.queryByRole("button", { name: "Draft follow-up" })).not.toBeInTheDocument();
   expect(screen.getByText("Unsubscribed from email")).toBeInTheDocument();
@@ -90,7 +91,7 @@ test("unsubscribed or email-less customers get no email draft action", () => {
 
 test("a customer followed up this week waits to book instead of staying on the contact list", () => {
   const followedUp = { ...ana, last_outreach_at: `${daysAgo(2)}T15:00:00Z` };
-  render(<RetentionCommandCenter leads={[followedUp]} appointments={appointments.map((a) => ({ ...a, lead: followedUp }))} user={{ timezone: "UTC" }} onMarkContacted={jest.fn()} />);
+  render(<RetentionCommandCenter leads={[followedUp]} appointments={appointments.map((a) => ({ ...a, lead: followedUp }))} user={{ timezone: "UTC" }} onMarkContacted={vi.fn()} />);
   fireEvent.click(screen.getByRole("tab", { name: "Revenue Opportunities" }));
   expect(screen.getByText("No one is due right now")).toBeInTheDocument();
   expect(screen.getByRole("heading", { name: "Contacted, waiting to book (1)" })).toBeInTheDocument();
@@ -98,9 +99,9 @@ test("a customer followed up this week waits to book instead of staying on the c
 });
 
 test("rejects an invalid interval without saving", () => {
-  const onUpdateLead = jest.fn();
-  const prompt = jest.spyOn(window, "prompt").mockReturnValue("3");
-  const alert = jest.spyOn(window, "alert").mockImplementation(() => {});
+  const onUpdateLead = vi.fn();
+  const prompt = vi.spyOn(window, "prompt").mockReturnValue("3");
+  const alert = vi.spyOn(window, "alert").mockImplementation(() => {});
   render(<RetentionCommandCenter leads={[ana]} appointments={appointments} user={{ timezone: "UTC" }} onUpdateLead={onUpdateLead} />);
   fireEvent.click(screen.getByRole("tab", { name: "Revenue Opportunities" }));
   fireEvent.click(screen.getByRole("button", { name: "Set interval" }));
@@ -144,8 +145,8 @@ test("appointments added in RetainAI complete the booking step without Calendly"
 });
 
 test("with no bookings yet, the booking step offers Add appointment, separate from contact import", () => {
-  const onOpenImports = jest.fn();
-  const onOpenAppointments = jest.fn();
+  const onOpenImports = vi.fn();
+  const onOpenAppointments = vi.fn();
   render(<RetentionCommandCenter leads={[]} appointments={[]} user={{ timezone: "UTC" }} onOpenImports={onOpenImports} onOpenAppointments={onOpenAppointments} />);
   const panel = screen.getByRole("region", { name: "Service business setup" });
   const step = within(panel).getByTestId("setup-step-bookings");
@@ -170,7 +171,7 @@ test("bookings synced from Calendly tick the booking step and are counted, not n
 });
 
 test("the salon preset adds a checklist, count-only metrics and review-only playbooks", () => {
-  const onOpenAutomations = jest.fn();
+  const onOpenAutomations = vi.fn();
   const imported = { id: "i", name: "Imported Iris", email: "iris@example.com", imported_at: "2026-11-01T00:00:00Z" };
   const noShow = { lead: ana, date: daysAgo(5), time: "10:00", status: "no-show", _backend: {} };
   render(
@@ -200,7 +201,7 @@ test("the salon preset adds a checklist, count-only metrics and review-only play
 
 describe("draft context only calls a measured visit pattern the customer's habit", () => {
   const draftContextFor = (lead, visits) => {
-    const onDraftFollowUp = jest.fn();
+    const onDraftFollowUp = vi.fn();
     const { unmount } = render(<RetentionCommandCenter leads={[lead]} appointments={visits} user={{ timezone: "UTC" }} onDraftFollowUp={onDraftFollowUp} />);
     fireEvent.click(screen.getByRole("tab", { name: "Revenue Opportunities" }));
     fireEvent.click(screen.getByRole("button", { name: "Draft follow-up" }));

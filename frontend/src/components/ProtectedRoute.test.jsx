@@ -1,3 +1,4 @@
+import { vi } from "vitest";
 import React from "react";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { MemoryRouter, Route, Routes } from "react-router";
@@ -28,12 +29,12 @@ function renderRoute() {
 describe("ProtectedRoute", () => {
   beforeEach(() => {
     localStorage.clear();
-    jest.restoreAllMocks();
+    vi.restoreAllMocks();
   });
 
   test("redirects only when the session endpoint explicitly rejects authentication", async () => {
     localStorage.setItem("user", JSON.stringify({ email: "member@example.com" }));
-    global.fetch = jest.fn().mockResolvedValue({ ok: false, status: 401 });
+    global.fetch = vi.fn().mockResolvedValue({ ok: false, status: 401 });
 
     renderRoute();
 
@@ -43,7 +44,7 @@ describe("ProtectedRoute", () => {
 
   test("preserves the session and offers retry during a service outage", async () => {
     localStorage.setItem("user", JSON.stringify({ email: "member@example.com" }));
-    global.fetch = jest
+    global.fetch = vi
       .fn()
       .mockRejectedValueOnce(new TypeError("offline"))
       .mockRejectedValueOnce(new TypeError("offline"))

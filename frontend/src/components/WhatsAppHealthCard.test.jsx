@@ -1,3 +1,4 @@
+import { vi } from "vitest";
 import React from "react";
 import { render, screen } from "@testing-library/react";
 import WhatsAppHealthCard from "./WhatsAppHealthCard";
@@ -11,7 +12,7 @@ function response(body, status = 200) {
 }
 
 function installWhatsAppResponses({ graphOk, graphError = "Invalid OAuth access token" }) {
-  global.fetch = jest.fn().mockImplementation((url) => {
+  global.fetch = vi.fn().mockImplementation((url) => {
     const value = String(url);
     if (value.includes("whatsapp/inbound-health")) {
       return Promise.resolve(response({ webhook_last_seen_at: "2026-09-03T12:00:00Z", unmatched_count: 0 }));

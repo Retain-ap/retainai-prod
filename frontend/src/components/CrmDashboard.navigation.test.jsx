@@ -1,29 +1,30 @@
+import { vi } from "vitest";
 import React from "react";
 import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { MemoryRouter, useLocation, useNavigate } from "react-router";
 import CrmDashboard from "./CrmDashboard";
 
-jest.mock("./SettingsContext", () => {
-  const context = { settings: {}, setUser: jest.fn() };
+vi.mock("./SettingsContext", () => {
+  const context = { settings: {}, setUser: vi.fn() };
   return { useSettings: () => context };
 });
-jest.mock("./Sidebar", () => ({ setSection }) => <nav>{["overview", "dashboard", "calendar", "settings"].map(section => <button key={section} onClick={() => setSection(section)}>{section}</button>)}</nav>);
-jest.mock("./LeadsDashboard", () => () => <div>Contact records</div>);
-jest.mock("./LeadModal", () => () => null);
-jest.mock("./Calendar", () => () => <div>Calendar grid</div>);
-jest.mock("./Appointments", () => () => <div>Appointment list</div>);
-jest.mock("./Messages", () => ({ onOpenBusinessSettings }) => <div>Message inbox<button onClick={onOpenBusinessSettings}>Inbox business settings</button></div>);
-jest.mock("./NotificationsCenter", () => () => null);
-jest.mock("./Notifications", () => () => null);
-jest.mock("./AiPromptsDashboard", () => ({ onOpenBusinessSettings, initialFocus }) => <div>AI Studio<button onClick={onOpenBusinessSettings}>Studio business settings</button>{initialFocus && <output data-testid="studio-focus">{`${initialFocus.leadId}|${initialFocus.playbook}|${initialFocus.context}`}</output>}</div>);
-jest.mock("./Settings", () => ({ initialTab }) => <div>Settings {initialTab || "profile"}</div>);
-jest.mock("./Insights", () => () => null);
-jest.mock("./Invoices", () => () => null);
-jest.mock("./Automations", () => () => <div>Automation playbooks</div>);
-jest.mock("./InviteTeamModal", () => () => null);
-jest.mock("./RetentionCommandCenter", () => ({ onOpenMessages, onOpenAppointments, onOpenImports, onDraftFollowUp, onMarkContacted }) => <div>Retention overview<button onClick={onOpenMessages}>Overview messages shortcut</button><button onClick={onOpenAppointments}>Setup add appointment</button><button onClick={onOpenImports}>Setup import contacts</button><button onClick={() => onDraftFollowUp({ id: "lead-1", email: "ava@example.com" }, "Due to rebook: last completed visit Oct 1; usually every 30 days.")}>Rebook draft</button><button onClick={() => onMarkContacted({ id: "lead-1" }).then(() => { global.__marked = "ok"; }, (error) => { global.__marked = error.message; })}>Rebook mark contacted</button></div>);
-jest.mock("./OwnerConsole", () => () => <div>Platform owner console</div>);
-jest.mock("./TrialCommandBar", () => () => null);
+vi.mock("./Sidebar", () => ({ default: ({ setSection }) => <nav>{["overview", "dashboard", "calendar", "settings"].map(section => <button key={section} onClick={() => setSection(section)}>{section}</button>)}</nav> }));
+vi.mock("./LeadsDashboard", () => ({ default: () => <div>Contact records</div> }));
+vi.mock("./LeadModal", () => ({ default: () => null }));
+vi.mock("./Calendar", () => ({ default: () => <div>Calendar grid</div> }));
+vi.mock("./Appointments", () => ({ default: () => <div>Appointment list</div> }));
+vi.mock("./Messages", () => ({ default: ({ onOpenBusinessSettings }) => <div>Message inbox<button onClick={onOpenBusinessSettings}>Inbox business settings</button></div> }));
+vi.mock("./NotificationsCenter", () => ({ default: () => null }));
+vi.mock("./Notifications", () => ({ default: () => null }));
+vi.mock("./AiPromptsDashboard", () => ({ default: ({ onOpenBusinessSettings, initialFocus }) => <div>AI Studio<button onClick={onOpenBusinessSettings}>Studio business settings</button>{initialFocus && <output data-testid="studio-focus">{`${initialFocus.leadId}|${initialFocus.playbook}|${initialFocus.context}`}</output>}</div> }));
+vi.mock("./Settings", () => ({ default: ({ initialTab }) => <div>Settings {initialTab || "profile"}</div> }));
+vi.mock("./Insights", () => ({ default: () => null }));
+vi.mock("./Invoices", () => ({ default: () => null }));
+vi.mock("./Automations", () => ({ default: () => <div>Automation playbooks</div> }));
+vi.mock("./InviteTeamModal", () => ({ default: () => null }));
+vi.mock("./RetentionCommandCenter", () => ({ default: ({ onOpenMessages, onOpenAppointments, onOpenImports, onDraftFollowUp, onMarkContacted }) => <div>Retention overview<button onClick={onOpenMessages}>Overview messages shortcut</button><button onClick={onOpenAppointments}>Setup add appointment</button><button onClick={onOpenImports}>Setup import contacts</button><button onClick={() => onDraftFollowUp({ id: "lead-1", email: "ava@example.com" }, "Due to rebook: last completed visit Oct 1; usually every 30 days.")}>Rebook draft</button><button onClick={() => onMarkContacted({ id: "lead-1" }).then(() => { global.__marked = "ok"; }, (error) => { global.__marked = error.message; })}>Rebook mark contacted</button></div> }));
+vi.mock("./OwnerConsole", () => ({ default: () => <div>Platform owner console</div> }));
+vi.mock("./TrialCommandBar", () => ({ default: () => null }));
 
 const member = { email: "reviewer@example.test", role: "owner", platformOwner: false };
 const originalFetch = global.fetch;
@@ -41,8 +42,8 @@ async function mount(initial = "/app", user = member) {
 
 beforeEach(() => {
   localStorage.clear();
-  window.matchMedia = jest.fn(query => ({ matches: false, media: query, addEventListener: jest.fn(), removeEventListener: jest.fn() }));
-  global.fetch = jest.fn(async () => ({ ok: true, json: async () => ({ leads: [], appointments: [], connected: false }) }));
+  window.matchMedia = vi.fn(query => ({ matches: false, media: query, addEventListener: vi.fn(), removeEventListener: vi.fn() }));
+  global.fetch = vi.fn(async () => ({ ok: true, json: async () => ({ leads: [], appointments: [], connected: false }) }));
 });
 afterEach(() => { global.fetch = originalFetch; localStorage.clear(); delete window.RetainAI; delete window.matchMedia; });
 
@@ -197,7 +198,7 @@ test("Mark contacted records the contact on the server for that one customer and
   global.fetch.mockImplementation(async (url) => String(url).includes("leads/contacted")
     ? { ok: true, status: 200, json: async () => ({ ok: true, lead: { id: "lead-1" } }) }
     : { ok: true, json: async () => ({ leads: [], appointments: [], connected: false }) });
-  const reloads = jest.fn();
+  const reloads = vi.fn();
   window.addEventListener("leads:changed", reloads);
   fireEvent.click(screen.getByRole("button", { name: "Rebook mark contacted" }));
   await waitFor(() => expect(global.__marked).toBe("ok"));

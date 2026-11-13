@@ -1,3 +1,4 @@
+import { vi } from "vitest";
 import React from "react";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import Calendar from "./Calendar";
@@ -17,7 +18,7 @@ afterEach(() => {
 });
 
 test("surfaces appointment load failures and clears the error after retry", async () => {
-  global.fetch = jest
+  global.fetch = vi
     .fn()
     .mockResolvedValueOnce(jsonResponse({ error: "calendar_unavailable" }, 503))
     .mockResolvedValueOnce(jsonResponse({ appointments: [] }));
@@ -25,8 +26,8 @@ test("surfaces appointment load failures and clears the error after retry", asyn
   render(
     <Calendar
       user={{ email: "member@example.com", orgOwnerEmail: "owner@example.com" }}
-      setSelectedDate={jest.fn()}
-      onDayClick={jest.fn()}
+      setSelectedDate={vi.fn()}
+      onDayClick={vi.fn()}
     />
   );
 
@@ -42,7 +43,7 @@ test("surfaces appointment load failures and clears the error after retry", asyn
 });
 
 test("places offset and all-day events on their workspace calendar day", async () => {
-  global.fetch = jest.fn().mockResolvedValue(
+  global.fetch = vi.fn().mockResolvedValue(
     jsonResponse({
       timezone: "America/Toronto",
       appointments: [
@@ -60,8 +61,8 @@ test("places offset and all-day events on their workspace calendar day", async (
     <Calendar
       user={{ email: "owner@example.com" }}
       selectedDate={new Date(2026, 8, 3, 12, 0, 0)}
-      setSelectedDate={jest.fn()}
-      onDayClick={jest.fn()}
+      setSelectedDate={vi.fn()}
+      onDayClick={vi.fn()}
       googleEvents={[
         {
           id: "google-1",

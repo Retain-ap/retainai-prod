@@ -1,3 +1,4 @@
+import { vi } from "vitest";
 import React from "react";
 import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import Appointments, { localAppointmentKey } from "./Appointments";
@@ -9,7 +10,7 @@ const imported = { id: "imported", name: "Imported Cara", email: "cara@example.c
 
 function mockServer(storedLeads) {
   const calls = [];
-  global.fetch = jest.fn(async (url, options = {}) => {
+  global.fetch = vi.fn(async (url, options = {}) => {
     const method = options.method || "GET";
     const body = options.body ? JSON.parse(options.body) : null;
     calls.push({ url: String(url), method, body });
@@ -37,7 +38,7 @@ afterEach(() => {
 test("standalone: completing an appointment saves only that change onto the latest list", async () => {
   // Since this screen loaded, the contact was renamed elsewhere and a contact was imported.
   const calls = mockServer([{ ...lead, name: "Jamie Renamed" }, imported]);
-  const setLeads = jest.fn();
+  const setLeads = vi.fn();
   render(<Appointments user={user} leads={[lead]} setLeads={setLeads} />);
 
   fireEvent.click(await screen.findByRole("button", { name: "Done" }));
@@ -59,8 +60,8 @@ test("standalone: completing an appointment saves only that change onto the late
 
 test("inside the dashboard: hands the change to the shared save instead of posting itself", async () => {
   const calls = mockServer([lead]);
-  const saveLeads = jest.fn(async (next) => ({ leads: next, conflicts: [] }));
-  render(<Appointments user={user} leads={[lead]} setLeads={jest.fn()} saveLeads={saveLeads} />);
+  const saveLeads = vi.fn(async (next) => ({ leads: next, conflicts: [] }));
+  render(<Appointments user={user} leads={[lead]} setLeads={vi.fn()} saveLeads={saveLeads} />);
 
   fireEvent.click(await screen.findByRole("button", { name: "Done" }));
 
@@ -72,11 +73,11 @@ test("inside the dashboard: hands the change to the shared save instead of posti
 });
 
 test("shows an error and changes nothing when the latest list cannot be loaded", async () => {
-  global.fetch = jest.fn(async (url) => {
+  global.fetch = vi.fn(async (url) => {
     if (String(url).includes("/api/appointments/")) return { ok: true, status: 200, json: async () => ({ appointments: [] }) };
     return { ok: false, status: 503, json: async () => ({ error: "Service unavailable" }) };
   });
-  const setLeads = jest.fn();
+  const setLeads = vi.fn();
   render(<Appointments user={user} leads={[lead]} setLeads={setLeads} />);
 
   fireEvent.click(await screen.findByRole("button", { name: "Done" }));
@@ -97,8 +98,8 @@ describe("appointments saved before keys were stored", () => {
 
   async function showLegacyAppointments() {
     mockServer([ana, ben]);
-    const saveLeads = jest.fn(async (next) => ({ leads: next, conflicts: [] }));
-    render(<Appointments user={user} leads={[ana, ben]} setLeads={jest.fn()} saveLeads={saveLeads} />);
+    const saveLeads = vi.fn(async (next) => ({ leads: next, conflicts: [] }));
+    render(<Appointments user={user} leads={[ana, ben]} setLeads={vi.fn()} saveLeads={saveLeads} />);
     expect(await screen.findAllByRole("button", { name: "Done" })).toHaveLength(3);
     return saveLeads;
   }
@@ -126,7 +127,7 @@ describe("appointments saved before keys were stored", () => {
   });
 
   test("delete removes only the clicked appointment", async () => {
-    const confirm = jest.spyOn(window, "confirm").mockReturnValue(true);
+    const confirm = vi.spyOn(window, "confirm").mockReturnValue(true);
     const saveLeads = await showLegacyAppointments();
     fireEvent.click(screen.getAllByRole("button", { name: "Delete" })[2]);
     await waitFor(() => expect(saveLeads).toHaveBeenCalledTimes(1));
