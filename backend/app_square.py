@@ -313,14 +313,16 @@ def square_sync():
 def _merge_owner_edits(existing, synced):
     """Re-localize provider bookings without erasing owner notes or status edits.
 
-    A provider cancellation remains authoritative. Older rows have no baseline,
-    so preserve a differing owner status and record the baseline on this sync,
-    matching Calendly's policy for legacy imports.
+    A provider cancellation remains authoritative. Older rows have no baseline:
+    a scheduled row must still advance with Square, while a terminal override
+    is preserved conservatively because its author is no longer distinguishable.
     """
     merged = {**existing, **synced}
     merged["notes"] = existing.get("notes") or ""
     owner_status = existing.get("status")
-    baseline = existing.get("square_synced_status", synced.get("status"))
+    baseline = existing.get("square_synced_status")
+    if baseline is None:
+        baseline = owner_status if owner_status in (None, "", "scheduled") else synced.get("status")
     if owner_status and owner_status != baseline and synced.get("status") != "cancelled":
         terminal = owner_status in ("completed", "cancelled", "no-show")
         merged.update(status=owner_status, done=terminal, is_done=terminal, completed=owner_status == "completed")

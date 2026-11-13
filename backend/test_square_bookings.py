@@ -202,6 +202,33 @@ class SquareTests(unittest.TestCase):
             self.assertTrue(row["done"])
             self.assertEqual(len(self.appointments()), 1)
 
+    def test_legacy_scheduled_rows_advance_with_provider_and_stay_idempotent(self):
+        self.square.bookings = [dict(booking("legacy-scheduled", 1), start_at="2026-11-14T15:00:00Z")]
+        before = dt.datetime(2026, 11, 13, 8, tzinfo=dt.timezone.utc)
+        after = dt.datetime(2026, 11, 15, 8, tzinfo=dt.timezone.utc)
+        with patch.object(app_square, "_now", return_value=before):
+            client, _, _ = self.connect()
+            self.assertEqual(self.sync(client).get_json()["imported"], 1)
+        legacy = dict(self.appointments()[0])
+        legacy.pop("square_synced_status")
+        legacy["notes"] = "Keep the appointment note"
+        self.assertEqual(legacy["status"], "scheduled")
+        for provider_status, expected in (("ACCEPTED", "completed"), ("NO_SHOW", "no-show")):
+            with self.subTest(provider_status=provider_status), patch.object(app_square, "_now", return_value=after):
+                data = retainai.load_appointments()
+                data[self.owner] = [dict(legacy)]
+                retainai.save_appointments(data)
+                self.square.bookings[0]["status"] = provider_status
+                result = self.sync(client).get_json()
+                self.assertEqual((result["imported"], result["updated"]), (0, 1))
+                row = self.appointments()[0]
+                self.assertEqual((row["status"], row["square_synced_status"]), (expected, expected))
+                self.assertEqual((row["done"], row["is_done"], row["completed"]), (True, True, expected == "completed"))
+                self.assertEqual((row["id"], row["notes"]), (legacy["id"], legacy["notes"]))
+                again = self.sync(client).get_json()
+                self.assertEqual((again["imported"], again["updated"], again["unchanged"]), (0, 0, 1))
+                self.assertEqual(len(self.appointments()), 1)
+
     def test_without_credentials_square_is_honestly_unavailable(self):
         client = self.client(self.owner)
         with patch.dict(os.environ, {"SQUARE_APPLICATION_ID": "", "SQUARE_APPLICATION_SECRET": ""}):
