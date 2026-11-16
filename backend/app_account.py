@@ -35,6 +35,7 @@ _WORKSPACE_JSON_FILES = (
     "followup_log.json",
     "square_connections.json",
     "calendly_connections.json",
+    "billing_checkout_attempts.json",
 )
 
 
@@ -309,11 +310,13 @@ def _workspace_records(workspace):
     revenue = read("revenue_evidence.json").get(workspace) or {}
     square = read("square_connections.json").get(workspace) or {}
     calendly = read("calendly_connections.json").get(workspace) or {}
+    checkout = read("billing_checkout_attempts.json").get(workspace) or {}
     return {
         "payments": list((revenue.get("records") or {}).values()),
         "follow_ups": read("followup_log.json").get(workspace) or [],
         "square": {key: value for key, value in square.items() if "token" not in key.lower() and key != "pending"} or None,
         "calendly": {key: value for key, value in calendly.items() if "token" not in key.lower() and key != "sync_cursor"} or None,
+        "billing_checkout": {key: checkout.get(key) for key in ("policy", "generation", "created_at", "session_id")} if checkout else None,
     }
 
 

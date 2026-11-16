@@ -20,6 +20,7 @@ from urllib.parse import urlparse
 import html
 from email.utils import parseaddr
 import stripe
+import billing_checkout_policy as checkout_policy
 import requests as pyrequests
 from email import policy
 from email.parser import BytesParser
@@ -4856,6 +4857,10 @@ def signup():
             "billingState": checkout["state"],
         }), 200
 
+    except checkout_policy.CheckoutPaused as checkout_error:
+        return jsonify({"error": str(checkout_error), "code": "checkout_paused"}), 503
+    except checkout_policy.CheckoutPolicyError as checkout_error:
+        return jsonify({"error": str(checkout_error), "code": "billing_review_required"}), 409
     except stripe.error.StripeError as e:
         print(f"[STRIPE ERROR] {getattr(e, 'user_message', str(e))}")
         return jsonify({"error": "Could not start payment process."}), 500
@@ -4973,129 +4978,17 @@ def _create_or_reuse_billing_checkout(
     trial_days: int = 0,
     recovery: bool = False,
 ):
-    """Create at most one Stripe subscription checkout for an account.
-
-    Every entry point uses this function. It first checks Stripe for an
-    existing subscription, reuses an open Checkout Session, and supplies a
-    deterministic idempotency key so concurrent clicks cannot create multiple
-    sessions or subscriptions.
-    """
-    if _complimentary_access_active(user):
-        return {
-            "state": "complimentary_access",
-            "url": f"{FRONTEND_URL}/app",
-            "subscriptionStatus": "complimentary",
-        }
-    if not STRIPE_SECRET_KEY or not STRIPE_PRICE_ID:
-        raise RuntimeError("Billing is not configured.")
-
-    price = stripe.Price.retrieve(STRIPE_PRICE_ID)
-    recurring = (price or {}).get("recurring") or {}
-    if not bool((price or {}).get("active", True)):
-        raise RuntimeError("The configured RetainAI price is inactive.")
-    if str(recurring.get("interval") or "").lower() != "month":
-        raise RuntimeError("The configured RetainAI price must renew monthly.")
-
-    users = load_users() or {}
-    stored = users.get(email) if isinstance(users, dict) else None
-    if isinstance(stored, dict):
-        user = stored
-
-    existing = _find_existing_billing_subscription(email, user)
-    if existing is not None:
-        if isinstance(users, dict):
-            users[email] = user
-            save_users(users)
-        return {
-            "state": "existing_subscription",
-            "url": f"{FRONTEND_URL}/login?billing=already_active",
-            "subscriptionStatus": str(existing.get("status") or ""),
-        }
-
-    previous_session_id = str(user.get("stripe_checkout_session_id") or "").strip()
-    if previous_session_id:
-        try:
-            previous = stripe.checkout.Session.retrieve(
-                previous_session_id,
-                expand=["subscription"],
-            )
-            if str(previous.get("status") or "") == "open" and previous.get("url"):
-                return {"state": "open_checkout", "url": previous.url}
-            subscription = previous.get("subscription")
-            subscription_status = (
-                str(subscription.get("status") or "")
-                if isinstance(subscription, dict)
-                else ""
-            )
-            if subscription_status in _BLOCKING_SUBSCRIPTION_STATUSES:
-                user["stripe_subscription_id"] = str(
-                    subscription.get("id") if isinstance(subscription, dict) else subscription
-                )
-                user["billing_status"] = subscription_status
-                if subscription_status in {"active", "trialing"} and not _administratively_blocked(user):
-                    user["status"] = "active"
-                if isinstance(users, dict):
-                    users[email] = user
-                    save_users(users)
-                return {
-                    "state": "existing_subscription",
-                    "url": f"{FRONTEND_URL}/login?billing=already_active",
-                    "subscriptionStatus": subscription_status,
-                }
-        except stripe.error.InvalidRequestError:
-            # The old session expired or was removed. A new generation is safe
-            # only after the subscription lookup above confirmed none exists.
-            pass
-
-    generation = int(user.get("stripe_checkout_generation") or 0)
-    if previous_session_id:
-        generation += 1
-    user["stripe_checkout_generation"] = generation
-    idempotency_key = hashlib.sha256(
-        f"retainai-subscription-checkout:{email}:{generation}".encode("utf-8")
-    ).hexdigest()
-
-    checkout_args = {
-        "payment_method_types": ["card"],
-        "mode": "subscription",
-        "line_items": [{"price": STRIPE_PRICE_ID, "quantity": 1}],
-        "success_url": f"{FRONTEND_URL}/login?paid=1&session_id={{CHECKOUT_SESSION_ID}}",
-        "cancel_url": cancel_url,
-        "metadata": {
-            "user_email": email,
-            "recovery": "true" if recovery else "false",
-            "checkout_generation": str(generation),
-        },
-        "subscription_data": {
-            "metadata": {
-                "user_email": email,
-                "checkout_generation": str(generation),
-            }
-        },
-    }
-    if user.get("partner_code"):
-        checkout_args["metadata"]["partner_code"] = user["partner_code"]
-        checkout_args["subscription_data"]["metadata"]["partner_code"] = user["partner_code"]
-    if user.get("stripe_customer_id"):
-        checkout_args["customer"] = user["stripe_customer_id"]
-    else:
-        checkout_args["customer_email"] = email
-    if int(trial_days or 0) > 0:
-        checkout_args["subscription_data"]["trial_period_days"] = int(trial_days)
-
-    checkout = stripe.checkout.Session.create(
-        **checkout_args,
-        idempotency_key=idempotency_key,
+    """One immutable, retryable Checkout attempt; tax is explicitly opt-in."""
+    return checkout_policy.create_or_reuse(
+        email=email, user=user, cancel_url=cancel_url, trial_days=trial_days,
+        recovery=recovery, stripe=stripe, secret_key=STRIPE_SECRET_KEY,
+        price_id=STRIPE_PRICE_ID, frontend_url=FRONTEND_URL,
+        load_users=load_users, save_users=save_users,
+        complimentary_access_active=_complimentary_access_active,
+        find_existing_subscription=_find_existing_billing_subscription,
+        administratively_blocked=_administratively_blocked,
+        blocking_statuses=_BLOCKING_SUBSCRIPTION_STATUSES,
     )
-    user["stripe_checkout_session_id"] = checkout.id
-    user["stripe_checkout_created_at"] = datetime.datetime.now(
-        datetime.timezone.utc
-    ).isoformat().replace("+00:00", "Z")
-    if isinstance(users, dict):
-        users[email] = user
-        save_users(users)
-    return {"state": "new_checkout", "url": checkout.url}
-
 
 @app.route("/api/login", methods=["POST"])
 def login():
@@ -5262,6 +5155,8 @@ def login():
                     recovery=True,
                 )
                 checkout_url = checkout["url"]
+            except checkout_policy.CheckoutPolicyError as policy_error:
+                checkout_error = str(policy_error)
             except Exception:
                 checkout_error = "Billing is temporarily unavailable. Please contact support."
             trial = _trial_details(user)
@@ -5443,6 +5338,10 @@ def billing_checkout():
             "url": checkout["url"],
             "billingState": checkout["state"],
         }), 200
+    except checkout_policy.CheckoutPaused as checkout_error:
+        return jsonify({"error": str(checkout_error), "code": "checkout_paused"}), 503
+    except checkout_policy.CheckoutPolicyError as checkout_error:
+        return jsonify({"error": str(checkout_error), "code": "billing_review_required"}), 409
     except Exception as checkout_error:
         app.logger.exception("[BILLING CHECKOUT] %s", checkout_error)
         return jsonify({"error": "Could not open secure checkout."}), 502
@@ -5554,6 +5453,8 @@ def google_oauth():
                     recovery=True,
                 )
                 checkout_url = checkout["url"]
+            except checkout_policy.CheckoutPolicyError as policy_error:
+                checkout_error = str(policy_error)
             except Exception:
                 checkout_error = "Billing is temporarily unavailable. Please try again or contact support."
             trial = _trial_details(user)
@@ -8608,6 +8509,7 @@ def billing_usage():
     flows_db = read_json(os.path.join(DATA_ROOT, "automations.json"), {"users": {}}) if "read_json" in globals() else {"users": {}}
     flows = (flows_db.get("users") or {}).get(workspace, []) if isinstance(flows_db, dict) else []
     return jsonify({
+        "checkout_paused": checkout_policy.checkout_paused(),
         "plan": record.get("plan") or "Standard", "billing_status": record.get("billing_status") or record.get("status") or "trial",
         "trial_days_remaining": _trial_details(record).get("daysRemaining", 0), "trial_ends_at": _trial_details(record).get("endsAt"),
         "next_payment_at": record.get("current_period_end") or record.get("subscription_period_end"),
