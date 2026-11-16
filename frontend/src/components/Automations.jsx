@@ -32,7 +32,7 @@ const softCard = {
 };
 
 /* -------------------- UI PRIMITIVES -------------------- */
-function Btn({ children, onClick, kind = "solid", disabled, type = "button", style = {} }) {
+function Btn({ children, onClick, kind = "solid", disabled, type = "button", style = {}, ...props }) {
   const base = {
     borderRadius: 12,
     padding: "10px 14px",
@@ -46,6 +46,7 @@ function Btn({ children, onClick, kind = "solid", disabled, type = "button", sty
   if (kind === "ghost") {
     return (
       <button
+        {...props}
         type={type}
         onClick={onClick}
         disabled={disabled}
@@ -64,6 +65,7 @@ function Btn({ children, onClick, kind = "solid", disabled, type = "button", sty
   if (kind === "danger") {
     return (
       <button
+        {...props}
         type={type}
         onClick={onClick}
         disabled={disabled}
@@ -82,6 +84,7 @@ function Btn({ children, onClick, kind = "solid", disabled, type = "button", sty
   if (kind === "outline") {
     return (
       <button
+        {...props}
         type={type}
         onClick={onClick}
         disabled={disabled}
@@ -99,6 +102,7 @@ function Btn({ children, onClick, kind = "solid", disabled, type = "button", sty
 
   return (
     <button
+      {...props}
       type={type}
       onClick={onClick}
       disabled={disabled}
@@ -176,13 +180,14 @@ function Select({ children, ...props }) {
   );
 }
 
-function Toggle({ checked, onChange }) {
+function Toggle({ checked, onChange, label }) {
   return (
     <label style={{ display: "inline-flex", alignItems: "center", gap: 10, cursor: "pointer" }}>
       <span style={{ fontSize: 13, color: C.muted }}>Off</span>
       <div style={{ position: "relative", width: 50, height: 28 }}>
         <input
           type="checkbox"
+          aria-label={label}
           checked={!!checked}
           onChange={onChange}
           style={{ position: "absolute", opacity: 0, inset: 0, cursor: "pointer" }}
@@ -214,11 +219,13 @@ function Toggle({ checked, onChange }) {
   );
 }
 
-function Chip({ children, active, onClick }) {
+function Chip({ children, active, onClick, disabled }) {
   return (
     <button
       type="button"
       onClick={onClick}
+      aria-pressed={active}
+      disabled={disabled}
       style={{
         borderRadius: 999,
         padding: "7px 11px",
@@ -566,6 +573,25 @@ const STEP_ACTION_LABELS = {
   push_owner: "Notify owner",
   add_tag: "Add tag",
 };
+
+const STEP_DESCRIPTIONS = {
+  send_email: "Write a message for the customer.",
+  send_whatsapp: "Send a message or an approved template.",
+  wait: "Leave time before the next action.",
+  ai_draft: "Prepare a draft for a later message step.",
+  if_no_reply: "Add actions that run if there is still no reply.",
+  if_no_booking: "Add actions that run if no appointment is booked.",
+  push_owner: "Send the owner a reminder to follow up.",
+  add_tag: "Keep the customer's record organized.",
+};
+
+function publicationIssues(flow, waTemplates) {
+  const issues = [];
+  if (!flow.name?.trim()) issues.push("Give this automation a name.");
+  if (!flow.trigger?.type) issues.push("Choose a trigger.");
+  if (!flow.steps?.length) issues.push("Add at least one step.");
+  return [...issues, ...collectWhatsAppTemplateIssues(flow, waTemplates)];
+}
 
 function cloneTemplateToFlow(template, userEmail) {
   const f = JSON.parse(JSON.stringify(template || {}));
@@ -1275,7 +1301,7 @@ function TemplateCard({ template, onUse }) {
   );
 }
 
-function FlowCard({ flow, onEdit, onDelete, onToggle }) {
+function FlowCard({ flow, onEdit, onDelete, onToggle, busy }) {
   return (
     <div style={{ ...shellCard, padding: 18 }}>
       <div style={{ display: "flex", justifyContent: "space-between", gap: 16, flexWrap: "wrap" }}>
@@ -1302,7 +1328,9 @@ function FlowCard({ flow, onEdit, onDelete, onToggle }) {
           </div>
         </div>
 
-        <Toggle checked={flow.enabled} onChange={onToggle} />
+        <Btn kind="outline" onClick={onToggle} disabled={busy} aria-label={`${flow.enabled ? "Pause" : "Publish"} ${flow.name}`}>
+          {flow.enabled ? "Pause" : "Publish"}
+        </Btn>
       </div>
 
       <div style={{ marginTop: 14 }}>
@@ -1310,10 +1338,10 @@ function FlowCard({ flow, onEdit, onDelete, onToggle }) {
       </div>
 
       <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginTop: 16 }}>
-        <Btn kind="ghost" onClick={onEdit}>
+        <Btn kind="ghost" onClick={onEdit} disabled={busy}>
           Edit
         </Btn>
-        <Btn kind="danger" onClick={onDelete}>
+        <Btn kind="danger" onClick={onDelete} disabled={busy}>
           Delete
         </Btn>
       </div>
@@ -1341,8 +1369,8 @@ function TriggerChooser({ editing, setEditing }) {
   return (
     <div style={{ ...shellCard, padding: 18 }}>
       <SectionTitle
-        title="1. Choose when this should run"
-        subtitle="Start with the event that should kick off the automation."
+        title="Choose a trigger"
+        subtitle="What should start this automation?"
       />
 
       <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 14 }}>
@@ -1417,8 +1445,8 @@ function GuardrailsCard({ editing, setEditing }) {
   return (
     <div style={{ ...shellCard, padding: 18 }}>
       <SectionTitle
-        title="2. Guardrails"
-        subtitle="Keep automations calm and customer-friendly."
+        title="Sending rules"
+        subtitle="Choose how this automation respects your customers' time."
       />
 
       <div style={{ display: "grid", gap: 14 }}>
@@ -1430,6 +1458,7 @@ function GuardrailsCard({ editing, setEditing }) {
             </div>
           </div>
           <Toggle
+            label="Stop if the customer replies"
             checked={editing.auto_stop_on_reply}
             onChange={(e) => setEditing({ ...editing, auto_stop_on_reply: e.target.checked })}
           />
@@ -1443,6 +1472,7 @@ function GuardrailsCard({ editing, setEditing }) {
             </div>
           </div>
           <Toggle
+            label="Respect quiet hours"
             checked={editing.caps?.respect_quiet_hours !== false}
             onChange={(e) =>
               setEditing({
@@ -1471,72 +1501,126 @@ function GuardrailsCard({ editing, setEditing }) {
   );
 }
 
-function StepsBuilder({ editing, setEditing, waTemplates }) {
-  const addStep = (type) => {
-    const next = [...(editing.steps || []), buildDefaultStep(type)];
-    setEditing({ ...editing, steps: next });
-  };
-
+function BranchSummary({ steps }) {
+  if (!steps?.length) return null;
   return (
-    <div style={{ ...shellCard, padding: 18 }}>
-      <SectionTitle
-        title="3. What should happen next?"
-        subtitle="Add only the steps you need. Keep it simple."
-        right={
-          <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-            {["wait", "ai_draft", "send_email", "send_whatsapp", "if_no_reply", "if_no_booking", "push_owner", "add_tag"].map((k) => (
-              <Btn key={k} kind="ghost" onClick={() => addStep(k)} style={{ padding: "8px 10px", fontSize: 12 }}>
-                + {STEP_ACTION_LABELS[k] || k.replaceAll("_", " ")}
-              </Btn>
-            ))}
-          </div>
-        }
-      />
-
-      {(editing.steps || []).length ? (
-        <div style={{ display: "grid", gap: 12 }}>
-          {(editing.steps || []).map((s, i) => (
-            <StepCard
-              key={i}
-              step={s}
-              waTemplates={waTemplates}
-              onChange={(patch) => {
-                const arr = [...(editing.steps || [])];
-                arr[i] = patch;
-                setEditing({ ...editing, steps: arr });
-              }}
-              onRemove={() => {
-                const arr = [...(editing.steps || [])];
-                arr.splice(i, 1);
-                setEditing({ ...editing, steps: arr });
-              }}
-            />
-          ))}
-        </div>
-      ) : (
-        <div style={{ color: C.muted, fontSize: 13 }}>
-          No steps yet. Add a message, a wait, or a reminder to get started.
-        </div>
-      )}
-    </div>
+    <ol className="workflow-branch" aria-label="Conditional actions">
+      {steps.map((step, index) => (
+        <li key={index}>
+          <span>{humanStepLabel(step)}</span>
+          <BranchSummary steps={step.then} />
+        </li>
+      ))}
+    </ol>
   );
 }
 
-function BuilderSummary({ editing }) {
+function WorkflowBuilder({ editing, setEditing, waTemplates, busy }) {
+  const [selection, setSelection] = useState("trigger");
+  const editorHeading = useRef(null);
+  const steps = editing.steps || [];
+  const selectedStep = typeof selection === "number" ? steps[selection] : null;
+  const trigger = editing.trigger || {};
+  const triggerLabel = PRETTY_TRIGGER[trigger.type]?.(trigger) || "Choose what starts this workflow";
+
+  const select = (next) => {
+    setSelection(next);
+    // On a narrow screen the editor follows the canvas. Bring the selected
+    // controls into view without moving desktop users away from the sequence.
+    if (window.matchMedia?.("(max-width: 1100px)").matches) {
+      window.requestAnimationFrame(() => editorHeading.current?.focus());
+    }
+  };
+  const addStep = (type) => {
+    setEditing({ ...editing, steps: [...steps, buildDefaultStep(type)] });
+    select(steps.length);
+  };
+  const removeStep = () => {
+    setEditing({ ...editing, steps: steps.filter((_, index) => index !== selection) });
+    select(steps.length > 1 ? Math.min(selection, steps.length - 2) : "trigger");
+  };
+  const moveStep = (direction) => {
+    const next = [...steps];
+    const target = selection + direction;
+    [next[selection], next[target]] = [next[target], next[selection]];
+    setEditing({ ...editing, steps: next });
+    select(target);
+  };
+
   return (
-    <div style={{ ...shellCard, padding: 18 }}>
-      <SectionTitle
-        title="Automation Summary"
-        subtitle="Review the trigger and actions before saving."
-      />
+    <div className="automation-builder-grid">
+      <section className="workflow-canvas" aria-label="Workflow sequence">
+        <div className="workflow-canvas-heading">
+          <span>YOUR WORKFLOW</span>
+          <span>{steps.length} {steps.length === 1 ? "step" : "steps"}</span>
+        </div>
+        <ol className="workflow-sequence">
+          <li className="workflow-sequence-item">
+            <button type="button" className={`workflow-node ${selection === "trigger" ? "is-selected" : ""}`}
+              onClick={() => select("trigger")} disabled={busy} aria-current={selection === "trigger" ? "step" : undefined}
+              aria-controls="workflow-editor" aria-label="Edit trigger">
+              <span className="workflow-node-number" aria-hidden="true">↳</span>
+              <span className="workflow-node-copy"><span className="workflow-node-kind">Trigger</span><strong>{triggerLabel}</strong></span>
+              <span className="workflow-node-edit" aria-hidden="true">Edit</span>
+            </button>
+          </li>
+          {steps.map((step, index) => (
+            <li className="workflow-sequence-item" key={index}>
+              <button type="button" className={`workflow-node ${selection === index ? "is-selected" : ""}`}
+                onClick={() => select(index)} disabled={busy} aria-current={selection === index ? "step" : undefined}
+                aria-controls="workflow-editor" aria-label={`Edit step ${index + 1}: ${humanStepLabel(step)}`}>
+                <span className="workflow-node-number" aria-hidden="true">{index + 1}</span>
+                <span className="workflow-node-copy"><span className="workflow-node-kind">Step {index + 1}</span><strong>{humanStepLabel(step)}</strong></span>
+                <span className="workflow-node-edit" aria-hidden="true">Edit</span>
+              </button>
+              <BranchSummary steps={step.then} />
+            </li>
+          ))}
+          <li className="workflow-sequence-item workflow-sequence-end">
+            <button type="button" className={`workflow-add ${selection === "add" ? "is-selected" : ""}`}
+              onClick={() => select("add")} disabled={busy} aria-controls="workflow-editor" aria-pressed={selection === "add"}>
+              <span aria-hidden="true">＋</span> Add step
+            </button>
+          </li>
+        </ol>
+        <button type="button" className={`workflow-rules ${selection === "rules" ? "is-selected" : ""}`}
+          onClick={() => select("rules")} disabled={busy} aria-controls="workflow-editor" aria-pressed={selection === "rules"}>
+          <strong>Sending rules</strong>
+          <span>{editing.auto_stop_on_reply ? "Stops on reply" : "Continues after a reply"} · {editing.caps?.respect_quiet_hours !== false ? "Quiet hours on" : "Quiet hours off"}</span>
+        </button>
+      </section>
 
-      <div style={{ color: C.text, fontSize: 15, lineHeight: 1.6 }}>
-        {flowSummary(editing)}
-      </div>
-
-      <div style={{ marginTop: 16 }}>
-        <FlowDiagram flow={editing} />
-      </div>
+      <section className="workflow-editor" id="workflow-editor" aria-labelledby="workflow-editor-heading">
+        <div className="workflow-editor-heading">
+          <h2 id="workflow-editor-heading" tabIndex={-1} ref={editorHeading}>
+            {selection === "trigger" ? "When it starts" : selection === "rules" ? "Workflow settings" : selection === "add" ? "Add a step" : `Step ${selection + 1}`}
+          </h2>
+          <p>{selection === "add" ? "Choose the next action in your workflow." : "Select any card to edit its details."}</p>
+        </div>
+        <fieldset className="workflow-fields" disabled={busy}>
+          {selection === "trigger" && <TriggerChooser editing={editing} setEditing={setEditing} />}
+          {selection === "rules" && <GuardrailsCard editing={editing} setEditing={setEditing} />}
+          {selection === "add" && (
+            <div className="workflow-actions">
+              {Object.keys(STEP_DESCRIPTIONS).map((type) => (
+                <button type="button" key={type} className="workflow-action" onClick={() => addStep(type)}>
+                  <strong>{STEP_ACTION_LABELS[type]}</strong><span>{STEP_DESCRIPTIONS[type]}</span>
+                </button>
+              ))}
+            </div>
+          )}
+          {selectedStep && (
+            <>
+              <div className="workflow-step-order">
+                <Btn kind="ghost" onClick={() => moveStep(-1)} disabled={selection === 0} aria-label="Move step up">↑ Move up</Btn>
+                <Btn kind="ghost" onClick={() => moveStep(1)} disabled={selection === steps.length - 1} aria-label="Move step down">↓ Move down</Btn>
+              </div>
+              <StepCard key={selection} step={selectedStep} waTemplates={waTemplates} onRemove={removeStep}
+                onChange={(step) => setEditing({ ...editing, steps: steps.map((current, index) => index === selection ? step : current) })} />
+            </>
+          )}
+        </fieldset>
+      </section>
     </div>
   );
 }
@@ -1605,6 +1689,7 @@ function Preview({ userEmail, flow }) {
       <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
         <Input
           placeholder="customer@example.com"
+          aria-label="Test customer email"
           value={leadEmail}
           onChange={(e) => setLeadEmail(e.target.value)}
           style={{ flex: 1, minWidth: 240 }}
@@ -1721,6 +1806,9 @@ export default function Automations({ user }) {
   const [editing, setEditing] = useState(null);
   const [loading, setLoading] = useState(true);
   const [savingFlow, setSavingFlow] = useState(false);
+  const flowMutation = useRef(false);
+  const [changingFlow, setChangingFlow] = useState(false);
+  const [notice, setNotice] = useState("");
   const [error, setError] = useState("");
 
   const [profile, setProfile] = useState({
@@ -1734,6 +1822,18 @@ export default function Automations({ user }) {
   const [profileSaved, setProfileSaved] = useState(false);
   const [health, setHealth] = useState(null);
   const [waTemplates, setWATemplates] = useState([]);
+  const workflowBusy = savingFlow || changingFlow;
+
+  const recordSavedFlow = (saved) => {
+    const next = flows.some((flow) => flow.id === saved.id)
+      ? flows.map((flow) => flow.id === saved.id ? saved : flow)
+      : [...flows, saved];
+    setFlows(next);
+    try {
+      if (next.some((flow) => flow.enabled)) localStorage.setItem("retainai:onboarding-playbook", "1");
+      else localStorage.removeItem("retainai:onboarding-playbook");
+    } catch {}
+  };
 
   async function refreshFlows() {
     const d = await api.listFlows(userEmail);
@@ -1818,43 +1918,69 @@ export default function Automations({ user }) {
   }, [userEmail]);
 
   const applyTemplate = (t) => {
+    setError(""); setNotice("");
     setEditing(cloneTemplateToFlow(t, userEmail));
     setTab("builder");
   };
 
-  const saveFlow = async () => {
-    if (!editing) return;
+  const saveFlow = async (enabled) => {
+    if (!editing || flowMutation.current) return;
+    flowMutation.current = true;
 
     try {
       setSavingFlow(true);
       setError("");
+      setNotice("");
 
-      const payload = normalizeFlow(editing, userEmail);
-      if (payload.enabled) {
-        const issues = collectWhatsAppTemplateIssues(payload, waTemplates);
+      if (enabled) {
+        const issues = publicationIssues(editing, waTemplates);
         if (issues.length) {
-          throw new Error(`This active automation needs attention: ${issues.join(" ")}`);
+          throw new Error(`Before publishing: ${issues.join(" ")}`);
         }
       }
+      const payload = normalizeFlow({ ...editing, enabled }, userEmail);
       const isUpdate = !!payload.id && flows.some((x) => x.id === payload.id);
-
-      if (isUpdate) {
-        const d = await api.updateFlow(userEmail, payload.id, payload);
-        const updated = normalizeFlow(d?.flow || payload, userEmail);
-        setFlows((prev) => prev.map((f) => (f.id === updated.id ? updated : f)));
-      } else {
-        const d = await api.createFlow(userEmail, payload);
-        const created = normalizeFlow(d?.flow || payload, userEmail);
-        setFlows((prev) => [...prev, created]);
-      }
-
-      await refreshFlows();
+      const result = isUpdate
+        ? await api.updateFlow(userEmail, payload.id, payload)
+        : await api.createFlow(userEmail, payload);
+      const saved = normalizeFlow(result?.flow || payload, userEmail);
+      recordSavedFlow(saved);
+      // The write has succeeded. A failed list refresh must not leave a new
+      // workflow looking unsaved and cause another create on retry.
+      setNotice(enabled ? "Automation published." : "Draft saved. It will not run until you publish it.");
+      try { await refreshFlows(); }
+      catch { setNotice("Automation saved. The list could not refresh; reload to check the latest status."); }
       setEditing(null);
       setTab("flows");
     } catch (e) {
       setError(String(e.message || e));
     } finally {
+      flowMutation.current = false;
       setSavingFlow(false);
+    }
+  };
+
+  const changePublishedState = async (flow, enabled) => {
+    if (flowMutation.current) return;
+    flowMutation.current = true;
+    setChangingFlow(true); setError(""); setNotice("");
+    try {
+      if (enabled) {
+        const issues = publicationIssues(flow, waTemplates);
+        if (issues.length) throw new Error(`Before publishing: ${issues.join(" ")}`);
+      }
+      // Only change the saved enabled flag. Pausing must not publish edits
+      // that are still open in the builder.
+      const result = await api.enableFlow(userEmail, flow.id, enabled);
+      recordSavedFlow(normalizeFlow(result?.flow || { ...flow, enabled }, userEmail));
+      setEditing((current) => current?.id === flow.id ? { ...current, enabled } : current);
+      setNotice(enabled ? "Automation published." : "Automation paused. Any open edits are still unsaved.");
+      try { await refreshFlows(); }
+      catch { setNotice("Status saved. The list could not refresh; reload to check the latest status."); }
+    } catch (err) {
+      setError(String(err.message || err));
+    } finally {
+      flowMutation.current = false; setChangingFlow(false);
     }
   };
 
@@ -1915,16 +2041,17 @@ export default function Automations({ user }) {
           </div>
 
           <div className="automation-tabs" style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-            <Chip active={tab === "templates"} onClick={() => setTab("templates")}>
+            <Chip disabled={workflowBusy} active={tab === "templates"} onClick={() => setTab("templates")}>
               Templates
             </Chip>
-            <Chip active={tab === "flows"} onClick={() => setTab("flows")}>
+            <Chip disabled={workflowBusy} active={tab === "flows"} onClick={() => setTab("flows")}>
               My Automations
             </Chip>
-            <Chip active={tab === "history"} onClick={() => setTab("history")}>
+            <Chip disabled={workflowBusy} active={tab === "history"} onClick={() => setTab("history")}>
               Run History
             </Chip>
             <Chip
+              disabled={workflowBusy}
               active={tab === "builder"}
               onClick={() => {
                 if (!editing) setEditing(buildEmptyFlow(userEmail));
@@ -1940,6 +2067,7 @@ export default function Automations({ user }) {
       <div className="automation-content" style={{ padding: 22 }}>
         {error ? (
           <div
+            role="alert"
             style={{
               marginBottom: 16,
               background: C.redBg,
@@ -1954,6 +2082,8 @@ export default function Automations({ user }) {
           </div>
         ) : null}
 
+        {notice && <div className="automation-notice" role="status">{notice}</div>}
+
         {health && !health.ok ? (
           <div className="automation-health automation-health--warning">
             <strong>Automatic sending is paused.</strong> Active automations will not run until the service is enabled. Contact owner@retainai.ca for help.
@@ -1964,6 +2094,8 @@ export default function Automations({ user }) {
           </div>
         ) : null}
 
+        <details className="automation-workspace-settings">
+          <summary>Workspace settings <span>Business details, quiet hours and time zone</span></summary>
         <div
           className="automation-summary-grid"
           style={{
@@ -2051,6 +2183,8 @@ export default function Automations({ user }) {
           </div>
         </div>
 
+        </details>
+
         {loading ? (
           <div style={{ ...shellCard, padding: 22, color: C.muted }}>Loading automations...</div>
         ) : null}
@@ -2083,7 +2217,9 @@ export default function Automations({ user }) {
               subtitle="Manage active and draft automations in one place."
               right={
                 <Btn
+                  disabled={workflowBusy}
                   onClick={() => {
+                    setError(""); setNotice("");
                     setEditing(buildEmptyFlow(userEmail));
                     setTab("builder");
                   }}
@@ -2100,6 +2236,7 @@ export default function Automations({ user }) {
                     key={f.id}
                     flow={f}
                     onEdit={() => {
+                      setError(""); setNotice("");
                       setEditing(normalizeFlow(f, userEmail));
                       setTab("builder");
                     }}
@@ -2115,27 +2252,8 @@ export default function Automations({ user }) {
                         setError(String(err.message || err));
                       }
                     }}
-                    onToggle={async () => {
-                      const enabled = !f.enabled;
-                      if (enabled) {
-                        const issues = collectWhatsAppTemplateIssues(f, waTemplates);
-                        if (issues.length) {
-                          setError(`Automation cannot be activated yet: ${issues.join(" ")}`);
-                          return;
-                        }
-                      }
-
-                      const prev = [...flows];
-                      setError("");
-                      setFlows((curr) => curr.map((x) => (x.id === f.id ? { ...x, enabled } : x)));
-                      try {
-                        await api.updateFlow(userEmail, f.id, { ...f, enabled });
-                        await refreshFlows();
-                      } catch (err) {
-                        setFlows(prev);
-                        setError(String(err.message || err));
-                      }
-                    }}
+                    busy={workflowBusy}
+                    onToggle={() => changePublishedState(f, !f.enabled)}
                   />
                 ))}
               </div>
@@ -2149,75 +2267,36 @@ export default function Automations({ user }) {
 
         {!loading && tab === "history" && <RunHistory userEmail={userEmail} />}
 
-        {!loading && tab === "builder" && (
-          <div
-            className="automation-builder-grid"
-            style={{
-              display: "grid",
-              gridTemplateColumns: "minmax(420px, 560px) minmax(0, 1fr)",
-              gap: 18,
-              alignItems: "start",
-            }}
-          >
-            <div style={{ display: "grid", gap: 16, alignSelf: "start" }}>
-              <div style={{ ...shellCard, padding: 18 }}>
-                <SectionTitle
-                  title="Automation Setup"
-                  subtitle="Name your automation and turn it into something your team can understand at a glance."
-                  right={
-                    <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-                      <Btn kind="ghost" onClick={() => setEditing(buildEmptyFlow(userEmail))}>
-                        New
-                      </Btn>
-                      <Btn
-                        kind="outline"
-                        onClick={() => {
-                          setEditing(null);
-                          setTab("flows");
-                        }}
-                      >
-                        Cancel
-                      </Btn>
-                      <Btn onClick={saveFlow} disabled={!editing || savingFlow}>
-                        {savingFlow ? "Saving..." : "Save Automation"}
-                      </Btn>
-                    </div>
-                  }
-                />
-
-                {!editing ? (
-                  <div style={{ color: C.muted, fontSize: 14 }}>
-                    Open an automation or create a new one to begin.
-                  </div>
-                ) : (
-                  <div style={{ display: "grid", gap: 14 }}>
-                    <Field label="Automation name">
-                      <Input
-                        value={editing.name || ""}
-                        onChange={(e) => setEditing({ ...editing, name: e.target.value })}
-                        placeholder="Reconnect with inactive customers"
-                      />
-                    </Field>
-
-                    <TriggerChooser editing={editing} setEditing={setEditing} />
-                    <GuardrailsCard editing={editing} setEditing={setEditing} />
-                    <StepsBuilder editing={editing} setEditing={setEditing} waTemplates={waTemplates} />
-                  </div>
-                )}
+        {!loading && tab === "builder" && editing && (
+          <div className="workflow-builder">
+            <div className="workflow-toolbar">
+              <div className="workflow-title">
+                <span className={`workflow-status ${editing.enabled ? "is-active" : ""}`}>{editing.enabled ? "Active" : "Draft"}</span>
+                <Field label="Automation name">
+                  <Input value={editing.name || ""} onChange={(event) => setEditing({ ...editing, name: event.target.value })}
+                    placeholder="Reconnect with inactive customers" disabled={workflowBusy} />
+                </Field>
               </div>
+              <div className="workflow-toolbar-actions">
+                <Btn kind="ghost" disabled={workflowBusy} onClick={() => { setEditing(null); setTab("flows"); }}>Cancel</Btn>
+                {editing.enabled ? (
+                  <Btn kind="outline" disabled={workflowBusy} onClick={() => changePublishedState(editing, false)}>Pause</Btn>
+                ) : (
+                  <Btn kind="outline" disabled={workflowBusy} onClick={() => saveFlow(false)}>Save draft</Btn>
+                )}
+                <Btn disabled={workflowBusy} onClick={() => saveFlow(true)}>
+                  {savingFlow ? "Saving…" : editing.enabled ? "Save and publish" : "Publish"}
+                </Btn>
+              </div>
+              <p className="workflow-publish-note">{editing.enabled
+                ? "Your saved workflow is running. Save and publish to apply edits, or pause it without saving your changes."
+                : "A draft does not run. Publishing starts this workflow for matching customers, with your sending rules."}</p>
             </div>
-
-            <div
-              style={{
-                display: "grid",
-                gap: 16,
-                alignSelf: "start",
-                minWidth: 0,
-              }}
-            >
-              <BuilderSummary editing={editing || buildEmptyFlow(userEmail)} />
-              {editing ? <Preview userEmail={userEmail} flow={editing} /> : null}
-            </div>
+            <WorkflowBuilder key={editing.id || "new"} editing={editing} setEditing={setEditing} waTemplates={waTemplates} busy={workflowBusy} />
+            <details className="workflow-test">
+              <summary>Test this workflow <span>Preview the steps before sending a live test</span></summary>
+              <Preview userEmail={userEmail} flow={editing} />
+            </details>
           </div>
         )}
       </div>
