@@ -6,6 +6,7 @@ links) and what is still open. Add a file at the end of each session.
 
 | Date | Session | Summary |
 | --- | --- | --- |
+| 2026-11-15 evening | [Live website tax and Apple build 7](2026-11-15-live-tax-and-apple-build-7.md) | Tax enabled and purchases reopened on both websites; unpaid previews expired; existing subscriptions unchanged; TestFlight build 7 VALID and draft-selected, not submitted |
 | 2026-11-15 | [Tax checkout preparation](2026-11-15-tax-checkout-preparation.md) | Default-off tax and purchase pause; immutable Checkout retries; read-only preflight; existing subscriptions unchanged |
 | 2026-11-15 | [Release closeout and provider gates](2026-11-15-release-closeout.md) | PR77 backend live; unchanged frontend tree verified; 300 backend/303 frontend tests; Calendly Production configuration deployed but fresh consent/sync/refresh pending; tax and Apple gates recorded |
 | 2026-11-13 | [Follow-up release and partner outreach](2026-11-13-followup-release.md) | Reviewed follow-up fixes and exact partner terms live; Node24 frontend runtime; five confirmed proposal submissions; remaining provider gates |
