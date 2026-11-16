@@ -31,16 +31,18 @@ Local sanitized receipts include `stripe-tax-final-runtime-20261116.json`, `stri
 
 ## Closet Muse Apple release: prepared, not submitted
 
-Native build **7**, from exact source `5d08d6d`, uploaded successfully, is **VALID**, is assigned to the private testing group and is selected in the unsubmitted App Review draft. The **703-test** application gate and both Mac test jobs passed. This does not establish physical-device build 7 acceptance or an Apple purchase/restore flow. Public App Review has **not** been submitted and public App Store availability is not claimed.
+Native build **7**, from exact source `5d08d6d`, uploaded successfully, is **VALID**, is assigned to the private testing group and is selected in the unsubmitted App Review draft. The **703-test** Linux application gate, **430 HTTP checks** and both Mac test jobs passed. The Mac result is **270 XCTest tests: 194 unit and 76 UI, zero failures**. This does not establish physical-device build 7 acceptance or an Apple purchase/restore flow. Public App Review has **not** been submitted and public App Store availability is not claimed.
 
 The temporary Actions cap was restored to **US$0**. Recorded spend is **US$4.66**, an increase of **US$1.88** for this attempt. No further paid Actions run is authorized by this session record.
 
-Apple Business items now show Active. The GST506 election-date discrepancy still has an unresolved Apple Finance request, **case 23542198**; Active status does not answer that date question. Refreshing the **13 App Store screenshots** is a separate in-progress task at this checkpoint; do not treat its upload or verification as complete until the corresponding receipt is recorded.
+All **13 App Store screenshots** are refreshed and processed: seven iPhone and six iPad, comprising nine new images and four identical images safely reused. The same app version was restored to the same review draft; original subscription and group review items were preserved. The draft has exactly **three READY_FOR_REVIEW items**, `submittedDate: null`, and build 7 selected. Local evidence is in `apple-build7-screenshot-refresh-receipt.json` and `apple-build7-draft-screenshot-transaction.json`.
+
+Apple Business items now show Active. The GST506 election-date discrepancy still has an unresolved Apple Finance request, **case 23542198**; Active status does not answer that date question.
 
 ## Still open
 
 - Existing untaxed Stripe subscriptions were not changed: RetainAI's read-only inventory had two active and one trialing subscription. Existing renewal tax, customer locations and any migration need a separate reviewed decision. No retroactive tax adjustment was made.
-- Finish the screenshot refresh and physical build 7/purchase/restore checks, resolve or obtain Apple's guidance on the GST506 date, then complete the App Review submission and await Apple's decision.
+- Complete physical build 7 photo, Planner and Account checks plus Apple purchase/restore from a non-complimentary account, resolve or obtain Apple's guidance on the GST506 date, then complete the App Review submission and await Apple's decision.
 - RetainAI Calendly Production configuration is live, but fresh Production consent, callback, sync and later refresh remain unverified. Stripe Connect is still deferred. Prior Google approval is not a substitute for these separate integrations.
 - Backup-key custody/recurring restore operations and genuine marketing proof/partner replies remain separate from release tests. No new outreach, invented testimonial or new audit score is claimed here.
 
