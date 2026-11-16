@@ -186,6 +186,10 @@ def calculate(invoice, charge, base, first_paid, now, base_prices=()):
         return {**result, "status": "review", "reason": "Payment or credit allocation needs review"}
     if charge.get("disputed") or (charge.get("fraud_details") or {}).get("stripe_report") == "fraudulent" or (charge.get("fraud_details") or {}).get("user_report") == "fraudulent":
         return {**result, "status": "review", "reason": "Dispute or fraud hold"}
+    # A negative invoice item may credit the membership or an excluded add-on.
+    # The invoice total alone cannot establish which revenue remains eligible.
+    if any(line.get("amount", 0) < 0 for line in (invoice.get("lines") or {}).get("data", [])):
+        return {**result, "status": "review", "reason": "Invoice credit allocation needs review"}
     # Stripe reports charge-wide refunds, not which subscription line was
     # refunded. Base-only invoices may include tax without including add-ons.
     lines = invoice.get("lines") or {}

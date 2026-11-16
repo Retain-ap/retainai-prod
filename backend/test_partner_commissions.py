@@ -54,6 +54,49 @@ class PartnerAccountingTests(unittest.TestCase):
         i["post_payment_credit_notes_amount"] = 50
         self.assertEqual(ledger.calculate(i, charge(), 2000, first, first+3000000)["status"], "review")
 
+    def test_unallocated_negative_lines_hold_even_without_a_refund(self):
+        for tax in (0, 325):
+            for credit in ({"amount": -500}, {"amount": -500, "pricing": {"price_details": {"price": "price_addon"}}}):
+                with self.subTest(tax=tax, credit=credit):
+                    i = invoice(total=2500 + tax)
+                    i["total_excluding_tax"] = 2500
+                    i["lines"]["data"].extend([{"amount": 1000, "pricing": {"price_details": {"price": "price_addon"}}}, credit])
+                    base = ledger.base_amount(i, ["price_base"])
+                    row = ledger.calculate(i, charge(2500 + tax), base, i["status_transitions"]["paid_at"], 1800000000, ["price_base"])
+                    self.assertEqual((row["status"], row["commissionMinor"]), ("review", 0))
+                    self.assertIn("credit allocation", row["reason"])
+
+    def test_tax_and_discount_calculations_remain_payable_without_negative_lines(self):
+        inclusive = invoice()
+        inclusive["lines"]["data"][0].update({"amount": 2260, "taxes": [{"amount": 260, "tax_behavior": "inclusive"}]})
+        discounted = invoice(total=1695, base=1500)
+        discounted["lines"]["data"][0].update({"amount": 2000, "discount_amounts": [{"amount": 500}]})
+        for i, expected in ((invoice(), 600), (inclusive, 600), (discounted, 450)):
+            with self.subTest(total=i["total"]):
+                base = ledger.base_amount(i, ["price_base"])
+                row = ledger.calculate(i, charge(i["total"]), base, i["status_transitions"]["paid_at"], 1800000000, ["price_base"])
+                self.assertEqual((row["status"], row["commissionMinor"]), ("available", expected))
+
+    def test_sync_holds_negative_invoice_credit_and_blocks_recording(self):
+        ledger.bind_customer("member@example.com", "cus_example", "salon-coach", "2026-01-01", False)
+        i = invoice(total=2500)
+        i["total_excluding_tax"] = 2500
+        i["lines"]["data"].extend([{"amount": 1000, "pricing": {"price_details": {"price": "price_addon"}}}, {"amount": -500}])
+        def provider(path):
+            if path.startswith("invoices?"): return {"data": [i], "has_more": False}
+            if path.startswith("invoice_payments?"): return {"data": [{"invoice": i["id"], "livemode": False, "amount_paid": 2500, "payment": {"payment_intent": "pi_example"}}], "has_more": False}
+            if path.startswith("payment_intents/"): return {"latest_charge": charge(2500)}
+            raise AssertionError(path)
+        with patch.object(ledger, "stripe_get", provider), patch.object(ledger, "_require_owner", return_value=("owner@retainai.ca", None)), patch.object(ledger, "bind_known_customers"):
+            ledger.sync_customer("cus_example")
+            state = ledger.read_state()
+            self.assertEqual((state["invoices"][0]["status"], state["invoices"][0]["commissionMinor"]), ("review", 0))
+            self.assertEqual(ledger.available(state, "salon-coach", "cad", False, int(time.time())), 0)
+            response = self.client.post("/api/owner/partners", json={"op": "record", "code": "salon-coach", "currency": "cad", "amountMinor": 600, "reference": "must-not-record-credit"})
+            self.assertEqual(response.status_code, 400)
+            self.assertIn("review holds", response.get_json()["error"])
+            self.assertEqual(ledger.read_state()["payouts"], [])
+
     def test_partial_mixed_refunds_hold_without_guessing_base_or_addon_allocation(self):
         i = invoice(total=3000)
         i["total_excluding_tax"] = 3000
