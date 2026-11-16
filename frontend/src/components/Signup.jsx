@@ -177,7 +177,7 @@ export default function Signup() {
                 <p className="signup-identity">Your account: <strong>{email}</strong></p>
                 <div className="signup-trial">
                   <h2 id="signup-review" tabIndex={-1}>Full workspace for 14 days</h2>
-                  <p><strong>C$20 per month after your trial.</strong> Confirm your total at checkout.</p>
+                  <p><strong>C$20 per month after your trial, plus applicable taxes.</strong> Confirm your total at checkout.</p>
                   <p>A payment method is required and kept on file by Stripe. Your trial starts after checkout. Cancel in Settings → Billing before it ends to avoid the subscription charge.</p>
                   <p>The trial is available once per customer. If you have already used it, checkout shows the subscription charge before you confirm.</p>
                   <p>After checkout, sign in and complete your business profile in Settings. You can import contacts and explore your workspace right away.</p>
@@ -195,7 +195,7 @@ export default function Signup() {
               </div>
             </fieldset>
           </form>
-          {step !== "review" && <p className="signup-billing-note">C$20/month after 14 days. Payment method required at Stripe checkout. Cancel anytime in Settings → Billing.</p>}
+          {step !== "review" && <p className="signup-billing-note">C$20/month plus applicable taxes after 14 days. Payment method required at Stripe checkout. Cancel anytime in Settings → Billing.</p>}
           <p className="signup-login">Already have an account? <Link to="/login">Log in</Link></p>
         </section>
       </main>

@@ -28,6 +28,7 @@ class WorkspaceLifecycleTests(unittest.TestCase):
     def setUp(self):
         self.a, self.b = f"a-{uuid.uuid4().hex[:6]}@example.com", f"b-{uuid.uuid4().hex[:6]}@example.com"
         self.files = {
+            "billing_checkout_attempts.json": {self.a: {"policy": {"automatic_tax": True}, "generation": 0, "created_at": "2026-11-16", "session_id": "cs_a", "idempotency_key": "private-key", "params": {"customer_email": self.a}}, self.b: {"session_id": "cs_b"}},
             "revenue_evidence.json": {self.a: {"records": {"manual:k": {"id": "manual:k", "amount_minor": 100}}}, self.b: {"records": {"manual:j": {"id": "manual:j"}}}},
             "followup_log.json": {self.a: [{"id": "f1", "lead_id": "x"}], self.b: [{"id": "f2"}]},
             "square_connections.json": {self.a: {"merchant_id": "M-A", "access_token_enc": "gAAAA-secret", "refresh_token_enc": "gAAAA-r", "connected_at": "2026-11-01"},
@@ -56,6 +57,9 @@ class WorkspaceLifecycleTests(unittest.TestCase):
         self.assertEqual(records["follow_ups"], [{"id": "f1", "lead_id": "x"}])
         self.assertEqual(records["square"], {"merchant_id": "M-A", "connected_at": "2026-11-01"})
         self.assertEqual(records["calendly"], {"user_uri": "https://api.calendly.com/users/A", "connected_at": "2026-11-05"})
+        self.assertEqual(records["billing_checkout"]["session_id"], "cs_a")
+        self.assertNotIn("private-key", json.dumps(records))
+        self.assertNotIn("customer_email", json.dumps(records))
         self.assertNotIn("gAAAA", json.dumps(records))
         self.assertNotIn("manual:j", json.dumps(records))
 

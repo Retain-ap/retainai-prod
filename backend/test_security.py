@@ -185,17 +185,55 @@ class BillingCleanupTests(unittest.TestCase):
 
 
 class BillingCheckoutSafetyTests(unittest.TestCase):
+    def setUp(self):
+        temp = tempfile.TemporaryDirectory()
+        self.addCleanup(temp.cleanup)
+        ledger = patch.object(retainai.checkout_policy, "ATTEMPTS_FILE", os.path.join(temp.name, "attempts.json"))
+        ledger.start()
+        self.addCleanup(ledger.stop)
+
     class StripeObject(dict):
         __getattr__ = dict.__getitem__
+
+    def test_pause_status_and_checkout_do_not_disable_member_portal(self):
+        email = "member@example.com"
+        users = {email: {"email": email, "role": "owner", "org_id": email, "status": "active", "security_version": 0, "stripe_customer_id": "cus_member"}}
+        client = retainai.app.test_client()
+        with client.session_transaction() as signed:
+            signed.update(user_email=email, org_email=email, security_version=0)
+        with patch.dict(os.environ, {retainai.checkout_policy.PAUSE_FLAG: "true"}), patch.object(retainai, "load_users", return_value=users), patch.object(retainai, "STRIPE_SECRET_KEY", "sk_test_value"), patch.object(retainai, "STRIPE_PRICE_ID", "price_monthly"), patch.object(retainai.stripe.Price, "retrieve") as price, patch.object(retainai.stripe.billing_portal.Session, "create", return_value=SimpleNamespace(url="https://billing.stripe.com/test")) as portal, patch.object(retainai, "load_leads", return_value={}), patch.object(retainai, "load_chats", return_value={}):
+            response = client.post("/api/billing/checkout", json={})
+            self.assertEqual(response.status_code, 503)
+            self.assertEqual(response.get_json()["code"], "checkout_paused")
+            price.assert_not_called()
+            usage = client.get("/api/billing/usage")
+            self.assertEqual(usage.status_code, 200)
+            self.assertTrue(usage.get_json()["checkout_paused"])
+            self.assertEqual(client.post("/api/billing/portal", json={}).status_code, 200)
+            self.assertEqual(client.get("/api/session").status_code, 200)
+            portal.assert_called_once()
+        self.assertEqual(users[email]["status"], "active")
+
+    def test_policy_error_is_actionable_without_checkout_url(self):
+        email = "member@example.com"
+        users = {email: {"email": email, "role": "owner", "org_id": email, "status": "active", "security_version": 0}}
+        client = retainai.app.test_client()
+        with client.session_transaction() as signed:
+            signed.update(user_email=email, org_email=email, security_version=0)
+        with patch.object(retainai, "load_users", return_value=users), patch.object(retainai, "STRIPE_SECRET_KEY", "sk_test_value"), patch.object(retainai, "STRIPE_PRICE_ID", "price_monthly"), patch.object(retainai, "_create_or_reuse_billing_checkout", side_effect=retainai.checkout_policy.CheckoutPolicyError("Saved shipping needs review. Please contact support.")):
+            response = client.post("/api/billing/checkout", json={})
+        self.assertEqual(response.status_code, 409)
+        self.assertEqual(response.get_json()["code"], "billing_review_required")
+        self.assertNotIn("url", response.get_json())
 
     def test_repeated_checkout_reuses_open_session(self):
         email = "billing@example.com"
         user = {"email": email, "status": "pending_payment", "partner_code": "approved-partner"}
         users = {email: user}
-        created = self.StripeObject(id="cs_once", url="https://checkout.example/once")
+        created = self.StripeObject(id="cs_once", url="https://checkout.stripe.com/c/pay/cs_once", mode="subscription", livemode=False, metadata={"user_email": email}, customer_email=email, customer=None, automatic_tax={"enabled": False})
         opened = self.StripeObject(
             id="cs_once",
-            url="https://checkout.example/once",
+            url="https://checkout.stripe.com/c/pay/cs_once", mode="subscription", livemode=False, metadata={"user_email": email}, customer_email=email, customer=None, automatic_tax={"enabled": False},
             status="open",
             subscription=None,
         )
@@ -204,7 +242,7 @@ class BillingCheckoutSafetyTests(unittest.TestCase):
         ), patch.object(
             retainai.stripe.Price,
             "retrieve",
-            return_value={"active": True, "recurring": {"interval": "month"}},
+            return_value={"id": "price_monthly", "livemode": False, "active": True, "recurring": {"interval": "month"}},
         ), patch.object(
             retainai.stripe.Customer,
             "list",
@@ -260,7 +298,7 @@ class BillingCheckoutSafetyTests(unittest.TestCase):
         ), patch.object(
             retainai.stripe.Price,
             "retrieve",
-            return_value={"active": True, "recurring": {"interval": "month"}},
+            return_value={"id": "price_monthly", "livemode": False, "active": True, "recurring": {"interval": "month"}},
         ), patch.object(
             retainai.stripe.Customer,
             "list",
