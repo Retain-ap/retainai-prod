@@ -6,7 +6,7 @@ links) and what is still open. Add a file at the end of each session.
 
 | Date | Session | Summary |
 | --- | --- | --- |
-| 2026-11-15 | [Release closeout and provider gates](2026-11-15-release-closeout.md) | PR77 backend live; unchanged frontend tree verified; 300 backend/303 frontend tests; Calendly Production configured but fresh authorization unproven; tax and Apple gates recorded |
+| 2026-11-15 | [Release closeout and provider gates](2026-11-15-release-closeout.md) | PR77 backend live; unchanged frontend tree verified; 300 backend/303 frontend tests; Calendly Production app prepared but environment and fresh authorization unverified; tax and Apple gates recorded |
 | 2026-11-13 | [Follow-up release and partner outreach](2026-11-13-followup-release.md) | Reviewed follow-up fixes and exact partner terms live; Node24 frontend runtime; five confirmed proposal submissions; remaining provider gates |
 | 2026-11-11 evening | [Import undo and birthday validation](2026-11-11-import-undo-release.md) | PR64 live on both services; safe undo survives the normal Contacts reload; invalid birthdays are reported without replacing saved dates |
 | 2026-11-11 evening | [Release closeout](2026-11-11-evening-release-closeout.md) | Billing fixes and rebooking guide live; raw HTML route checks; exact Google approval and remaining provider gates |
