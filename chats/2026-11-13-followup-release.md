@@ -1,5 +1,7 @@
 # Follow-up workflow, supported runtime and partner outreach — November 13
 
+**Historical checkpoint:** the [November 15 release closeout](2026-11-15-release-closeout.md) supersedes the backend runtime, Calendly Production preparation and cross-app tax state below. This entry preserves the evidence available on November 13.
+
 ## Shipped product changes
 
 [PR66](https://github.com/Retain-ap/retainai-prod/pull/66) merged at `a33646fd5d50a95ee1b9f0a8a5e9dbcf0f4bcde8`. Backend deploy `dep-dbrb5r942hec73bdkgh0` became Live at 06:50:19 UTC; frontend deploy `dep-dbrb5r942hec73bdkhcg` at 06:50:15 UTC. Health/readiness and all 27 public route/metadata checks passed.

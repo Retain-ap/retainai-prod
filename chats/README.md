@@ -6,6 +6,7 @@ links) and what is still open. Add a file at the end of each session.
 
 | Date | Session | Summary |
 | --- | --- | --- |
+| 2026-11-15 | [Release closeout and provider gates](2026-11-15-release-closeout.md) | PR77 backend live; unchanged frontend tree verified; 300 backend/303 frontend tests; Calendly Production configured but fresh authorization unproven; tax and Apple gates recorded |
 | 2026-11-13 | [Follow-up release and partner outreach](2026-11-13-followup-release.md) | Reviewed follow-up fixes and exact partner terms live; Node24 frontend runtime; five confirmed proposal submissions; remaining provider gates |
 | 2026-11-11 evening | [Import undo and birthday validation](2026-11-11-import-undo-release.md) | PR64 live on both services; safe undo survives the normal Contacts reload; invalid birthdays are reported without replacing saved dates |
 | 2026-11-11 evening | [Release closeout](2026-11-11-evening-release-closeout.md) | Billing fixes and rebooking guide live; raw HTML route checks; exact Google approval and remaining provider gates |
@@ -20,7 +21,7 @@ links) and what is still open. Add a file at the end of each session.
 | 2026-11-02 | [Urgent follow-up](2026-11-02-urgent-followup.md) | Historical token confirmed expired and different from production; secret scanner and mandatory release checks enabled; advertised price matched to live checkout |
 | 2026-11-02 | [Joint release audit](2026-11-02-joint-release-audit.md) | Joint fixes shipped: dependencies, navigation, owner MFA guidance, appointment validation, response headers and Closet Muse launch gates; remaining owner/provider work recorded |
 | 2026-11-02 | [Security pass on both apps](2026-11-02-security-pass.md) | Backend package upgrades (PR #16), readiness paths hidden, route/auth/CSRF sweeps clean, owner security actions |
-| 2026-11-02 | [Google review submissions](2026-11-02-google-review-submissions.md) | Both approved videos published Unlisted; Closet Muse submitted; RetainAI review video replaced and reviewer emailed; both under review |
+| 2026-11-02 | [Google review submissions](2026-11-02-google-review-submissions.md) | Historical submission checkpoint: both videos published and reviews pending then; later approvals are recorded in the November closeouts |
 | 2026-10-27 to 11-02 | [Local cleanup, rate limits and Skimlinks](2026-11-02-local-cleanup.md) | Shared rate limits, SendGrid footer tool, Closet Muse lint and Skimlinks links, Cloudflare move declined |
 | 2026-11-02 | [Google review preparation](2026-11-02-google-review-preparation.md) | Contacts and Calendar OAuth passed; Owner Console routing fixed; reviewer account deferred; later video approvals recorded in submissions log |
 | 2026-11-02 | [Launch checks](2026-11-02-launch-checks.md) | Stripe portal pinned, Stripe Connect callback fixed, real signups tested, ready to market |
