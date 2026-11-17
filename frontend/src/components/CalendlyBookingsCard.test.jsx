@@ -49,6 +49,8 @@ test("syncs on request and explains unmatched, cancelled and capped reads", asyn
   global.fetch = syncing({ events: 6, invitees: 6, imported: 5, updated: 0, unchanged: 0, unmatched: 1, skipped: 0, cancelled: 2, rescheduled: 1, truncated: true, pass_complete: true, stopped: null });
   render(<CalendlyBookingsCard />);
   expect(await screen.findByText(/Connected to Calendly user …SER1/)).toBeInTheDocument();
+  expect(screen.queryByRole("button", { name: "Reconnect Calendly" })).not.toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "Disconnect" })).toBeInTheDocument();
   fireEvent.click(screen.getByRole("button", { name: "Sync now" }));
   expect(await screen.findByText(
     "Read 6 Calendly events: 5 new, 0 updated, 0 unchanged. 1 invitee skipped because the email matches no single RetainAI contact; 2 cancelled, 1 of them rescheduled. Calendly history beyond RetainAI's limit for one pass wasn't read."
@@ -71,7 +73,95 @@ test("a lost authorization asks to reconnect instead of offering sync", async ()
   render(<CalendlyBookingsCard />);
   expect(await screen.findByText(/no longer accepts RetainAI's access/)).toBeInTheDocument();
   expect(screen.queryByRole("button", { name: "Sync now" })).not.toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "Reconnect Calendly" })).toBeEnabled();
+  expect(screen.getByText(/Reconnect the same Calendly account.*Bookings already imported stay in RetainAI/)).toBeInTheDocument();
   expect(screen.getByRole("button", { name: "Disconnect" })).toBeInTheDocument();
+});
+
+const expiredStatus = { configured: true, connected: false, needs_reconnect: true, account: "…SER1" };
+
+async function withNavigation(testRun) {
+  const original = window.location;
+  const assign = jest.fn();
+  delete window.location;
+  window.location = { ...original, assign, search: "" };
+  try { await testRun(assign); } finally { window.location = original; }
+}
+
+function postsTo(path) {
+  return global.fetch.mock.calls.filter(([url, options = {}]) => String(url).endsWith(`/calendly/${path}`) && options.method === "POST");
+}
+
+test("reconnect starts the existing owner OAuth flow without disconnecting or syncing", async () => {
+  await withNavigation(async (assign) => {
+    global.fetch = jest.fn(async (url, options = {}) => {
+      if (String(url).endsWith("/calendly/connect") && options.method === "POST") return respond(200, { url: "https://auth.calendly.com/oauth/authorize?state=reconnect" });
+      return respond(200, expiredStatus);
+    });
+    render(<CalendlyBookingsCard />);
+    fireEvent.click(await screen.findByRole("button", { name: "Reconnect Calendly" }));
+    await waitFor(() => expect(assign).toHaveBeenCalledWith("https://auth.calendly.com/oauth/authorize?state=reconnect"));
+    expect(postsTo("connect")).toHaveLength(1);
+    expect(postsTo("connect")[0][1].credentials).toBe("include");
+    expect(postsTo("disconnect")).toHaveLength(0);
+    expect(postsTo("sync")).toHaveLength(0);
+  });
+});
+
+test("a failed reconnect reports the error and allows a retry without disconnecting", async () => {
+  await withNavigation(async (assign) => {
+    let attempts = 0;
+    global.fetch = jest.fn(async (url, options = {}) => {
+      if (String(url).endsWith("/calendly/connect") && options.method === "POST") {
+        attempts += 1;
+        return attempts === 1 ? respond(503, { error: "Calendly connection is temporarily unavailable." }) : respond(200, { url: "https://auth.calendly.com/oauth/authorize?state=retry" });
+      }
+      return respond(200, expiredStatus);
+    });
+    render(<CalendlyBookingsCard />);
+    fireEvent.click(await screen.findByRole("button", { name: "Reconnect Calendly" }));
+    expect(await screen.findByRole("status")).toHaveTextContent("Calendly connection is temporarily unavailable.");
+    expect(assign).not.toHaveBeenCalled();
+    expect(screen.getByRole("button", { name: "Reconnect Calendly" })).toBeEnabled();
+    fireEvent.click(screen.getByRole("button", { name: "Reconnect Calendly" }));
+    await waitFor(() => expect(assign).toHaveBeenCalledWith("https://auth.calendly.com/oauth/authorize?state=retry"));
+    expect(postsTo("connect")).toHaveLength(2);
+    expect(postsTo("disconnect")).toHaveLength(0);
+  });
+});
+
+test("pending reconnect disables repeat clicks and the separate disconnect action", async () => {
+  await withNavigation(async (assign) => {
+    let finishConnect;
+    global.fetch = jest.fn(async (url, options = {}) => {
+      if (String(url).endsWith("/calendly/connect") && options.method === "POST") return new Promise((resolve) => { finishConnect = resolve; });
+      return respond(200, expiredStatus);
+    });
+    render(<CalendlyBookingsCard />);
+    const reconnect = await screen.findByRole("button", { name: "Reconnect Calendly" });
+    fireEvent.click(reconnect);
+    expect(screen.getByRole("button", { name: "Opening Calendly…" })).toBeDisabled();
+    const disconnect = screen.getByRole("button", { name: "Disconnect" });
+    expect(disconnect).toBeDisabled();
+    fireEvent.click(reconnect);
+    fireEvent.click(disconnect);
+    expect(postsTo("connect")).toHaveLength(1);
+    expect(postsTo("disconnect")).toHaveLength(0);
+    finishConnect(respond(200, { url: "https://auth.calendly.com/oauth/authorize?state=pending" }));
+    await waitFor(() => expect(assign).toHaveBeenCalledTimes(1));
+  });
+});
+
+test("disconnect keeps its explicit warning and cancel leaves the connection alone", async () => {
+  const confirm = jest.spyOn(window, "confirm").mockReturnValue(false);
+  try {
+    global.fetch = jest.fn(async () => respond(200, expiredStatus));
+    render(<CalendlyBookingsCard />);
+    fireEvent.click(await screen.findByRole("button", { name: "Disconnect" }));
+    expect(confirm).toHaveBeenCalledWith("Disconnect Calendly? Bookings already imported stay in RetainAI.");
+    expect(postsTo("disconnect")).toHaveLength(0);
+    expect(screen.getByRole("button", { name: "Reconnect Calendly" })).toBeEnabled();
+  } finally { confirm.mockRestore(); }
 });
 
 test("shows the callback result from the URL", async () => {
