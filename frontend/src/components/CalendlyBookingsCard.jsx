@@ -143,11 +143,12 @@ export default function CalendlyBookingsCard() {
       {status && (status.connected || status.needs_reconnect) && (
         <div className="google-import-actions">
           <p className="product-card-copy" style={{ width: "100%" }}>
-            {status.needs_reconnect ? "Calendly no longer accepts RetainAI's access. Disconnect, then connect again to keep importing." : `Connected to Calendly user ${status.account}.`}
+            {status.needs_reconnect ? "Calendly no longer accepts RetainAI's access. Reconnect the same Calendly account to keep importing. Bookings already imported stay in RetainAI." : `Connected to Calendly user ${status.account}.`}
             {" "}Last sync: {when(status.last_sync?.at)}.
             {status.sync_in_progress && status.connected ? " A sync is partway through; press Sync now to continue it." : ""}
           </p>
           {status.connected && <button type="button" className="product-button primary" onClick={sync} disabled={Boolean(busy)}>{busy === "sync" ? "Syncing…" : "Sync now"}</button>}
+          {status.configured && status.needs_reconnect && <button type="button" className="product-button primary" onClick={connect} disabled={Boolean(busy)}>{busy === "connect" ? "Opening Calendly…" : "Reconnect Calendly"}</button>}
           <button type="button" className="product-button danger" onClick={disconnect} disabled={Boolean(busy)}>{busy === "disconnect" ? "Disconnecting…" : "Disconnect"}</button>
         </div>
       )}
