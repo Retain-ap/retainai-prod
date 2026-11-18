@@ -244,7 +244,7 @@ class LeadReminderSchedulerTests(unittest.TestCase):
                     core.check_for_lead_reminders()
                 provider.assert_not_called()
 
-    def test_scheduler_repeated_ticks_send_and_log_once(self):
+    def test_scheduler_repeated_ticks_send_once_without_extra_notification(self):
         core = self.core
         active = {"email": OWNER, "org_id": OWNER, "role": "owner", "status": "active"}
         with tempfile.TemporaryDirectory() as directory, patch.object(core, "DATA_ROOT", directory), \
@@ -257,7 +257,41 @@ class LeadReminderSchedulerTests(unittest.TestCase):
             core.check_for_lead_reminders()
             core.check_for_lead_reminders()
             provider.assert_called_once()
-            notification.assert_called_once()
+            notification.assert_not_called()
+
+    def test_deleted_workspace_is_not_recreated_after_accepted_send(self):
+        import app_account
+        core = self.core
+        active = {"email": OWNER, "org_id": OWNER, "role": "owner", "status": "active"}
+        users = {OWNER: active}
+        real_send_if_due = reminders.send_if_due
+        with tempfile.TemporaryDirectory() as directory:
+            notes = Path(directory) / "notifications.json"
+            notes.write_text(json.dumps({OWNER: [{"subject": "Earlier notification"}]}))
+
+            def send_then_finish_deletion(*args, **kwargs):
+                result = real_send_if_due(*args, **kwargs)
+                self.assertTrue(result)
+                # Deletion can finish once the receipt lock is released, before
+                # the scheduler resumes. Neither a receipt nor a notification
+                # may then restore the deleted workspace.
+                users.clear()
+                app_account._purge_workspace_json(OWNER)
+                return result
+
+            with patch.object(core, "DATA_ROOT", directory), \
+                 patch.object(core, "NOTIFICATIONS_FILE", str(notes)), \
+                 patch.object(app_account, "DATA_ROOT", directory), \
+                 patch.object(core.datetime, "datetime", FixedDateTime), \
+                 patch.object(core, "load_users", side_effect=lambda: dict(users)), \
+                 patch.object(core, "load_user_profile", return_value={"timezone": "America/Toronto"}), \
+                 patch.object(core, "load_user_leads", return_value=LEADS), \
+                 patch.object(core, "send_warning_summary_email", return_value=True) as provider, \
+                 patch.object(reminders, "send_if_due", side_effect=send_then_finish_deletion):
+                core.check_for_lead_reminders()
+            provider.assert_called_once()
+            self.assertNotIn(OWNER, json.loads(notes.read_text()))
+            self.assertNotIn(OWNER, json.loads((Path(directory) / reminders.STATE_FILE).read_text()))
 
     def test_scheduler_waits_until_quiet_hours_end_during_daytime(self):
         core = self.core

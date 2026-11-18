@@ -2254,12 +2254,10 @@ def check_for_lead_reminders():
             return lead_reminders.overdue_leads(load_user_leads(user_email), interval, now), interval, zone
 
         try:
-            sent = lead_reminders.send_if_due(
+            lead_reminders.send_if_due(
                 path, user_email, now=lambda: datetime.datetime.now(datetime.timezone.utc), prepare=prepare,
                 send=lambda leads, interval: send_warning_summary_email(user_email, leads, interval),
             )
-            if sent:
-                log_notification(user_email, "Leads needing follow-up", "Your follow-up briefing was accepted for email delivery.")
         except Exception:
             # Keep provider details and customer data out of scheduler errors.
             app.logger.warning("[LEAD REMINDERS] Briefing could not be completed; durable duplicate protection retained.")
