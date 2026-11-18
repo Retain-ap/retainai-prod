@@ -31,7 +31,13 @@ jobs:
       - name: Build public frontend without production secrets
         run: npm ci && npm run build
       - name: Install pinned browser tooling outside app dependencies
+        timeout-minutes: 6
         run: |
+          # The runner's regional Ubuntu mirror can stall without producing an
+          # error. Keep signed Ubuntu packages but use the canonical mirror and
+          # bound network retries so installation cannot consume the whole job.
+          printf 'http://archive.ubuntu.com/ubuntu/\n' | sudo tee /etc/apt/apt-mirrors.txt >/dev/null
+          printf 'Acquire::http::Timeout "20";\nAcquire::https::Timeout "20";\nAcquire::Retries "1";\n' | sudo tee /etc/apt/apt.conf.d/99-retain-browser-timeouts >/dev/null
           npm install --prefix "$RUNNER_TEMP/browser-tools" --ignore-scripts --no-audit --no-fund playwright@1.65.1
           PLAYWRIGHT_BROWSERS_PATH="$RUNNER_TEMP/browser-binaries" node "$RUNNER_TEMP/browser-tools/node_modules/playwright/cli.js" install --with-deps chromium firefox webkit
       - name: Exercise compiled app with only loopback networking
