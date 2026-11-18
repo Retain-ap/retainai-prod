@@ -79,12 +79,13 @@ class AppointmentTriggerTests(unittest.TestCase):
         }
         captured = []
 
-        def fake_execute(flow, step, lead, run, caps, profile):
+        def fake_execute(flow, step, lead, run, caps, profile, delivery_key=None):
             captured.append(lead)
             return True
 
         with patch.object(retainai, "read_json", return_value={"users": {"owner@example.com": [flow]}}), \
              patch.object(retainai, "load_state", return_value={}), \
+             patch.object(retainai, "load_users", return_value={"owner@example.com": {"status": "active"}}), \
              patch.object(retainai, "load_leads", return_value={"owner@example.com": [customer]}), \
              patch.object(retainai, "load_appointments", return_value={"owner@example.com": [appointment]}), \
              patch.object(retainai, "load_user_profile", return_value={}), \

@@ -15,6 +15,7 @@ account_bp = Blueprint("account_bp", __name__)
 _last_deletion_sweep = 0
 _WORKSPACE_JSON_FILES = (
     "notifications.json",
+    "lead_reminder_state.json",
     "appointments.json",
     "whatsapp_chats.json",
     "whatsapp_status.json",
@@ -22,6 +23,7 @@ _WORKSPACE_JSON_FILES = (
     "whatsapp_unmatched.json",
     "automations.json",
     "automations_state.json",
+    "automatic_email_dispatch.json",
     "automation_users.json",
     "subscriptions.json",
     "invites.json",

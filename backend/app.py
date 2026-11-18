@@ -21,6 +21,8 @@ import html
 from email.utils import parseaddr
 import stripe
 import billing_checkout_policy as checkout_policy
+import dispatch_safety
+import automation_state
 import requests as pyrequests
 from email import policy
 from email.parser import BytesParser
@@ -2063,7 +2065,7 @@ BUSINESS_TYPE_INTERVALS = {
 
 def send_warning_summary_email(user_email, warning_leads, interval):
     if not warning_leads:
-        return
+        return False
     users = load_users()
     user = users.get(user_email, {}) if isinstance(users, dict) else {}
     user_name = user.get("name") or user_email.split("@")[0].capitalize()
@@ -2102,7 +2104,7 @@ def send_warning_summary_email(user_email, warning_leads, interval):
         "interval": interval,
         "count": len(warning_leads)
     }
-    send_email_with_template(
+    return send_email_with_template(
         to_email=user_email,
         template_id=SG_TEMPLATE_FOLLOWUP_USER,
         dynamic_data=dynamic_data,
@@ -2153,16 +2155,18 @@ def send_post_appointment_update_prompts():
     users = load_users() or {}
     now = datetime.datetime.now(datetime.timezone.utc)
 
-    changed = False
-
     for user_email, user_appts in (appointments.items() if isinstance(appointments, dict) else []):
         user = users.get(user_email, {}) if isinstance(users, dict) else {}
+        if not _account_has_access(user):
+            continue
         user_name = user.get("name", "") or user_email.split("@")[0]
         business_name = user.get("business", "") or user.get("businessName", "") or "RetainAI"
         workspace_timezone = _workspace_appointment_timezone(user_email, users)
 
         for appt in (user_appts or []):
-            if appt.get("post_appt_update_sent"):
+            if not isinstance(appt, dict) or not appt.get("id") or appt.get("post_appt_update_sent"):
+                continue
+            if str(appt.get("status") or "scheduled").lower().replace("_", "-") not in {"scheduled", "completed", "booked", "confirmed"}:
                 continue
 
             appointment_time = appt.get("appointment_time")
@@ -2178,78 +2182,79 @@ def send_post_appointment_update_prompts():
             except (TypeError, ValueError):
                 continue
 
-            # Wait 60 minutes after the appointment start time
-            if now < (appt_dt + datetime.timedelta(minutes=60)):
+            # Only recent appointments: importing historical bookings must not
+            # enqueue months of owner emails. Future local times remain future.
+            if not datetime.timedelta(hours=1) <= now - appt_dt <= datetime.timedelta(hours=24):
                 continue
 
             lead_name = appt.get("lead_first_name") or appt.get("lead_name") or appt.get("lead_email") or "Lead"
 
             try:
-                ok = send_post_appointment_update_email(
-                    user_email=user_email,
-                    user_name=user_name,
-                    lead_name=lead_name,
-                    business_name=business_name,
-                    appointment_time=appointment_time,
-                    timezone_name=appointment_timezone,
+                # Recheck after earlier emails: a sync or owner edit may have
+                # cancelled/rescheduled/deleted this row while the job ran.
+                latest_users = load_users() or {}
+                if not _account_has_access(latest_users.get(user_email, {})):
+                    continue
+                latest = next((row for row in (load_appointments() or {}).get(user_email, [])
+                               if isinstance(row, dict) and str(row.get("id")) == str(appt["id"])), None)
+                if not latest or latest.get("post_appt_update_sent"):
+                    continue
+                if str(latest.get("status") or "scheduled").lower().replace("_", "-") not in {"scheduled", "completed", "booked", "confirmed"}:
+                    continue
+                latest_time = _parse_appointment_datetime(latest.get("appointment_time"), latest.get("timezone") or workspace_timezone).astimezone(datetime.timezone.utc)
+                if latest_time != appt_dt:
+                    continue
+                dispatch_safety.dispatch_once(
+                    FILE_EMAIL_DISPATCH,
+                    ["post-appointment", user_email, str(appt["id"]), appt_dt.isoformat()],
+                    lambda: send_post_appointment_update_email(
+                        user_email=user_email,
+                        user_name=user_name,
+                        lead_name=lead_name,
+                        business_name=business_name,
+                        appointment_time=appointment_time,
+                        timezone_name=appointment_timezone,
+                    ),
+                    is_eligible=lambda: _account_has_access((load_users() or {}).get(user_email, {})),
                 )
-
-                if ok:
-                    appt["post_appt_update_sent"] = True
-                    appt["post_appt_update_sent_at"] = now.isoformat().replace("+00:00", "Z")
-                    changed = True
-
-                    log_notification(
-                        user_email,
-                        f"Post-appointment update reminder sent for {lead_name}",
-                        f"We emailed you to update notes for your appointment with {lead_name}.",
-                        appt.get("lead_email")
-                    )
-
             except Exception as e:
                 print(f"[Scheduler] post-appointment update email error for {user_email}: {e}")
-
-        appointments[user_email] = user_appts
-
-    if changed:
-        save_appointments(appointments)
+    # Delivery claims live separately from appointments. Never write this old
+    # snapshot over a booking edited, cancelled or imported while email ran.
 
 def check_for_lead_reminders():
     print("[Scheduler] Checking for leads needing follow-up...")
-    leads_by_user = load_leads() or {}
-    users_by_email = load_users() or {}
-    now = datetime.datetime.utcnow()
+    import lead_reminders
 
-    for user_email, leads in (leads_by_user.items() if isinstance(leads_by_user, dict) else []):
-        user = users_by_email.get(user_email, {}) if isinstance(users_by_email, dict) else {}
-        business_type = (user.get("businessType") or user.get("business") or "").lower().strip()
-        interval = BUSINESS_TYPE_INTERVALS.get(business_type, 14)
+    users = load_users() or {}
+    if not isinstance(users, dict):
+        return
+    path = os.path.join(DATA_ROOT, lead_reminders.STATE_FILE)
+    for user_email in users:
+        if not isinstance(user_email, str) or user_email.startswith("user::"):
+            continue
+        # Fresh authorization and contacts are checked inside the delivery lock.
+        def prepare(now):
+            current_users = load_users() or {}
+            role, workspace, owner, _ = _resolve_org_and_role(user_email, current_users)
+            if role != "owner" or workspace != user_email or not _account_has_access(owner):
+                return None
+            profile = load_user_profile(user_email) or {}
+            zone = lead_reminders.reminder_timezone(profile, owner)
+            if not lead_reminders.daytime(now, zone) or in_quiet_hours(now, {**profile, "timezone": str(zone)}):
+                return None
+            business_type = (owner.get("businessType") or owner.get("business") or "").lower().strip()
+            interval = BUSINESS_TYPE_INTERVALS.get(business_type, 14)
+            return lead_reminders.overdue_leads(load_user_leads(user_email), interval, now), interval, zone
 
-        warning_leads = []
-        for lead in (leads or []):
-            last_contacted = lead.get("last_contacted") or lead.get("createdAt")
-            if not last_contacted:
-                continue
-            try:
-                last_dt = datetime.datetime.fromisoformat(last_contacted.replace("Z", ""))
-                days_since = (now - last_dt).days
-            except Exception:
-                days_since = 0
-
-            if interval <= days_since <= interval + 2:
-                lead["days_since_contact"] = days_since
-                warning_leads.append(lead)
-
-        if warning_leads:
-            try:
-                send_warning_summary_email(user_email, warning_leads, interval)
-                log_notification(
-                    user_email,
-                    "Leads needing follow-up",
-                    f"{len(warning_leads)} leads require follow-up: " + ", ".join(l.get("name","") for l in warning_leads)
-                )
-            except Exception as e:
-                print("[WARN] lead reminder email/log error:", e)
+        try:
+            lead_reminders.send_if_due(
+                path, user_email, now=lambda: datetime.datetime.now(datetime.timezone.utc), prepare=prepare,
+                send=lambda leads, interval: send_warning_summary_email(user_email, leads, interval),
+            )
+        except Exception:
+            # Keep provider details and customer data out of scheduler errors.
+            app.logger.warning("[LEAD REMINDERS] Briefing could not be completed; durable duplicate protection retained.")
 
 def send_birthday_email(lead_email, lead_name, business_name, unsubscribe_url=""):
     return send_email_with_template(
@@ -2266,7 +2271,7 @@ def send_birthday_email(lead_email, lead_name, business_name, unsubscribe_url=""
 
 def send_birthday_reminder_to_user(user_email, user_name, lead_name, business_name, birthday, lead=None):
     lead = lead or {}
-    send_email_with_template(
+    return send_email_with_template(
         to_email=user_email,
         template_id=SG_TEMPLATE_BDAY_REMINDER_USER,
         dynamic_data={
@@ -2286,19 +2291,89 @@ def send_birthday_reminder_to_user(user_email, user_name, lead_name, business_na
         from_email=platform_email_sender()
     )
 
+def _birthday_contact_key(lead):
+    contact_id = str(lead.get("id") or "").strip()
+    if contact_id:
+        return "id:" + contact_id
+    # Older contacts can predate stable IDs. Their normalized email is the
+    # fallback identity; without either identifier, do not attempt an auto-send.
+    email = str(lead.get("email") or "").strip().lower()
+    return "email:" + email if email else ""
+
+
+def _dispatch_birthday_email(user_email, lead, occurrence, *, owner_reminder=False):
+    import dispatch_safety
+
+    owner = str(user_email or "").strip().lower()
+    contact_key = _birthday_contact_key(lead)
+    if not owner or not contact_key:
+        return False
+    original_email = str(lead.get("email") or "").strip().lower()
+    event_type = "birthday_owner_reminder" if owner_reminder else "birthday_customer_greeting"
+    identity = [event_type, owner, contact_key, occurrence.isoformat()]
+    fresh = {}
+
+    def eligible():
+        users = load_users() or {}
+        user = users.get(owner, {}) if isinstance(users, dict) else {}
+        if not _account_has_access(user):
+            return False
+        all_leads = load_leads() or {}
+        rows = all_leads.get(owner, []) if isinstance(all_leads, dict) else []
+        current = next((row for row in rows if isinstance(row, dict) and _birthday_contact_key(row) == contact_key), None)
+        if current is None:
+            return False
+        day = datetime.datetime.utcnow().date() + datetime.timedelta(days=1 if owner_reminder else 0)
+        birthday = str(current.get("birthday") or "").strip()
+        if day != occurrence or "-".join(birthday.split("-")[1:3]) != occurrence.strftime("%m-%d"):
+            return False
+        business = _workspace_business_name(user)
+        if not owner_reminder and (
+            not business or not original_email
+            or str(current.get("email") or "").strip().lower() != original_email
+            or bool(current.get("email_opt_out")) or imported_without_consent(current)
+        ):
+            return False
+        fresh.update(user=user, lead=current, business=business)
+        return True
+
+    def deliver():
+        current, user = fresh["lead"], fresh["user"]
+        if owner_reminder:
+            return send_birthday_reminder_to_user(
+                user_email=owner, user_name=user.get("name", ""),
+                lead_name=current.get("name", ""), business_name=fresh["business"],
+                birthday=current.get("birthday", ""), lead=current,
+            ) is True
+        return send_birthday_email(
+            original_email, current.get("name", ""), fresh["business"],
+            unsubscribe_url=_email_unsubscribe_url(owner, current),
+        ) is True
+
+    try:
+        # The shared journal claims before the provider call. Unconfirmed
+        # attempts stay held for review, rather than being silently resent.
+        return dispatch_safety.dispatch_once(FILE_EMAIL_DISPATCH, identity, deliver, is_eligible=eligible)
+    except dispatch_safety.DeliveryHeld:
+        app.logger.warning("[BIRTHDAY] Automatic email held for review; no resend attempted.")
+    except Exception:
+        app.logger.exception("[BIRTHDAY] Automatic email claim or confirmation failed.")
+    return False
+
+
 def send_birthday_greetings():
     leads_by_user = load_leads() or {}
     users_by_email = load_users() or {}
-    today = datetime.datetime.utcnow().strftime("%m-%d")
-    tomorrow = (datetime.datetime.utcnow() + datetime.timedelta(days=1)).strftime("%m-%d")
+    today_date = datetime.datetime.utcnow().date()
+    tomorrow_date = today_date + datetime.timedelta(days=1)
+    today = today_date.strftime("%m-%d")
+    tomorrow = tomorrow_date.strftime("%m-%d")
 
     for user_email, leads in (leads_by_user.items() if isinstance(leads_by_user, dict) else []):
         user = users_by_email.get(user_email, {}) if isinstance(users_by_email, dict) else {}
         if not _account_has_access(user):
             continue
         business = _workspace_business_name(user)
-        user_name = user.get("name", "")
-
         for lead in (leads or []):
             bday = (lead.get("birthday") or "").strip()
             if bday and len(bday.split("-")) >= 3:
@@ -2307,24 +2382,9 @@ def send_birthday_greetings():
                     mmdd == today and business and lead.get("email") and not bool(lead.get("email_opt_out"))
                     and not imported_without_consent(lead)
                 ):
-                    sent = send_birthday_email(
-                        lead.get("email", ""),
-                        lead.get("name", ""),
-                        business,
-                        unsubscribe_url=_email_unsubscribe_url(user_email, lead),
-                    )
-                    if sent:
-                        log_notification(user_email, f"Happy Birthday, {lead.get('name','')}!", "Automated birthday email", lead.get("email"))
+                    _dispatch_birthday_email(user_email, lead, today_date)
                 if mmdd == tomorrow:
-                    send_birthday_reminder_to_user(
-                        user_email=user_email,
-                        user_name=user_name,
-                        lead_name=lead.get("name", ""),
-                        business_name=business,
-                        birthday=bday,
-                        lead=lead,
-                    )
-                    log_notification(user_email, f"Reminder: {lead.get('name','')}'s birthday is tomorrow!", "Birthday reminder sent", lead.get("email"))
+                    _dispatch_birthday_email(user_email, lead, tomorrow_date, owner_reminder=True)
 
 TRIAL_DAYS = 14
 
@@ -8523,6 +8583,7 @@ CHANNEL_WHATSAPP = "whatsapp"
 
 FILE_AUTOMATIONS = os.path.join(DATA_ROOT, os.getenv("FILE_AUTOMATIONS", "automations.json"))
 FILE_STATE = os.path.join(DATA_ROOT, os.getenv("FILE_STATE", "automations_state.json"))
+FILE_EMAIL_DISPATCH = os.path.join(DATA_ROOT, "automatic_email_dispatch.json")
 FILE_NOTIFICATIONS = os.path.join(DATA_ROOT, os.getenv("FILE_NOTIFICATIONS", "notifications.json"))
 FILE_USERS = os.path.join(DATA_ROOT, os.getenv("FILE_USERS", "automation_users.json"))
 FILE_SUBSCRIPTIONS = os.path.join(DATA_ROOT, os.getenv("FILE_SUBSCRIPTIONS", "subscriptions.json"))
@@ -8541,7 +8602,7 @@ def write_json(path: str, data: Any):
     directory = os.path.dirname(path) or "."
     os.makedirs(directory, exist_ok=True)
 
-    tmp = f"{path}.tmp"
+    tmp = f"{path}.{os.getpid()}.{uuid4().hex}.tmp"
     try:
         with open(tmp, "w", encoding="utf-8") as f:
             json.dump(data, f, indent=2, ensure_ascii=False)
@@ -8600,22 +8661,52 @@ def load_user_flows(user_email: str) -> List[Dict[str, Any]]:
     return db.get("users", {}).get((user_email or "").lower(), []) or []
 
 def save_user_flows(user_email: str, flows: List[Dict[str, Any]]):
-    db = read_json(FILE_AUTOMATIONS, {"users": {}})
-    db.setdefault("users", {})[(user_email or "").lower()] = flows
-    write_json(FILE_AUTOMATIONS, db)
+    owner = str(user_email or "").strip().lower()
+    # Account purge uses this same lock and removes the account before JSON
+    # cleanup. A delayed request must not recreate its workspace's flows.
+    with dispatch_safety.exclusive(FILE_AUTOMATIONS) as acquired:
+        if not acquired:
+            raise BlockingIOError("Automation flows are being updated. Try again after the update finishes.")
+        if not owner or not _account_has_access((load_users() or {}).get(owner, {})):
+            raise PermissionError("This workspace is no longer active. Automation changes were not saved.")
+        db = read_json(FILE_AUTOMATIONS, {"users": {}})
+        db.setdefault("users", {})[owner] = flows
+        write_json(FILE_AUTOMATIONS, db)
 
 def load_state() -> Dict[str, Any]:
-    return read_json(FILE_STATE, {}) or {}
+    # Legacy progress is assigned only to an unambiguous workspace. Conflicted
+    # flow IDs stay quarantined and cannot start fresh deliveries.
+    return automation_state.scoped_state(
+        dispatch_safety.read_state(FILE_STATE),
+        read_json(FILE_AUTOMATIONS, {"users": {}}) or {"users": {}},
+    )
 
 def save_state(state: Dict[str, Any]):
-    try:
-        ensure_files()
-        write_json(FILE_STATE, state or {})
-    except Exception as e:
-        try:
-            app.logger.warning("[AUTOMATIONS save_state] failed: %s", e)
-        except Exception:
-            pass
+    ensure_files()
+    write_json(FILE_STATE, state or {})
+
+
+def _serialized_automation_state(view):
+    @functools.wraps(view)
+    def guarded(*args, **kwargs):
+        with dispatch_safety.exclusive(FILE_STATE) as acquired:
+            if not acquired:
+                return jsonify({"ok": False, "error": "An automation run is already in progress. Try again after it finishes.", "in_progress": True}), 409
+            try:
+                # Freeze legacy ownership before a flow is created/deleted.
+                raw = dispatch_safety.read_state(FILE_STATE)
+                scoped = automation_state.scoped_state(raw, read_json(FILE_AUTOMATIONS, {"users": {}}) or {"users": {}})
+                if scoped is not raw:
+                    save_state(scoped)
+                return view(*args, **kwargs)
+            except PermissionError:
+                return jsonify({"ok": False, "error": "This workspace is no longer active. Automation changes were not saved."}), 403
+            except BlockingIOError:
+                return jsonify({"ok": False, "error": "Automation flows are being updated. Try again after the update finishes.", "in_progress": True}), 409
+            except (OSError, ValueError):
+                app.logger.exception("[AUTOMATIONS] state update failed")
+                return jsonify({"ok": False, "error": "Automation state could not be saved. No retry was queued."}), 503
+    return guarded
 
 def user_from_request() -> str:
     """Return the authoritative workspace for the signed-in session."""
@@ -9038,8 +9129,10 @@ def send_whatsapp_with_window(flow, step, lead, run, caps, profile) -> bool:
         return True
     raise RuntimeError("WhatsApp rejected the approved template message.")
 
-def get_run(state: Dict[str, Any], flow_id: str, lead_key: str) -> Dict[str, Any]:
-    return state.setdefault(flow_id, {}).setdefault(lead_key, {
+def get_run(state: Dict[str, Any], workspace: str, flow_id: str, lead_key: str) -> Dict[str, Any]:
+    if automation_state.legacy_held(state, flow_id):
+        raise dispatch_safety.DeliveryHeld(automation_state.LEGACY_HELD_REASON)
+    return automation_state.workspace_state(state, workspace).setdefault(str(flow_id), {}).setdefault(lead_key, {
         "step": 0,
         "created_at": now_utc().isoformat(),
         "last_step_at": None,
@@ -9222,7 +9315,7 @@ def _record_automation_action(
 
 
 def execute_step(flow: Dict[str, Any], step: Dict[str, Any], lead: Dict[str, Any], run: Dict[str, Any],
-                 caps: Dict[str, Any], profile: Dict[str, Any]) -> bool:
+                 caps: Dict[str, Any], profile: Dict[str, Any], delivery_key=None) -> bool:
     kind = step.get("type")
 
     if kind == "wait":
@@ -9233,15 +9326,15 @@ def execute_step(flow: Dict[str, Any], step: Dict[str, Any], lead: Dict[str, Any
     if kind == "if_no_reply":
         within_days = int(step.get("within_days", 2))
         if cond_no_reply_since(lead, within_days):
-            for s in (step.get("then") or []):
-                execute_step(flow, s, lead, run, caps, profile)
+            for index, s in enumerate(step.get("then") or []):
+                execute_step(flow, s, lead, run, caps, profile, delivery_key=delivery_key + [index] if delivery_key else None)
         return True
 
     if kind == "if_no_booking":
         within_days = int(step.get("within_days", 2))
         if cond_no_booking_since(lead, within_days):
-            for s in (step.get("then") or []):
-                execute_step(flow, s, lead, run, caps, profile)
+            for index, s in enumerate(step.get("then") or []):
+                execute_step(flow, s, lead, run, caps, profile, delivery_key=delivery_key + [index] if delivery_key else None)
         return True
 
     if kind == "ai_draft":
@@ -9291,14 +9384,26 @@ def execute_step(flow: Dict[str, Any], step: Dict[str, Any], lead: Dict[str, Any
 
         owner_email = (lead.get("owner") or flow.get("owner") or "").lower()
         unsubscribe_url = _email_unsubscribe_url(owner_email, lead)
-        ok = send_email_sendgrid_auto(
-            email,
-            subject,
-            html,
-            profile.get("business_name") or "RetainAI",
-            owner_email=owner_email,
-            unsubscribe_url=unsubscribe_url,
-        )
+        def deliver():
+            return send_email_sendgrid_auto(
+                email, subject, html, profile.get("business_name") or "RetainAI",
+                owner_email=owner_email, unsubscribe_url=unsubscribe_url,
+            )
+        if delivery_key is not None:
+            sent_now = dispatch_safety.dispatch_once(
+                FILE_EMAIL_DISPATCH, delivery_key, deliver,
+                is_eligible=lambda: _account_has_access((load_users() or {}).get(owner_email, {})),
+            )
+            if not sent_now:
+                # The provider accepted this step before a crash/state-write
+                # failure. Advance it without resending or duplicating history.
+                mark_sent(run, CHANNEL_EMAIL)
+                _record_automation_action(run, "send_email", "sent", {"reason": "Earlier accepted delivery recovered; no email was resent."})
+                return True
+            ok = True
+        else:
+            # Explicitly confirmed live tests retain their existing semantics.
+            ok = deliver()
         if ok:
             mark_sent(run, CHANNEL_EMAIL)
             record_followup(
@@ -9308,17 +9413,21 @@ def execute_step(flow: Dict[str, Any], step: Dict[str, Any], lead: Dict[str, Any
                 channel="email",
                 source="automation_email",
             )
-            add_notification(
-                user_email=(lead.get("owner") or flow.get("owner") or "").lower(),
-                subject="Automation email sent",
-                message=f"Automation sent an email to {lead.get('name') or email}.",
-                channel="automation",
-                lead_email=email,
-                extra={
-                    "lead_name": lead.get("name") or lead.get("first_name") or "",
-                    "type": "automation",
-                },
-            )
+            # Automatic runs already retain history under the run-state
+            # purge lock. Avoid recreating a separate notification after
+            # account deletion has already scrubbed that earlier store.
+            if delivery_key is None:
+                add_notification(
+                    user_email=(lead.get("owner") or flow.get("owner") or "").lower(),
+                    subject="Automation email sent",
+                    message=f"Automation sent an email to {lead.get('name') or email}.",
+                    channel="automation",
+                    lead_email=email,
+                    extra={
+                        "lead_name": lead.get("name") or lead.get("first_name") or "",
+                        "type": "automation",
+                    },
+                )
             _record_automation_action(
                 run,
                 "send_email",
@@ -9373,11 +9482,27 @@ def execute_step(flow: Dict[str, Any], step: Dict[str, Any], lead: Dict[str, Any
 
     return True
 
-def engine_tick():
+def engine_tick(workspace=None):
+    """Serialize scheduler and manual runs across workers without waiting."""
+    try:
+        with dispatch_safety.exclusive(FILE_STATE) as acquired:
+            if not acquired:
+                return {"ok": False, "error": "An automation run is already in progress. Try again after it finishes.", "in_progress": True}
+            _engine_tick_locked(str(workspace).strip().lower() if workspace is not None else None)
+        return {"ok": True, "message": "engine_tick completed"}
+    except Exception:
+        app.logger.exception("[AUTOMATIONS engine_tick] state could not be safely persisted")
+        return {"ok": False, "error": "Automation state could not be saved. Delivery attempts are held safely; check run history and provider delivery before retrying."}
+
+
+def _engine_tick_locked(workspace=None):
     try:
         ensure_files()
         flows_db = read_json(FILE_AUTOMATIONS, {"users": {}}) or {"users": {}}
-        state = load_state() or {}
+        state = automation_state.scoped_state(load_state(), flows_db)
+        # Persist migration before the first provider attempt. Later flow edits
+        # cannot reassign legacy progress to another workspace.
+        save_state(state)
         leads_by_user = load_leads() or {}
         appointments_by_user = load_appointments() or {}
 
@@ -9389,7 +9514,11 @@ def engine_tick():
             leads_by_user = {}
 
         for user, flows in (flows_db.get("users", {}) or {}).items():
+            if workspace is not None and str(user).strip().lower() != workspace:
+                continue
             try:
+                if not _account_has_access((load_users() or {}).get(user, {})):
+                    continue
                 profile = load_user_profile(user)
                 user_leads = leads_by_user.get(user, []) or []
                 user_appointments = appointments_by_user.get(user, []) or []
@@ -9406,7 +9535,9 @@ def engine_tick():
                         if not flow.get("enabled", False):
                             continue
 
-                        flow_id = flow.get("id") or str(uuid4())
+                        flow_id = flow.get("id")
+                        if not flow_id or automation_state.legacy_held(state, flow_id):
+                            continue
                         steps = flow.get("steps", []) or []
                         caps = flow.get("caps", {"per_lead_per_day": 1, "respect_quiet_hours": True}) or {}
                         trigger = flow.get("trigger", {}) or {}
@@ -9452,14 +9583,14 @@ def engine_tick():
                                     continue
 
                                 lead_key = str(lead_id)
-                                run = get_run(state, flow_id, lead_key)
+                                run = get_run(state, user, flow_id, lead_key)
 
                                 if run.get("done"):
                                     continue
 
                                 if run.get("step", 0) == 0:
                                     if not trigger_met(trigger, lead):
-                                        state.setdefault(flow_id, {}).pop(lead_key, None)
+                                        automation_state.workspace_state(state, user).setdefault(str(flow_id), {}).pop(lead_key, None)
                                         continue
 
                                 if should_auto_stop(flow, lead, run):
@@ -9477,7 +9608,8 @@ def engine_tick():
 
                                 step = steps[step_index]
                                 run["_action_log"] = []
-                                progressed = execute_step(flow, step, lead, run, caps, profile)
+                                progressed = execute_step(flow, step, lead, run, caps, profile,
+                                                          delivery_key=["automation", user, str(flow_id), lead_key, step_index])
                                 if progressed:
                                     actions = run.pop("_action_log", [])
                                     if actions:
@@ -9537,12 +9669,10 @@ def engine_tick():
                 continue
 
         save_state(state)
+    except Exception:
+        app.logger.exception("[AUTOMATIONS engine_tick] failed")
+        raise
 
-    except Exception as e:
-        try:
-            app.logger.warning("[AUTOMATIONS engine_tick] fatal error: %s", e)
-        except Exception:
-            pass
 
 def _normalize_flow_for_user(flow: Dict[str, Any], user: str) -> Dict[str, Any]:
     f = dict(flow or {})
@@ -9702,7 +9832,7 @@ def _automation_history_for_user(user: str):
     leads = {str(lead.get("id")): lead for lead in (load_leads().get(user, []) or []) if isinstance(lead, dict)}
     state = load_state()
     rows = []
-    for flow_id, runs in (state.items() if isinstance(state, dict) else []):
+    for flow_id, runs in automation_state.workspace_state(state, user).items():
         flow = flow_map.get(str(flow_id))
         if not flow or not isinstance(runs, dict):
             continue
@@ -9721,10 +9851,24 @@ def _automation_history_for_user(user: str):
                 "replies_received": len([event for event in events if event.get("type") == "reply"]),
                 "failure_reason": run.get("error") or "", "events": events[-50:],
             })
+    for flow_id, flow in flow_map.items():
+        if automation_state.legacy_held(state, flow_id):
+            # Only the hold is visible. Quarantined history may belong to
+            # someone else, so no lead details or original events are exposed.
+            rows.append({
+                "id": f"{flow_id}:legacy-held", "flow_id": flow_id,
+                "flow_name": flow.get("name") or "Untitled flow", "lead_id": "",
+                "lead_name": "Legacy run requires review", "lead_email": "",
+                "status": "failed", "delivery_held": True, "current_step": 0,
+                "messages_sent": 0, "replies_received": 0, "events": [],
+                "failure_reason": automation_state.LEGACY_HELD_REASON,
+                "created_at": None, "last_run": None, "completed_at": None,
+            })
     rows.sort(key=lambda row: str(row.get("last_run") or ""), reverse=True)
     return rows
 
 @automations_bp.get("/dashboard")
+@_serialized_automation_state
 def automation_dashboard():
     user = user_from_request()
     flows = load_user_flows(user)
@@ -9741,6 +9885,7 @@ def automation_dashboard():
     })
 
 @automations_bp.get("/history")
+@_serialized_automation_state
 def automation_history():
     user = user_from_request()
     rows = _automation_history_for_user(user)
@@ -9754,14 +9899,20 @@ def automation_history():
     return jsonify({"ok": True, "history": rows[:limit]}), 200
 
 @automations_bp.post("/history/<flow_id>/<lead_id>/retry")
+@_serialized_automation_state
 def retry_automation_run(flow_id, lead_id):
     user = user_from_request()
     if not any(str(flow.get("id")) == str(flow_id) for flow in load_user_flows(user)):
         return jsonify({"error": "Flow not found."}), 404
     state = load_state()
-    run = (state.get(str(flow_id)) or {}).get(str(lead_id))
+    if automation_state.legacy_held(state, flow_id):
+        return jsonify({"ok": False, "delivery_held": True, "error": automation_state.LEGACY_HELD_REASON}), 409
+    run = (automation_state.workspace_state(state, user).get(str(flow_id)) or {}).get(str(lead_id))
     if not isinstance(run, dict):
         return jsonify({"error": "Run not found."}), 404
+    reason = dispatch_safety.held_reason(FILE_EMAIL_DISPATCH, user, ["automation", user, str(flow_id), str(lead_id)])
+    if reason:
+        return jsonify({"ok": False, "delivery_held": True, "error": reason}), 409
     run["error"] = ""; run["done"] = False
     automation_event(run, "retry", "Run queued for retry")
     save_state(state)
@@ -10416,8 +10567,8 @@ def automations_test_route():
 
 @automations_bp.route("/run", methods=["POST"])
 def automations_run_once_route():
-    engine_tick()
-    return jsonify({"ok": True, "message": "engine_tick completed"})
+    result = engine_tick(workspace=user_from_request())
+    return jsonify(result), 200 if result["ok"] else 409 if result.get("in_progress") else 503
 
 @automations_bp.route("/templates", methods=["GET"])
 def automations_templates():
@@ -10465,6 +10616,7 @@ def list_wa_templates():
     })
 
 @automations_bp.route("/", methods=["GET"])
+@_serialized_automation_state
 def list_flows_route():
     user = user_from_request()
     flows = [_normalize_flow_for_user(f, user) for f in load_user_flows(user)]
@@ -10472,6 +10624,7 @@ def list_flows_route():
     return jsonify({"ok": True, "flows": flows})
 
 @automations_bp.route("/", methods=["POST"])
+@_serialized_automation_state
 def create_flow_route():
     user = user_from_request()
     body = request.get_json(force=True) or {}
@@ -10490,6 +10643,7 @@ def create_flow_route():
     return jsonify({"ok": True, "flow": flow})
 
 @automations_bp.route("/<flow_id>", methods=["PUT"])
+@_serialized_automation_state
 def update_flow_route(flow_id):
     user = user_from_request()
     body = request.get_json(force=True) or {}
@@ -10517,6 +10671,7 @@ def update_flow_route(flow_id):
     return jsonify({"ok": False, "error": "not_found"}), 404
 
 @automations_bp.route("/enable/<flow_id>", methods=["POST"])
+@_serialized_automation_state
 def enable_flow_route(flow_id):
     user = user_from_request()
     body = request.get_json(force=True) or {}
@@ -10541,16 +10696,19 @@ def enable_flow_route(flow_id):
     return jsonify({"ok": False, "error": "not_found"}), 404
 
 @automations_bp.route("/<flow_id>", methods=["DELETE"])
+@_serialized_automation_state
 def delete_flow_route(flow_id):
     user = user_from_request()
     flows = load_user_flows(user)
-    flows = [f for f in flows if f.get("id") != flow_id]
-    save_user_flows(user, flows)
-
+    if not any(str(f.get("id")) == str(flow_id) for f in flows):
+        return jsonify({"ok": False, "error": "not_found"}), 404
     state = load_state()
-    if flow_id in state:
-      state.pop(flow_id, None)
-      save_state(state)
+    flows = [f for f in flows if str(f.get("id")) != str(flow_id)]
+    save_user_flows(user, flows)
+    scoped = automation_state.workspace_state(state, user)
+    if str(flow_id) in scoped:
+        scoped.pop(str(flow_id), None)
+        save_state(state)
 
     return jsonify({"ok": True})
 
@@ -10732,7 +10890,7 @@ def _start_scheduler_once() -> bool:
                 id="lead_reminders",
                 func=check_for_lead_reminders,
                 trigger="interval",
-                hours=6,
+                minutes=15,
                 replace_existing=True
             )
 

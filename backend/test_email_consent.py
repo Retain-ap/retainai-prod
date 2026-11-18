@@ -19,6 +19,14 @@ import app as retainai  # noqa: E402
 class EmailConsentTests(unittest.TestCase):
     owner = "owner@example.com"
 
+    def setUp(self):
+        # Birthday receipts must be isolated between unrelated consent cases.
+        journal = tempfile.TemporaryDirectory()
+        self.addCleanup(journal.cleanup)
+        receipt_path = patch.object(retainai, "FILE_EMAIL_DISPATCH", os.path.join(journal.name, "birthday.json"), create=True)
+        receipt_path.start()
+        self.addCleanup(receipt_path.stop)
+
     @staticmethod
     def _active_user(email):
         return {
