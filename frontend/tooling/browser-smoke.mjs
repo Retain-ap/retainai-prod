@@ -15,6 +15,7 @@ const buildRoot = path.resolve('build');
 const output = path.resolve('browser-acceptance');
 await mkdir(output, { recursive: true });
 const googleScriptUrl = 'https://accounts.google.com/gsi/client';
+const googleFixturePath = '/__fixture_google_sdk.js';
 const offlineGoogleScript = '/* Offline acceptance fixture: Google OAuth is not exercised. */';
 const fixtureUser = { email: 'browser-fixture@example.test', name: 'Browser Fixture', role: 'owner', platformOwner: false, status: 'active', emailVerified: true, canEditBusiness: true, canManageBilling: true, canInviteTeam: true, businessName: 'Synthetic service business', businessType: 'Service business', orgOwnerEmail: 'browser-fixture@example.test' };
 let signedIn = false;
@@ -59,6 +60,7 @@ const server = createServer(async (request, response) => {
     }
     if (request.method !== 'GET') { response.writeHead(405); return response.end(); }
     if (pathname === '/__fixture_boot') { response.writeHead(200, { 'Content-Type': 'text/html' }); return response.end('<!doctype html><title>Synthetic fixture</title>'); }
+    if (pathname === googleFixturePath) { response.writeHead(200, { 'Content-Type': 'text/javascript', 'Cache-Control': 'no-store' }); return response.end(offlineGoogleScript); }
     let file = path.resolve(buildRoot, '.' + decodeURIComponent(pathname));
     if (file !== buildRoot && !file.startsWith(buildRoot + path.sep)) { response.writeHead(400); return response.end(); }
     try { if ((await stat(file)).isDirectory()) file = path.join(file, 'index.html'); }
@@ -83,10 +85,18 @@ try {
       signedIn = false;
       reminders = true;
       const context = await currentBrowser.newContext({ viewport, locale: 'en-CA', timezoneId: 'America/Toronto', reducedMotion: 'reduce', serviceWorkers: 'allow' });
-      // OAuth is outside this synthetic email-login test. The network namespace
-      // denies all external hosts; fulfil only this known SDK with inert JS.
-      await context.route(googleScriptUrl, route => route.fulfill({ status: 200, contentType: 'text/javascript', body: offlineGoogleScript }));
-      await context.addInitScript(value => { window.__ENV__ = { REACT_APP_API_BASE: value }; }, origin);
+      // OAuth is outside this email-login fixture. WebKit's SW-owned requests
+      // bypass routing, so redirect only the SDK's exact src assignment to
+      // inert loopback JS before any request. App scripts and SW stay unchanged.
+      await context.addInitScript(({ apiOrigin, googleUrl, fixtureUrl }) => {
+        window.__ENV__ = { REACT_APP_API_BASE: apiOrigin };
+        const descriptor = Object.getOwnPropertyDescriptor(HTMLScriptElement.prototype, 'src');
+        if (!descriptor?.set) throw new Error('Google SDK fixture could not install its exact-URL redirect');
+        Object.defineProperty(HTMLScriptElement.prototype, 'src', {
+          ...descriptor,
+          set(value) { descriptor.set.call(this, String(value) === googleUrl ? fixtureUrl : value); },
+        });
+      }, { apiOrigin: origin, googleUrl: googleScriptUrl, fixtureUrl: origin + googleFixturePath });
       const page = await context.newPage();
       page.setDefaultTimeout(15000);
       const errors = [];
@@ -97,13 +107,7 @@ try {
       report.runs.push(row);
       try {
         await page.goto(origin + '/__fixture_boot');
-        await page.evaluate(async ({ url, script }) => {
-          await caches.open('retainai-v2-static');
-          // WebKit does not route service-worker-owned requests via Playwright.
-          // Give its existing network-first fallback the same inert SDK fixture.
-          const cache = await caches.open('retainai-v3-static');
-          await cache.put(url, new Response(script, { headers: { 'Content-Type': 'text/javascript' } }));
-        }, { url: googleScriptUrl, script: offlineGoogleScript });
+        await page.evaluate(async () => { await caches.open('retainai-v2-static'); });
         await page.goto(origin + '/', { waitUntil: 'domcontentloaded' });
         await page.locator('#root h1').first().waitFor();
         await withinViewport(page);
@@ -126,8 +130,10 @@ try {
           const cache = await caches.open('retainai-v3-html');
           await cache.put('/index.html', new Response('<!doctype html><h1>Obsolete shell fixture</h1>', { headers: { 'Content-Type': 'text/html' } }));
         });
-        await page.waitForFunction(() => navigator.serviceWorker.controller !== null);
+        // ready proves an active registration, not control of this document.
+        // Reload under that registration before requiring an active controller.
         await page.reload();
+        await page.waitForFunction(() => navigator.serviceWorker.controller !== null);
         await page.getByRole('heading', { name: 'Today’s priorities', exact: true }).waitFor();
         assert.equal(await page.getByRole('heading', { name: 'Obsolete shell fixture' }).count(), 0);
         row.checks.push('active service worker replaces a stale cached HTML shell from the network');
@@ -194,7 +200,7 @@ try {
   await new Promise(resolve => server.close(resolve));
   report.apiFixturePaths = [...apiPaths].sort();
   report.attemptedFixtureWrites = [...new Set(attemptedWrites)].sort();
-  report.limitations = ['Synthetic backend only; no live provider, payment or customer acceptance', 'Google SDK is replaced by inert JS for offline email-login testing; Google OAuth and its rendered button are not tested', 'Desktop browser engines with narrow viewport, not physical iPhone/Android acceptance', 'Opera Mobile 80 and Samsung 30 were not executed'];
+  report.limitations = ['Synthetic backend only; no live provider, payment or customer acceptance', 'Only the exact Google SDK src assignment is redirected to inert loopback JS; Google OAuth and its rendered button are not tested', 'Desktop browser engines with narrow viewport, not physical iPhone/Android acceptance', 'Opera Mobile 80 and Samsung 30 were not executed'];
   await writeFile(path.join(output, 'report.json'), JSON.stringify(report, null, 2));
   console.log(JSON.stringify({ allPassed: report.allPassed, runs: report.runs.map(({ engine, layout, passed, error }) => ({ engine, layout, passed, error })) }));
 }
