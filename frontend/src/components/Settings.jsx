@@ -1145,7 +1145,7 @@ export default function Settings({
               </div>
             </div>
             <div className="connected-accounts-grid">
-              {capabilities.isWorkspaceOwner && <LeadReminderEmailSetting key={profile.email} />}
+              {capabilities.isWorkspaceOwner && <LeadReminderEmailSetting key={profile.email} ownerEmail={profile.email} />}
               <div className="account-card-copy" style={{ gridColumn: "1 / -1" }}>
                 <h3>Preferences for this device</h3>
                 <p>These choices do not change email delivery.</p>

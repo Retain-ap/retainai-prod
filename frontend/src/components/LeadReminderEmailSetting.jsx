@@ -9,13 +9,19 @@ async function readPreference(response) {
   return value;
 }
 
-export default function LeadReminderEmailSetting() {
+export default function LeadReminderEmailSetting({ ownerEmail }) {
+  const normalizedOwnerEmail = String(ownerEmail || "").trim().toLowerCase();
   const [enabled, setEnabled] = useState(null);
   const [phase, setPhase] = useState("loading");
   const [message, setMessage] = useState("");
   const requestId = useRef(0);
   const controller = useRef(null);
   const pending = useRef(false);
+
+  const cancelPendingRequest = useCallback(() => {
+    ++requestId.current;
+    controller.current?.abort();
+  }, []);
 
   const load = useCallback(async () => {
     const id = ++requestId.current;
@@ -25,9 +31,16 @@ export default function LeadReminderEmailSetting() {
     setEnabled(null);
     setPhase("loading");
     setMessage("");
+    if (!normalizedOwnerEmail) {
+      pending.current = false;
+      setPhase("error");
+      setMessage("Sign in as the workspace owner to manage these email reminders.");
+      return;
+    }
     try {
       const value = await readPreference(await fetch(apiUrl("email/preferences"), {
         credentials: "include", signal: controller.current.signal,
+        headers: { "X-User-Email": normalizedOwnerEmail },
       }));
       if (id !== requestId.current) return;
       setEnabled(value);
@@ -39,15 +52,15 @@ export default function LeadReminderEmailSetting() {
     } finally {
       if (id === requestId.current) pending.current = false;
     }
-  }, []);
+  }, [normalizedOwnerEmail]);
 
   useEffect(() => {
     load();
-    return () => { ++requestId.current; controller.current?.abort(); };
-  }, [load]);
+    return cancelPendingRequest;
+  }, [load, cancelPendingRequest]);
 
   async function save(value) {
-    if (pending.current || phase !== "ready") return;
+    if (!normalizedOwnerEmail || pending.current || phase !== "ready") return;
     pending.current = true;
     const id = ++requestId.current;
     controller.current = new AbortController();
@@ -56,7 +69,7 @@ export default function LeadReminderEmailSetting() {
     try {
       const confirmed = await readPreference(await fetch(apiUrl("email/preferences"), {
         method: "POST", credentials: "include", signal: controller.current.signal,
-        headers: { "Content-Type": "application/json" },
+        headers: { "Content-Type": "application/json", "X-User-Email": normalizedOwnerEmail },
         body: JSON.stringify({ lead_reminder_emails: value }),
       }));
       if (id !== requestId.current) return;
@@ -90,7 +103,7 @@ export default function LeadReminderEmailSetting() {
       {phase === "loading" && <p role="status">Loading email preference…</p>}
       {phase === "saving" && <p role="status">Saving email preference…</p>}
       {message && <p role={phase === "error" ? "alert" : "status"}>{message}</p>}
-      {phase === "error" && <button type="button" className="account-secondary-btn" onClick={load}>Reload email preference</button>}
+      {phase === "error" && normalizedOwnerEmail && <button type="button" className="account-secondary-btn" onClick={load}>Reload email preference</button>}
       <p>Security and sign-in emails continue. Customer email consent is managed separately.</p>
     </article>
   );
