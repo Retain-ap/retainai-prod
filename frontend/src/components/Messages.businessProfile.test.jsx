@@ -1,3 +1,4 @@
+import { vi } from "vitest";
 import React from "react";
 import { act, fireEvent, render, screen } from "@testing-library/react";
 import Messages from "./Messages";
@@ -12,11 +13,11 @@ const refusal = {
 
 beforeAll(() => {
   // jsdom has no element scrolling; the thread scrolls to the newest message.
-  Element.prototype.scrollTo = jest.fn();
+  Element.prototype.scrollTo = vi.fn();
 });
 
 beforeEach(() => {
-  global.fetch = jest.fn((url) => {
+  global.fetch = vi.fn((url) => {
     const body = String(url).includes("/api/generate-message") ? refusal : {};
     const status = String(url).includes("/api/generate-message") ? 409 : 200;
     return Promise.resolve({ ok: status === 200, status, json: async () => body, text: async () => JSON.stringify(body) });
@@ -33,7 +34,7 @@ const threadScope = (user = owner) => heldDraftScope("messages", user, "lead-1")
 const composer = () => screen.findByPlaceholderText(/24h|Type a message|Optional notes/);
 
 test("AI Reply without a business name keeps the typed reply and offers Settings instead of a template", async () => {
-  const openSettings = jest.fn();
+  const openSettings = vi.fn();
   render(<Messages user={owner} leads={[lead]} onOpenBusinessSettings={openSettings} />);
   const box = await composer();
   fireEvent.change(box, { target: { value: "Typed reply" } });
@@ -51,7 +52,7 @@ test("AI Reply without a business name keeps the typed reply and offers Settings
 });
 
 test("a reply edited after the refusal is held as last typed, with no further AI call", async () => {
-  render(<Messages user={owner} leads={[lead]} onOpenBusinessSettings={jest.fn()} />);
+  render(<Messages user={owner} leads={[lead]} onOpenBusinessSettings={vi.fn()} />);
   const box = await composer();
   fireEvent.change(box, { target: { value: "First words" } });
   fireEvent.click(screen.getByRole("button", { name: "AI Reply" }));

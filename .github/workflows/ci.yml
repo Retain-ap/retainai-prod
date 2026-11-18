@@ -92,16 +92,19 @@ jobs:
       - name: Install exact dependencies
         run: npm ci
       - name: Run frontend tests
-        run: npm test -- --watchAll=false --runInBand
+        run: |
+          npm test -- --reporter=default --reporter=json --outputFile="$RUNNER_TEMP/frontend-tests.json"
+          node scripts/verify-test-inventory.js "$RUNNER_TEMP/frontend-tests.json"
         env:
           CI: "true"
+      - name: Verify compiled public environment contract
+        run: npm run test:tooling
       - name: Run frontend lint
         run: npx eslint src --ext .js,.jsx --no-cache --max-warnings=0
       - name: Build production bundle
         run: npm run build
         env:
           CI: "true"
-          DISABLE_ESLINT_PLUGIN: "true"
       - name: Reject moderate or higher production dependency findings
         run: npm audit --omit=dev --audit-level=moderate
       - name: Reject critical findings in development tools

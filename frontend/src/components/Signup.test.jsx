@@ -1,21 +1,22 @@
+import { vi } from "vitest";
 import React from "react";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { MemoryRouter } from "react-router";
 import Signup from "./Signup";
 
-jest.mock("@react-oauth/google", () => ({
+vi.mock("@react-oauth/google", () => ({
   GoogleLogin: ({ onSuccess }) => <button type="button" onClick={() => onSuccess({ credential: "signed-google-token" })}>Sign up with Google</button>,
 }));
-jest.mock("jwt-decode", () => ({ jwtDecode: () => ({ email: "google@example.com", name: "Google Sample" }) }));
+vi.mock("jwt-decode", () => ({ jwtDecode: () => ({ email: "google@example.com", name: "Google Sample" }) }));
 
 const originalFetch = global.fetch;
 const originalLocation = window.location;
 
 beforeEach(() => {
-  global.fetch = jest.fn();
+  global.fetch = vi.fn();
   localStorage.clear();
   delete window.location;
-  window.location = { ...originalLocation, assign: jest.fn() };
+  window.location = { ...originalLocation, assign: vi.fn() };
 });
 afterEach(() => { global.fetch = originalFetch; window.location = originalLocation; });
 

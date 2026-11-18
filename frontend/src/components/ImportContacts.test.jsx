@@ -1,3 +1,4 @@
+import { vi } from "vitest";
 import React from "react";
 import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import ImportContacts from "./ImportContacts";
@@ -29,7 +30,7 @@ function json(body, status = 200) {
 let calls;
 function mockApi(overrides = {}) {
   calls = [];
-  global.fetch = jest.fn((url, options = {}) => {
+  global.fetch = vi.fn((url, options = {}) => {
     const path = String(url).replace(/^.*\/api\//, "");
     calls.push({ path, options, body: typeof options.body === "string" ? JSON.parse(options.body) : options.body });
     if (overrides[path]) return overrides[path](options);
@@ -52,7 +53,7 @@ async function upload(name = "Contacts.vcf") {
   return screen.findByRole("region", { name: "Review import" });
 }
 
-afterEach(() => { delete global.fetch; jest.useRealTimers(); });
+afterEach(() => { delete global.fetch; vi.useRealTimers(); });
 
 test("accepts vCard and CSV files and explains WhatsApp honestly", async () => {
   mockApi();
@@ -151,7 +152,7 @@ test("reports contacts kept by undo and hides undo for older imports", async () 
     "import/history": () => json({ imports: history }),
     "import/new1/undo": () => json({ ok: true, removed_contacts: 1, restored_contacts: 0, kept_contacts: 1, conflicts: [{ id: "x", name: "Pat Edited", reason: "edited_since_import" }] }),
   });
-  window.confirm = jest.fn(() => true);
+  window.confirm = vi.fn(() => true);
   render(<ImportContacts user={user} />);
   expect(await screen.findByText(/Undo isn't available for imports made before safe undo/)).toBeInTheDocument();
   const undoButtons = screen.getAllByRole("button", { name: /Undo/ });

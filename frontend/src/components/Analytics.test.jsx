@@ -1,10 +1,11 @@
+import { vi } from "vitest";
 import React from "react";
 import { render, screen, waitFor, within } from "@testing-library/react";
 import Analytics from "./Analytics";
 
 // Charts are outside this regression; exercise the real normalization, merge,
 // summary and displayed metrics without jsdom needing layout/ResizeObserver.
-jest.mock("recharts", () => Object.fromEntries([
+vi.mock("recharts", () => Object.fromEntries([
   "FunnelChart", "Funnel", "LabelList", "PieChart", "Pie", "Cell", "BarChart", "Bar",
   "XAxis", "YAxis", "Tooltip", "ResponsiveContainer", "Legend", "AreaChart", "Area",
 ].map((name) => [name, () => null])));
@@ -14,7 +15,7 @@ afterEach(() => { global.fetch = originalFetch; });
 
 test.each(["ana-old@example.com", ""])("completed metrics suppress stale mirrors by stable contact ID even with provider email '%s'", async (providerEmail) => {
   const visit = (id, status) => ({ id, title: id, lead_id: "ana", lead_email: providerEmail, appointment_time: "2026-10-14T10:00:00", status, done: true, is_done: true });
-  global.fetch = jest.fn().mockResolvedValue({ ok: true, json: async () => ({ timezone: "America/Toronto", appointments: [
+  global.fetch = vi.fn().mockResolvedValue({ ok: true, json: async () => ({ timezone: "America/Toronto", appointments: [
     visit("Attended", "completed"), visit("Missed", "no_show"), visit("Cancelled", "cancelled"),
   ] }) });
   render(<Analytics user={{ email: "owner@example.com" }} leads={[{ id: "ana", email: "ana@example.com", appointments: [

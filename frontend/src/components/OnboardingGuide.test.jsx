@@ -1,3 +1,4 @@
+import { vi } from "vitest";
 import React from "react";
 import { fireEvent, render, screen } from "@testing-library/react";
 import OnboardingGuide from "./OnboardingGuide";
@@ -5,11 +6,11 @@ import OnboardingGuide from "./OnboardingGuide";
 const user = { email: "owner@example.com", role: "owner" };
 
 function mockScreen(isPhone) {
-  window.matchMedia = jest.fn().mockImplementation((query) => ({
+  window.matchMedia = vi.fn().mockImplementation((query) => ({
     matches: isPhone && query.includes("max-width"),
     media: query,
-    addEventListener: jest.fn(),
-    removeEventListener: jest.fn(),
+    addEventListener: vi.fn(),
+    removeEventListener: vi.fn(),
   }));
 }
 
@@ -21,7 +22,7 @@ afterEach(() => {
 test("starts collapsed on phones and remembers when it is opened", () => {
   mockScreen(true);
   const { unmount } = render(
-    <OnboardingGuide user={user} leads={[]} setSection={jest.fn()} openImports={jest.fn()} />
+    <OnboardingGuide user={user} leads={[]} setSection={vi.fn()} openImports={vi.fn()} />
   );
 
   expect(screen.queryByText("Import your customer contacts")).not.toBeInTheDocument();
@@ -29,13 +30,13 @@ test("starts collapsed on phones and remembers when it is opened", () => {
   expect(screen.getByText("Import your customer contacts")).toBeInTheDocument();
 
   unmount();
-  render(<OnboardingGuide user={user} leads={[]} setSection={jest.fn()} openImports={jest.fn()} />);
+  render(<OnboardingGuide user={user} leads={[]} setSection={vi.fn()} openImports={vi.fn()} />);
   expect(screen.getByText("Import your customer contacts")).toBeInTheDocument();
 });
 
 test("starts collapsed on larger screens too and can be minimized again", () => {
   mockScreen(false);
-  render(<OnboardingGuide user={user} leads={[]} setSection={jest.fn()} openImports={jest.fn()} />);
+  render(<OnboardingGuide user={user} leads={[]} setSection={vi.fn()} openImports={vi.fn()} />);
 
   expect(screen.queryByText("Import your customer contacts")).not.toBeInTheDocument();
   fireEvent.click(screen.getByRole("button", { name: /Setup · 0 of/ }));
@@ -48,8 +49,8 @@ test("starts collapsed on larger screens too and can be minimized again", () => 
 test("collapses on phones after a step opens its screen", () => {
   mockScreen(true);
   localStorage.setItem("retainai:onboarding-collapsed:owner@example.com", "0");
-  const openImports = jest.fn();
-  render(<OnboardingGuide user={user} leads={[]} setSection={jest.fn()} openImports={openImports} />);
+  const openImports = vi.fn();
+  render(<OnboardingGuide user={user} leads={[]} setSection={vi.fn()} openImports={openImports} />);
 
   fireEvent.click(screen.getByText("Import your customer contacts"));
   expect(openImports).toHaveBeenCalledTimes(1);

@@ -1,3 +1,4 @@
+import { vi } from "vitest";
 import React from "react";
 import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import ValueReceipt, { formatMinor } from "./ValueReceipt";
@@ -27,7 +28,7 @@ const receipt = {
 let calls;
 function mockApi({ status = 200, body = receipt } = {}) {
   calls = [];
-  global.fetch = jest.fn(async (url, options = {}) => {
+  global.fetch = vi.fn(async (url, options = {}) => {
     calls.push({ url: String(url), method: options.method || "GET", body: options.body ? JSON.parse(options.body) : null });
     if (String(url).includes("/value-receipt/payments")) return { ok: true, status: 201, json: async () => ({ ok: true, created: true }) };
     if (String(url).includes("/value-receipt/sync")) return { ok: true, status: 200, json: async () => ({ ok: true, read: 2, added: 1, updated: 1 }) };

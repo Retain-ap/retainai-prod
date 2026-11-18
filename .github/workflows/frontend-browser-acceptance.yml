@@ -1,0 +1,54 @@
+name: Isolated frontend browser acceptance
+on:
+  workflow_dispatch:
+  pull_request:
+    branches: [deploy]
+    paths:
+      - 'frontend/**'
+      - '.github/workflows/frontend-browser-acceptance.yml'
+permissions:
+  contents: read
+concurrency:
+  group: frontend-browser-${{ github.ref }}
+  cancel-in-progress: false
+jobs:
+  browser:
+    # Migration-only automatic checks; future releases can dispatch explicitly.
+    if: github.repository == 'Retain-ap/retainai-prod' && (github.event_name == 'workflow_dispatch' || startsWith(github.head_ref, 'chore/toolchain-') || github.head_ref == 'chore/vite-vitest-draft-20261113')
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38
+        with:
+          node-version: '24.19.0'
+          package-manager-cache: false
+      - name: Build public frontend without production secrets
+        run: npm ci && npm run build
+      - name: Install pinned browser tooling outside app dependencies
+        timeout-minutes: 6
+        run: |
+          # The runner's regional Ubuntu mirror can stall without producing an
+          # error. Keep signed Ubuntu packages but use the canonical mirror and
+          # bound network retries so installation cannot consume the whole job.
+          printf 'http://archive.ubuntu.com/ubuntu/\n' | sudo tee /etc/apt/apt-mirrors.txt >/dev/null
+          printf 'Acquire::http::Timeout "20";\nAcquire::https::Timeout "20";\nAcquire::Retries "1";\n' | sudo tee /etc/apt/apt.conf.d/zzzz-retain-browser-timeouts >/dev/null
+          apt-config dump Acquire::Retries Acquire::http::Timeout Acquire::https::Timeout
+          npm install --prefix "$RUNNER_TEMP/browser-tools" --ignore-scripts --no-audit --no-fund playwright@1.65.1
+          PLAYWRIGHT_BROWSERS_PATH="$RUNNER_TEMP/browser-binaries" node "$RUNNER_TEMP/browser-tools/node_modules/playwright/cli.js" install --with-deps chromium firefox webkit
+      - name: Exercise compiled app with only loopback networking
+        run: |
+          sudo unshare --net -- sh -c 'ip link set lo up; exec runuser -u "$4" -- env RETAIN_BROWSER_NETWORK_ISOLATED=1 RETAIN_PLAYWRIGHT_MODULE="$1/browser-tools/node_modules/playwright/index.mjs" PLAYWRIGHT_BROWSERS_PATH="$1/browser-binaries" GITHUB_SHA="$3" "$2" tooling/browser-smoke.mjs' sh "$RUNNER_TEMP" "$(command -v node)" "$GITHUB_SHA" "$(id -un)"
+      - name: Save synthetic-only screenshots and report
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: isolated-browser-acceptance
+          path: frontend/browser-acceptance/
+          retention-days: 7
+          if-no-files-found: warn

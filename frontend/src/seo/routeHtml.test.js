@@ -1,10 +1,11 @@
 import fs from "fs";
+import { fileURLToPath } from "node:url";
 import path from "path";
 import routeMeta from "../routeMeta.json";
 import publicContent from "../publicContent.json";
 import { PRIVATE_ROUTES, PUBLIC_ROUTES, renderRouteHtml as buildRouteHtml } from "./routeHtml";
 
-const homepage = fs.readFileSync(path.resolve(__dirname, "../../public/index.html"), "utf8");
+const homepage = fs.readFileSync(path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../public/index.html"), "utf8");
 
 function head(html) {
   const doc = new DOMParser().parseFromString(html, "text/html");
@@ -62,14 +63,14 @@ test("values are HTML-escaped and a missing tag fails instead of shipping wrong 
 test("every prerendered route has metadata, and structured data matches the visible launch price", () => {
   for (const route of [...PUBLIC_ROUTES, ...PRIVATE_ROUTES]) expect(routeMeta[route]).toBeTruthy();
   const jsonLd = JSON.parse(homepage.match(/<script type="application\/ld\+json">([\s\S]*?)<\/script>/)[1]);
-  const landing = fs.readFileSync(path.resolve(__dirname, "../components/LandingPage.jsx"), "utf8");
+  const landing = fs.readFileSync(path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../components/LandingPage.jsx"), "utf8");
   const visible = landing.match(/className="lp-price"><strong>\$(\d+)<\/strong><span>CAD/)[1];
   expect(jsonLd.offers).toMatchObject({ priceCurrency: "CAD", price: visible });
 });
 
 test("the install manifests do not advertise placeholder screenshots", () => {
   for (const name of ["manifest.webmanifest", "manifest.json"]) {
-    const manifest = JSON.parse(fs.readFileSync(path.resolve(__dirname, `../../public/${name}`), "utf8"));
+    const manifest = JSON.parse(fs.readFileSync(path.resolve(path.dirname(fileURLToPath(import.meta.url)), `../../public/${name}`), "utf8"));
     expect(manifest.screenshots).toBeUndefined();
   }
 });
@@ -98,7 +99,7 @@ test("category content and internal links are present before JavaScript", () => 
 });
 
 test("the sitemap lists exactly the indexable routes, and the rebooking guide is linked before JavaScript", () => {
-  const sitemap = fs.readFileSync(path.resolve(__dirname, "../../public/sitemap.xml"), "utf8");
+  const sitemap = fs.readFileSync(path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../public/sitemap.xml"), "utf8");
   const listed = [...sitemap.matchAll(/<loc>https:\/\/www\.retainai\.ca([^<]*)<\/loc>/g)].map((match) => match[1] || "/");
   expect([...listed].sort()).toEqual(["/", ...PUBLIC_ROUTES].sort());
   for (const route of PRIVATE_ROUTES) expect(listed).not.toContain(route);

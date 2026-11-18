@@ -1,10 +1,11 @@
+import { vi } from "vitest";
 import React from "react";
 import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import LeadReminderEmailSetting from "./LeadReminderEmailSetting";
 
 const response = (enabled, ok = true) => ({ ok, json: async () => ({ preferences: { lead_reminder_emails: enabled } }) });
 const ownerEmail = "Owner@Example.test";
-beforeEach(() => { global.fetch = jest.fn(); });
+beforeEach(() => { global.fetch = vi.fn(); });
 
 test("loads server preference and confirms a disable without changing browser preferences", async () => {
   localStorage.setItem("retainai:notification-preferences", "unchanged");

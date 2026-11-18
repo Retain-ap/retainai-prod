@@ -1,3 +1,4 @@
+import { vi } from "vitest";
 import React from "react";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import Invoices from "./Invoices";
@@ -12,7 +13,7 @@ let posts;
 beforeEach(() => {
   posts = [];
   let attempt = 0;
-  global.fetch = jest.fn(async (url, options = {}) => {
+  global.fetch = vi.fn(async (url, options = {}) => {
     const value = String(url);
     if (value.includes("/api/stripe/invoice") && options.method === "POST" && !value.includes("/send")) {
       posts.push(JSON.parse(options.body));

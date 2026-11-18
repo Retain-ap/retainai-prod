@@ -1,3 +1,4 @@
+import { vi } from "vitest";
 import React from "react";
 import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import Appointments, { localAppointmentKey } from "./Appointments";
@@ -9,7 +10,7 @@ const imported = { id: "imported", name: "Imported Cara", email: "cara@example.c
 
 function mockServer(storedLeads) {
   const calls = [];
-  global.fetch = jest.fn(async (url, options = {}) => {
+  global.fetch = vi.fn(async (url, options = {}) => {
     const method = options.method || "GET";
     const body = options.body ? JSON.parse(options.body) : null;
     calls.push({ url: String(url), method, body });
@@ -37,7 +38,7 @@ afterEach(() => {
 test("standalone: completing an appointment saves only that change onto the latest list", async () => {
   // Since this screen loaded, the contact was renamed elsewhere and a contact was imported.
   const calls = mockServer([{ ...lead, name: "Jamie Renamed" }, imported]);
-  const setLeads = jest.fn();
+  const setLeads = vi.fn();
   render(<Appointments user={user} leads={[lead]} setLeads={setLeads} />);
 
   fireEvent.click(await screen.findByRole("button", { name: "Done" }));
@@ -59,8 +60,8 @@ test("standalone: completing an appointment saves only that change onto the late
 
 test("inside the dashboard: hands the change to the shared save instead of posting itself", async () => {
   const calls = mockServer([lead]);
-  const saveLeads = jest.fn(async (next) => ({ leads: next, conflicts: [] }));
-  render(<Appointments user={user} leads={[lead]} setLeads={jest.fn()} saveLeads={saveLeads} />);
+  const saveLeads = vi.fn(async (next) => ({ leads: next, conflicts: [] }));
+  render(<Appointments user={user} leads={[lead]} setLeads={vi.fn()} saveLeads={saveLeads} />);
 
   fireEvent.click(await screen.findByRole("button", { name: "Done" }));
 
@@ -72,11 +73,11 @@ test("inside the dashboard: hands the change to the shared save instead of posti
 });
 
 test("shows an error and changes nothing when the latest list cannot be loaded", async () => {
-  global.fetch = jest.fn(async (url) => {
+  global.fetch = vi.fn(async (url) => {
     if (String(url).includes("/api/appointments/")) return { ok: true, status: 200, json: async () => ({ appointments: [] }) };
     return { ok: false, status: 503, json: async () => ({ error: "Service unavailable" }) };
   });
-  const setLeads = jest.fn();
+  const setLeads = vi.fn();
   render(<Appointments user={user} leads={[lead]} setLeads={setLeads} />);
 
   fireEvent.click(await screen.findByRole("button", { name: "Done" }));
@@ -97,8 +98,8 @@ describe("appointments saved before keys were stored", () => {
 
   async function showLegacyAppointments() {
     mockServer([ana, ben]);
-    const saveLeads = jest.fn(async (next) => ({ leads: next, conflicts: [] }));
-    render(<Appointments user={user} leads={[ana, ben]} setLeads={jest.fn()} saveLeads={saveLeads} />);
+    const saveLeads = vi.fn(async (next) => ({ leads: next, conflicts: [] }));
+    render(<Appointments user={user} leads={[ana, ben]} setLeads={vi.fn()} saveLeads={saveLeads} />);
     expect(await screen.findAllByRole("button", { name: "Done" })).toHaveLength(3);
     return saveLeads;
   }
@@ -126,7 +127,7 @@ describe("appointments saved before keys were stored", () => {
   });
 
   test("delete removes only the clicked appointment", async () => {
-    const confirm = jest.spyOn(window, "confirm").mockReturnValue(true);
+    const confirm = vi.spyOn(window, "confirm").mockReturnValue(true);
     const saveLeads = await showLegacyAppointments();
     fireEvent.click(screen.getAllByRole("button", { name: "Delete" })[2]);
     await waitFor(() => expect(saveLeads).toHaveBeenCalledTimes(1));
@@ -162,13 +163,13 @@ test("localAppointmentKey keeps stored keys and tells identical legacy appointme
 test("cancelled and missed visits appear only in history with truthful outcomes and no reinstate controls", async () => {
   localStorage.clear();
   const visit = (id, status) => ({ id, title: id, lead_id: "ana", lead_email: "ana@example.com", appointment_time: "2026-11-14T10:00:00", timezone: "America/Toronto", status, done: true, is_done: true });
-  global.fetch = jest.fn().mockResolvedValue({ ok: true, status: 200, json: async () => ({ timezone: "America/Toronto", appointments: [
+  global.fetch = vi.fn().mockResolvedValue({ ok: true, status: 200, json: async () => ({ timezone: "America/Toronto", appointments: [
     visit("Missed visit", "no_show"), visit("Cancelled visit", "cancelled"), visit("Attended visit", "completed"),
   ] }) });
   const staleMirror = { id: "ana", email: "ana@example.com", appointments: [
     { title: "Cancelled visit", date: "2026-11-14", time: "10:00", done: false },
   ] };
-  render(<Appointments user={user} leads={[staleMirror]} setLeads={jest.fn()} />);
+  render(<Appointments user={user} leads={[staleMirror]} setLeads={vi.fn()} />);
   await waitFor(() => expect(screen.queryByText("Loading appointments…")).not.toBeInTheDocument());
   expect(screen.queryByText("Missed visit")).not.toBeInTheDocument();
   expect(screen.queryByText("Cancelled visit")).not.toBeInTheDocument();
@@ -191,8 +192,8 @@ test("undoing a locally completed visit clears its explicit completed status", a
   localStorage.clear();
   const completedLead = { ...lead, appointments: [{ ...appointment, done: true, status: "completed" }] };
   mockServer([completedLead]);
-  const saveLeads = jest.fn(async (next) => ({ leads: next, conflicts: [] }));
-  render(<Appointments user={user} leads={[completedLead]} setLeads={jest.fn()} saveLeads={saveLeads} />);
+  const saveLeads = vi.fn(async (next) => ({ leads: next, conflicts: [] }));
+  render(<Appointments user={user} leads={[completedLead]} setLeads={vi.fn()} saveLeads={saveLeads} />);
   fireEvent.click(screen.getByRole("button", { name: "History" }));
   fireEvent.click(await screen.findByRole("button", { name: "Undo" }));
   await waitFor(() => expect(saveLeads).toHaveBeenCalledTimes(1));
@@ -202,8 +203,8 @@ test("undoing a locally completed visit clears its explicit completed status", a
 test("saving a no-show note records the outcome on a local appointment", async () => {
   localStorage.clear();
   mockServer([lead]);
-  const saveLeads = jest.fn(async (next) => ({ leads: next, conflicts: [] }));
-  render(<Appointments user={user} leads={[lead]} setLeads={jest.fn()} saveLeads={saveLeads} />);
+  const saveLeads = vi.fn(async (next) => ({ leads: next, conflicts: [] }));
+  render(<Appointments user={user} leads={[lead]} setLeads={vi.fn()} saveLeads={saveLeads} />);
   fireEvent.click(await screen.findByRole("button", { name: "Done" }));
   const dialog = within(await screen.findByRole("dialog", { name: "Add post-appointment note" }));
   fireEvent.click(dialog.getByRole("button", { name: "No-show" }));
@@ -216,7 +217,7 @@ test("saving a no-show note sends the actual outcome to the server", async () =>
   localStorage.clear();
   const stored = { id: "server-visit", title: "Provider visit", lead_id: lead.id, lead_email: lead.email, appointment_time: "2099-01-15T10:00:00", timezone: "America/Toronto", status: "scheduled", done: false };
   const writes = [];
-  global.fetch = jest.fn(async (url, options = {}) => {
+  global.fetch = vi.fn(async (url, options = {}) => {
     if (options.method === "PUT") {
       const body = JSON.parse(options.body);
       writes.push(body);
@@ -225,7 +226,7 @@ test("saving a no-show note sends the actual outcome to the server", async () =>
     }
     return { ok: true, json: async () => ({ timezone: "America/Toronto", appointments: [stored] }) };
   });
-  render(<Appointments user={user} leads={[]} setLeads={jest.fn()} saveLeads={jest.fn(async (next) => ({ leads: next }))} />);
+  render(<Appointments user={user} leads={[]} setLeads={vi.fn()} saveLeads={vi.fn(async (next) => ({ leads: next }))} />);
   fireEvent.click(await screen.findByRole("button", { name: "Done" }));
   const dialog = within(await screen.findByRole("dialog", { name: "Add post-appointment note" }));
   fireEvent.click(dialog.getByRole("button", { name: "No-show" }));
