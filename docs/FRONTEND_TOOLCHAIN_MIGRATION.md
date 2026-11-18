@@ -1,10 +1,10 @@
-# Frontend toolchain migration — candidate, not approved for deployment
+# Frontend toolchain migration — validated candidate
 
 This branch refreshes PR75's replacement of Create React App's build/test wrapper
 with Vite 8.3.8 and Vitest 5.1.1. It does not change a product component, API contract, subscription,
-route, public copy or runtime package version. Do not merge it on the strength
-of a clean dependency audit alone. The production app remains on CRA until the
-checks below and visual acceptance are complete.
+route, public copy or runtime package version. Linux CI, isolated browser checks
+and the screenshot review below passed for candidate `4318062`. PR75 is still
+a draft at this checkpoint; merge and exact-deployment verification are separate.
 
 The November 18 comparison baseline is `8377a5beea5a0f38306a52e68a28d56de47296b9`,
 the recovery documentation update after deployed application source
@@ -99,8 +99,56 @@ The production audit has zero findings. The full audit reports 22 affected
 development packages, all inherited from the one unpatched picomatch advisory
 below (22 high, zero critical); the original CRA full audit reported 79 affected
 packages on the same date. Both existing severity gates pass. These package
-counts are not counts of distinct advisories. Exact-source Linux CI and browser
-acceptance remain separate requirements; no production deployment is claimed.
+counts are not counts of distinct advisories. The later hosted results below
+complete the candidate's Linux and bounded browser checks; no production
+deployment is claimed.
+
+## November 18 final hosted validation and visual review
+
+Candidate `4318062c6383e56ccad8c76f4e5865b55d4a5ff1` was tested through GitHub's
+PR merge commit `85e4e88fafe2e41d75efef70faa9b16a2a953e51`, combining that exact
+head with baseline `8377a5beea5a0f38306a52e68a28d56de47296b9`.
+
+- [Release gate 44287131961](https://github.com/Retain-ap/retainai-prod/actions/runs/44287131961)
+  passed: 436 backend tests, all 333 frontend cases in 44 files, semantic test
+  inventory, both compiled environment-contract tests, lint, production build,
+  secret scan and the unchanged dependency audit gates. The frontend production
+  audit reported zero findings; the full audit still reported 22 high development
+  package entries and zero critical findings, deriving from picomatch below.
+- [Isolated browser acceptance 44287131863](https://github.com/Retain-ap/retainai-prod/actions/runs/44287131863)
+  passed all eight checks in each of six combinations: Chromium, Firefox and
+  WebKit at 1365 x 900 and 390 x 844. It covered homepage styling, email login,
+  authenticated overview, stale HTML-shell replacement, direct imports/lazy
+  assets, Back/Forward/reload, persisted reminder-email preference and opening
+  the workflow editor. The active service worker removed the obsolete cache
+  and never cached fixture API responses. Every run retained the assertion
+  rejecting any unhandled page error.
+- All 24 downloaded homepage, login, overview and workflow screenshots were
+  inspected across those six combinations. Visible text and controls remain
+  readable against the dark surfaces, with no observed horizontal clipping;
+  mobile cards and the workflow editor stack within the viewport. Earlier live
+  homepage, mobile navigation and desktop workflow captures retain the same
+  visual structure. These are qualitative comparisons, not pixel-matched CRA
+  snapshots: platform fonts, viewport sizes, account data and scroll positions
+  differ. The existing floating setup badge overlays the lower content in some
+  captures; full-page screenshots do not expose every nested scroll position.
+
+The downloaded report and screenshots are in the private workspace's
+`outputs/retain-browser-acceptance-4318062-20261118/`; its `report.json` records
+the tested merge SHA, six passing runs, synthetic API paths and limitations.
+The earlier Windows comparison receipt is
+`outputs/retain-toolchain-refresh-receipt-20261118.json`. Its then-pending Linux
+and browser fields are historical and superseded by the linked hosted runs.
+
+The browser job uses a kernel network namespace with loopback only and synthetic
+accounts/API responses. Only the exact Google SDK `src` assignment is redirected
+to inert loopback JavaScript; Google OAuth and its rendered sign-in button are
+explicitly untested. No provider, payment, live Calendly sync, real import,
+message delivery or customer acceptance is established by this fixture. It also
+does not establish exhaustive keyboard navigation, manual touch/scroll gestures,
+physical iPhone/Android acceptance, or Opera Mobile 80/Samsung 30 engine results.
+The final diff keeps product source, service-worker source and runtime versions
+unchanged; test edits are the documented runner/mock and selector adapters.
 
 ## Required evidence before merge
 
@@ -124,10 +172,10 @@ acceptance remain separate requirements; no production deployment is claimed.
 No PC-local preview server was started. The historical receipt records that
 automatic approval review rejected a loopback preview-server start as
 "blocked by policy"; it records no more specific reason. This candidate does
-not retry that action. Browser acceptance remains a separate gate, and actual
-older Opera Mobile 80/Samsung 30 engine results must not be inferred from other
-browsers. The earlier PR75 evidence remains historical evidence, not acceptance
-of this refreshed source.
+not retry that action. The isolated hosted checks above now provide bounded
+browser evidence; they do not fill the explicitly untested interaction/provider
+scope or establish older Opera Mobile 80/Samsung 30 results. The earlier PR75
+evidence remains historical evidence, not acceptance of this refreshed source.
 
 ## Remaining dependency risk
 
@@ -143,7 +191,7 @@ The November 18 registry check also identifies
 [GHSA-fc5q-39xc-vjpf](https://github.com/advisories/GHSA-fc5q-39xc-vjpf), a high
 severity ReDoS advisory affecting picomatch through 4.0.7. At that check 4.0.7
 was the newest published version, the advisory was not withdrawn, and no
-patched version was listed. Both remaining development copies (2.3.2 and
+patched version was listed. Both installed development versions (2.3.2 and
 4.0.7) are affected. These tools process repository-controlled build/test globs;
 the runtime dependency inventory has no picomatch. This is residual development
 risk, not a clean full audit. Do not accept untrusted glob patterns or disable
