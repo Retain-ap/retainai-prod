@@ -2271,7 +2271,7 @@ def send_birthday_email(lead_email, lead_name, business_name, unsubscribe_url=""
 
 def send_birthday_reminder_to_user(user_email, user_name, lead_name, business_name, birthday, lead=None):
     lead = lead or {}
-    send_email_with_template(
+    return send_email_with_template(
         to_email=user_email,
         template_id=SG_TEMPLATE_BDAY_REMINDER_USER,
         dynamic_data={
@@ -2291,19 +2291,89 @@ def send_birthday_reminder_to_user(user_email, user_name, lead_name, business_na
         from_email=platform_email_sender()
     )
 
+def _birthday_contact_key(lead):
+    contact_id = str(lead.get("id") or "").strip()
+    if contact_id:
+        return "id:" + contact_id
+    # Older contacts can predate stable IDs. Their normalized email is the
+    # fallback identity; without either identifier, do not attempt an auto-send.
+    email = str(lead.get("email") or "").strip().lower()
+    return "email:" + email if email else ""
+
+
+def _dispatch_birthday_email(user_email, lead, occurrence, *, owner_reminder=False):
+    import dispatch_safety
+
+    owner = str(user_email or "").strip().lower()
+    contact_key = _birthday_contact_key(lead)
+    if not owner or not contact_key:
+        return False
+    original_email = str(lead.get("email") or "").strip().lower()
+    event_type = "birthday_owner_reminder" if owner_reminder else "birthday_customer_greeting"
+    identity = [event_type, owner, contact_key, occurrence.isoformat()]
+    fresh = {}
+
+    def eligible():
+        users = load_users() or {}
+        user = users.get(owner, {}) if isinstance(users, dict) else {}
+        if not _account_has_access(user):
+            return False
+        all_leads = load_leads() or {}
+        rows = all_leads.get(owner, []) if isinstance(all_leads, dict) else []
+        current = next((row for row in rows if isinstance(row, dict) and _birthday_contact_key(row) == contact_key), None)
+        if current is None:
+            return False
+        day = datetime.datetime.utcnow().date() + datetime.timedelta(days=1 if owner_reminder else 0)
+        birthday = str(current.get("birthday") or "").strip()
+        if day != occurrence or "-".join(birthday.split("-")[1:3]) != occurrence.strftime("%m-%d"):
+            return False
+        business = _workspace_business_name(user)
+        if not owner_reminder and (
+            not business or not original_email
+            or str(current.get("email") or "").strip().lower() != original_email
+            or bool(current.get("email_opt_out")) or imported_without_consent(current)
+        ):
+            return False
+        fresh.update(user=user, lead=current, business=business)
+        return True
+
+    def deliver():
+        current, user = fresh["lead"], fresh["user"]
+        if owner_reminder:
+            return send_birthday_reminder_to_user(
+                user_email=owner, user_name=user.get("name", ""),
+                lead_name=current.get("name", ""), business_name=fresh["business"],
+                birthday=current.get("birthday", ""), lead=current,
+            ) is True
+        return send_birthday_email(
+            original_email, current.get("name", ""), fresh["business"],
+            unsubscribe_url=_email_unsubscribe_url(owner, current),
+        ) is True
+
+    try:
+        # The shared journal claims before the provider call. Unconfirmed
+        # attempts stay held for review, rather than being silently resent.
+        return dispatch_safety.dispatch_once(FILE_EMAIL_DISPATCH, identity, deliver, is_eligible=eligible)
+    except dispatch_safety.DeliveryHeld:
+        app.logger.warning("[BIRTHDAY] Automatic email held for review; no resend attempted.")
+    except Exception:
+        app.logger.exception("[BIRTHDAY] Automatic email claim or confirmation failed.")
+    return False
+
+
 def send_birthday_greetings():
     leads_by_user = load_leads() or {}
     users_by_email = load_users() or {}
-    today = datetime.datetime.utcnow().strftime("%m-%d")
-    tomorrow = (datetime.datetime.utcnow() + datetime.timedelta(days=1)).strftime("%m-%d")
+    today_date = datetime.datetime.utcnow().date()
+    tomorrow_date = today_date + datetime.timedelta(days=1)
+    today = today_date.strftime("%m-%d")
+    tomorrow = tomorrow_date.strftime("%m-%d")
 
     for user_email, leads in (leads_by_user.items() if isinstance(leads_by_user, dict) else []):
         user = users_by_email.get(user_email, {}) if isinstance(users_by_email, dict) else {}
         if not _account_has_access(user):
             continue
         business = _workspace_business_name(user)
-        user_name = user.get("name", "")
-
         for lead in (leads or []):
             bday = (lead.get("birthday") or "").strip()
             if bday and len(bday.split("-")) >= 3:
@@ -2312,24 +2382,12 @@ def send_birthday_greetings():
                     mmdd == today and business and lead.get("email") and not bool(lead.get("email_opt_out"))
                     and not imported_without_consent(lead)
                 ):
-                    sent = send_birthday_email(
-                        lead.get("email", ""),
-                        lead.get("name", ""),
-                        business,
-                        unsubscribe_url=_email_unsubscribe_url(user_email, lead),
-                    )
+                    sent = _dispatch_birthday_email(user_email, lead, today_date)
                     if sent:
                         log_notification(user_email, f"Happy Birthday, {lead.get('name','')}!", "Automated birthday email", lead.get("email"))
                 if mmdd == tomorrow:
-                    send_birthday_reminder_to_user(
-                        user_email=user_email,
-                        user_name=user_name,
-                        lead_name=lead.get("name", ""),
-                        business_name=business,
-                        birthday=bday,
-                        lead=lead,
-                    )
-                    log_notification(user_email, f"Reminder: {lead.get('name','')}'s birthday is tomorrow!", "Birthday reminder sent", lead.get("email"))
+                    if _dispatch_birthday_email(user_email, lead, tomorrow_date, owner_reminder=True):
+                        log_notification(user_email, f"Reminder: {lead.get('name','')}'s birthday is tomorrow!", "Birthday reminder sent", lead.get("email"))
 
 TRIAL_DAYS = 14
 
