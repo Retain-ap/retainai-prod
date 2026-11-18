@@ -1,19 +1,28 @@
 # RetainAI backups: off-Render copy and restore
 
-## What exists today (checked November 6, 2026, read-only)
+## Current evidence (November 18, 2026)
 
 - The backend scheduler creates
   `/var/retainai/backups/retainai-backup-<UTC time>.zip` at 03:20 UTC every day.
-  Render logs show one archive of 15 files every day from October 31 to
-  November 6.
+  Scheduled runs were observed in Render logs on November 16 and 17. These
+  server snapshots alone are not off-site copies.
 - Each archive holds the SQLite database (copied with SQLite's online backup)
   and every JSON data file, plus `manifest.json` with each file's size and
   SHA-256. A `.sha256` file stores the archive's own checksum. The last 14 are
   kept (`BACKUP_RETENTION_COUNT`).
 - The server archives still sit on the same Render disk and are not encrypted
-  there. A real production archive was downloaded, encrypted and independently
-  restored on the owner's computer on November 7 UTC (details below).
-  A second private cloud copy and recurring off-site retention remain open.
+  there. The November 18 recovery point has a verified encrypted local copy
+  and a private OneDrive copy that was downloaded again, decrypted and checked.
+  The downloaded cloud copy also passed an isolated application startup and
+  storage check (details below). Historical encrypted archives were preserved.
+- The existing OneDrive **RetainAI Backups** folder is visible through the
+  owner's signed-in desktop sync client. A new cloud credential is not required
+  to stage encrypted files there. A successful local copy alone does not prove
+  that an upload completed; retain separate cloud verification evidence.
+- The existing weekly local recovery task checks an already-downloaded
+  encrypted archive. It does not capture, download or upload fresh snapshots.
+  **Unattended fresh off-site copying is not configured.** Independent recovery
+  key custody and production integration-token decryption remain unverified.
 
 ## What a backup contains and needs
 
@@ -36,8 +45,11 @@ and macOS**: there the tool creates the output owner-only (files 0600, folder 07
 and checks it after creating it. On native Windows, mode bits don't set a
 private access list (DACL), so `open` and `drill` refuse to run instead of
 claiming private output. Use WSL's Linux filesystem (not `/mnt/c`) or a
-Linux/macOS computer for temporary and restored files until a
-Windows wrapper that sets and checks a private ACL exists. The downloaded
+Linux/macOS computer for temporary and restored files. Separately reviewed
+owner-local Windows helpers now check private ACLs and pass the existing
+DPAPI-protected key through stdin for sealing and verification. Those helpers
+are not part of this repository's CLI and do not remove its platform guard.
+The downloaded
 `.zip` from step 3 is plaintext on any platform: keep it in a private folder
 and delete it after sealing.
 
@@ -57,10 +69,14 @@ and delete it after sealing.
    ```
    The `.rbk` file uses AES-256-GCM with a scrypt-derived key. Any change to the
    file makes decryption fail.
-6. Store `retainai-<date>.rbk` in **two places the owner controls** that are not
-   Render, for example an encrypted USB drive and the owner's existing cloud
-   drive. Store the passphrase in the password manager.
-7. Delete the unencrypted `.zip` from Downloads.
+6. Preserve a private local encrypted copy and upload only the `.rbk` to the
+   existing private OneDrive **RetainAI Backups** folder. Never upload the ZIP
+   or recovery key. Download the cloud copy separately, compare its encrypted
+   checksum, then decrypt and verify the complete archive. Desktop sync can
+   transport the file, but a queued/local file is not cloud round-trip proof.
+   Keep the recovery passphrase independently in the owner's password manager.
+7. After the encrypted cloud round trip passes, delete the exact temporary
+   unencrypted `.zip`. Preserve the encrypted archives and verification receipts.
 
 Keep at least the last 4 weekly copies and one from each month.
 
@@ -79,7 +95,7 @@ archive checksum. Compare the counts with the Owner Console. Then delete the
 
 ### What has and hasn't been proven
 
-- **Proven on a fixture only.** In PR37 the `verify`, `seal` and `drill` steps
+- **Historical fixture check.** In PR37 the `verify`, `seal` and `drill` steps
   ran end to end on a **local test archive built from seed data** (1 user,
   12 contacts) in a disposable folder, plus the automated tests in
   `backend/test_backup_tools.py`. That shows the tool works on the real backup
@@ -101,10 +117,42 @@ archive checksum. Compare the counts with the Owner Console. Then delete the
     `5c9ac60ff0a13716b279dda663641979ff751f2f57eaeaa4aeae48d2f194976e`
   - Encrypted `.rbk` SHA-256:
     `4b2327823e551be496720ef1b2304e768db4c7c8234e365f7e310e12da39e480`
-  - **Still open:** private cloud upload and round-trip verification,
-    independent password-manager recovery-key custody, production
-    `DATA_ENCRYPTION_KEY` escrow and recurring off-site copies. Do not describe
-    this local drill as proof of those separate requirements.
+  - This November 7 drill established local recovery. Later cloud and startup
+    verification is recorded below; independent key custody and recurring
+    fresh off-site copying remain separate requirements.
+- **Cloud round trip and actual application startup, November 18 UTC:**
+  `retainai-backup-20261118T085556Z.zip` was captured at 08:55:56 UTC and sealed
+  with the existing recovery key as `retainai-backup-20261118T085556Z.rbk`.
+  The encrypted file was uploaded to the existing private OneDrive folder,
+  downloaded again, hash-matched, decrypted, and verified against its complete
+  manifest and SQLite integrity/foreign-key checks. It recovered **6 users,
+  8 contacts, 3 workspaces with contacts and 18 files**. The key was neither
+  uploaded nor rotated, and the temporary plaintext download was removed.
+  - Original archive SHA-256:
+    `9eb4632373dc20b41a13cdb3f61b420699822a2a47b54dd7ffa3c4366c6bba72`
+  - Encrypted `.rbk` SHA-256:
+    `924fa84e8e96449c7d0750fcf4a347fded6a7adc96ce19df461f5537c01c3499`
+  - At 09:16:58 UTC the downloaded cloud copy passed the unchanged backend at
+    `15994c007e535cd0a38d4ad9fc4275f52fda9df3`: actual storage startup returned
+    matching counts, `/api/health` returned 200, and storage readiness passed.
+    The probe used real Linux `fcntl` locks and an owner-only RAM filesystem
+    inside an isolated network namespace. Restored JSON remained unchanged
+    and RAM cleanup was independently verified.
+  - No network requests, scheduler jobs, workers or production environment
+    credentials were used. One urllib3 import-time IPv6 capability probe was
+    blocked before socket creation and counted separately. Temporary
+    process-only keys allowed startup without retrieving production keys.
+  - This does **not** verify customer login, provider readiness, integration-token
+    decryption, independent recovery-key custody, or startup of later commits.
+    The operator retains the sanitized receipts
+    `retainai-onedrive-backup-proof-20261118.json` and
+    `retain-app-restore-production-proof-20261118.json`; archive data, private
+    account identifiers and credentials are not included in this repository.
+  - This recovery point contains `automations_state.json`. The lazily created
+    `lead_reminder_state.json` and `automatic_email_dispatch.json` were absent.
+    It also predates the owner reminder preference introduced in PR86
+    (`6319addfde19dd77cecafe32a5af31a2f417a4a2`). Do not treat absent state as
+    permission to send or fabricate delivery markers during restoration.
 
 ## Restoring production (only in a real data loss)
 
@@ -115,21 +163,39 @@ archive checksum. Compare the counts with the Owner Console. Then delete the
 3. Copy the archive's files back to `DATA_ROOT` (`/var/retainai`):
    `retainai.db` at the root, and `json/*.json` as `*.json` at the root. This
    needs owner access to the service's shell through the Render dashboard.
-4. Make sure `DATA_ENCRYPTION_KEY` is the key that was in use when the backup
-   was made, restart the service, sign in, and check contacts and settings.
-   Then set `RUN_SCHEDULER=1` again.
+4. Restore the original `DATA_ENCRYPTION_KEY` and any required
+   `PREVIOUS_DATA_ENCRYPTION_KEY` through the authorized secret-management path.
+   Restart with `RUN_SCHEDULER=0`, sign in, and check contacts, settings and
+   required encrypted integrations. A readable database does not prove that
+   its encrypted tokens can be recovered.
+5. Before enabling any background sending, reconcile `email_preferences.json`,
+   `lead_reminder_state.json`, `automatic_email_dispatch.json` and
+   `automations_state.json` with surviving newer state and provider history,
+   including attempts after the archive's recovery point. Preserve pending or
+   uncertain claims and quarantined history; do not clear them to force retries.
+   Missing reminder preferences default to enabled, so restore the owner's
+   current choice explicitly. See [owner reminder recovery behavior](LEAD_REMINDER_FREQUENCY.md).
+6. Set `RUN_SCHEDULER=1` only after the recovered preferences and delivery state
+   are consistent and required application checks pass. Leave scheduling
+   disabled if delivery history or consent/preferences remain uncertain.
 
 Do not restore by any route that skips owner MFA or weakens access.
 
-## Blockers needing owner credentials (not done by Claude)
+## Remaining recovery and automation gaps
 
-- **Owner Console access worked for the November 7 local copy and drill.**
+- **Owner Console access was used for the verified November 18 recovery point.**
   Future copies still require owner MFA or authorized service-shell access.
   Do not bypass MFA or weaken SSH authentication to automate them.
-- **Automatic off-site copies** (for example to object storage) would need the
-  owner to choose a storage provider and create a write-only credential for it.
-  Nothing was chosen or bought. Until then the weekly manual copy above is the
-  off-Render backup.
-- **Encryption keys:** the owner must confirm `DATA_ENCRYPTION_KEY` (and any
-  previous key) is stored in their password manager. It is visible only to the
-  owner in Render's environment settings.
+- **Unattended source retrieval is the missing component.** The encrypted
+  destination, local sealing key and local verifier already exist. Backup
+  endpoints require an authenticated, MFA-assured owner session; no working
+  noninteractive server-download route has been established. The previously
+  tested SSH key was rejected. The existing OneDrive client can carry encrypted
+  files once captured, but neither sync nor the weekly verification task makes
+  capture unattended. Do not extract browser tokens or weaken MFA/SSH checks.
+- **Independent key custody and token recovery remain unverified.** Confirm
+  separate password-manager custody of both the outer archive recovery
+  passphrase and the original production `DATA_ENCRYPTION_KEY` (plus any required
+  previous key), accessible without this computer/Windows account. A working
+  local DPAPI envelope and a private cloud archive do not establish that
+  independence. No production encryption key was retrieved for the startup drill.
