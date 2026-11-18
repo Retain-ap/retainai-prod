@@ -85,7 +85,9 @@ try {
       const page = await context.newPage();
       page.setDefaultTimeout(15000);
       const errors = [];
-      page.on('pageerror', error => errors.push(error.message));
+      const failedRequests = [];
+      page.on('pageerror', error => errors.push({ message: error.message, stack: error.stack, page: new URL(page.url()).pathname }));
+      page.on('requestfailed', request => { const url = new URL(request.url()); failedRequests.push({ url: url.origin + url.pathname, type: request.resourceType(), error: request.failure()?.errorText }); });
       const row = { engine, layout, checks: [], passed: false };
       report.runs.push(row);
       try {
@@ -132,8 +134,11 @@ try {
         await page.goto(origin + '/app?tab=notifications');
         const toggle = page.getByRole('checkbox', { name: 'Email me when leads need attention', exact: true });
         await toggle.waitFor();
-        await toggle.uncheck();
+        // This server-confirmed control deliberately retains its checked state
+        // until the save returns. Playwright's uncheck() asserts synchronously.
+        await toggle.click();
         await page.getByText('Follow-up reminder emails turned off.', { exact: true }).waitFor();
+        assert.equal(await toggle.isChecked(), false);
         await page.reload();
         await toggle.waitFor();
         await page.waitForFunction(() => Array.from(document.querySelectorAll('label')).some(label => label.textContent.includes('Email me when leads need attention') && label.querySelector('input')?.disabled === false));
@@ -163,6 +168,7 @@ try {
       } catch (error) {
         row.error = String(error.message).slice(0, 1600);
         row.pageErrors = errors;
+        row.failedRequests = failedRequests;
         await page.screenshot({ path: path.join(output, engine + '-' + layout + '-failure.png'), fullPage: true }).catch(() => {});
       } finally { await context.close(); }
     }
