@@ -2063,7 +2063,7 @@ BUSINESS_TYPE_INTERVALS = {
 
 def send_warning_summary_email(user_email, warning_leads, interval):
     if not warning_leads:
-        return
+        return False
     users = load_users()
     user = users.get(user_email, {}) if isinstance(users, dict) else {}
     user_name = user.get("name") or user_email.split("@")[0].capitalize()
@@ -2102,7 +2102,7 @@ def send_warning_summary_email(user_email, warning_leads, interval):
         "interval": interval,
         "count": len(warning_leads)
     }
-    send_email_with_template(
+    return send_email_with_template(
         to_email=user_email,
         template_id=SG_TEMPLATE_FOLLOWUP_USER,
         dynamic_data=dynamic_data,
@@ -2216,40 +2216,39 @@ def send_post_appointment_update_prompts():
 
 def check_for_lead_reminders():
     print("[Scheduler] Checking for leads needing follow-up...")
-    leads_by_user = load_leads() or {}
-    users_by_email = load_users() or {}
-    now = datetime.datetime.utcnow()
+    import lead_reminders
 
-    for user_email, leads in (leads_by_user.items() if isinstance(leads_by_user, dict) else []):
-        user = users_by_email.get(user_email, {}) if isinstance(users_by_email, dict) else {}
-        business_type = (user.get("businessType") or user.get("business") or "").lower().strip()
-        interval = BUSINESS_TYPE_INTERVALS.get(business_type, 14)
+    users = load_users() or {}
+    if not isinstance(users, dict):
+        return
+    path = os.path.join(DATA_ROOT, lead_reminders.STATE_FILE)
+    for user_email in users:
+        if not isinstance(user_email, str) or user_email.startswith("user::"):
+            continue
+        # Fresh authorization and contacts are checked inside the delivery lock.
+        def prepare(now):
+            current_users = load_users() or {}
+            role, workspace, owner, _ = _resolve_org_and_role(user_email, current_users)
+            if role != "owner" or workspace != user_email or not _account_has_access(owner):
+                return None
+            profile = load_user_profile(user_email) or {}
+            zone = lead_reminders.reminder_timezone(profile, owner)
+            if not lead_reminders.daytime(now, zone) or in_quiet_hours(now, {**profile, "timezone": str(zone)}):
+                return None
+            business_type = (owner.get("businessType") or owner.get("business") or "").lower().strip()
+            interval = BUSINESS_TYPE_INTERVALS.get(business_type, 14)
+            return lead_reminders.overdue_leads(load_user_leads(user_email), interval, now), interval, zone
 
-        warning_leads = []
-        for lead in (leads or []):
-            last_contacted = lead.get("last_contacted") or lead.get("createdAt")
-            if not last_contacted:
-                continue
-            try:
-                last_dt = datetime.datetime.fromisoformat(last_contacted.replace("Z", ""))
-                days_since = (now - last_dt).days
-            except Exception:
-                days_since = 0
-
-            if interval <= days_since <= interval + 2:
-                lead["days_since_contact"] = days_since
-                warning_leads.append(lead)
-
-        if warning_leads:
-            try:
-                send_warning_summary_email(user_email, warning_leads, interval)
-                log_notification(
-                    user_email,
-                    "Leads needing follow-up",
-                    f"{len(warning_leads)} leads require follow-up: " + ", ".join(l.get("name","") for l in warning_leads)
-                )
-            except Exception as e:
-                print("[WARN] lead reminder email/log error:", e)
+        try:
+            sent = lead_reminders.send_if_due(
+                path, user_email, now=lambda: datetime.datetime.now(datetime.timezone.utc), prepare=prepare,
+                send=lambda leads, interval: send_warning_summary_email(user_email, leads, interval),
+            )
+            if sent:
+                log_notification(user_email, "Leads needing follow-up", "Your follow-up briefing was accepted for email delivery.")
+        except Exception:
+            # Keep provider details and customer data out of scheduler errors.
+            app.logger.warning("[LEAD REMINDERS] Briefing could not be completed; durable duplicate protection retained.")
 
 def send_birthday_email(lead_email, lead_name, business_name, unsubscribe_url=""):
     return send_email_with_template(
@@ -10732,7 +10731,7 @@ def _start_scheduler_once() -> bool:
                 id="lead_reminders",
                 func=check_for_lead_reminders,
                 trigger="interval",
-                hours=6,
+                minutes=15,
                 replace_existing=True
             )
 
