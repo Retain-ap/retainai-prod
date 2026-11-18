@@ -1,12 +1,13 @@
+import { vi } from "vitest";
 import React from "react";
 import { fireEvent, render, screen } from "@testing-library/react";
 import { MemoryRouter } from "react-router";
 import Login from "./Login";
 
-jest.mock("@react-oauth/google", () => ({ GoogleLogin: () => null }));
+vi.mock("@react-oauth/google", () => ({ GoogleLogin: () => null }));
 
 beforeEach(() => {
-  global.fetch = jest.fn(async () => ({ ok: false, status: 401, json: async () => ({}) }));
+  global.fetch = vi.fn(async () => ({ ok: false, status: 401, json: async () => ({}) }));
 });
 afterEach(() => { delete global.fetch; });
 

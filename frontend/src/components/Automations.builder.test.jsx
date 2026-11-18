@@ -1,15 +1,16 @@
+import { vi } from "vitest";
 import React from "react";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import Automations from "./Automations";
 import api from "./AutomationsService";
 
-jest.mock("./AutomationsService", () => ({
+vi.mock("./AutomationsService", () => ({
   __esModule: true,
   default: Object.fromEntries([
     "getTemplates", "getProfile", "getWATemplates", "getHealth", "listFlows",
     "getHistory", "getDashboard", "createFlow", "updateFlow", "enableFlow",
     "dryRun", "executeNow",
-  ].map((name) => [name, jest.fn()])),
+  ].map((name) => [name, vi.fn()])),
 }));
 
 const user = { email: "owner@example.com" };
@@ -24,7 +25,7 @@ const savedFlow = (overrides = {}) => ({
 let flows;
 
 beforeEach(() => {
-  jest.resetAllMocks();
+  vi.resetAllMocks();
   localStorage.clear();
   flows = [];
   api.getTemplates.mockResolvedValue({ templates: [] });
@@ -53,7 +54,7 @@ beforeEach(() => {
   api.executeNow.mockResolvedValue({ did: [] });
 });
 
-afterEach(() => jest.restoreAllMocks());
+afterEach(() => vi.restoreAllMocks());
 
 test.each([
   ["scheduler_status_unknown", "Scheduler status is unavailable."],
@@ -85,9 +86,22 @@ async function openSaved(flow = savedFlow()) {
   fireEvent.click(await screen.findByRole("button", { name: "Edit" }));
 }
 
+// jsdom versions differ on whitespace between the title and description.
+// Match both complete strings so the migrated selector remains unambiguous.
+const actionNames = {
+  "Send email": /^Send email\s*Write a message for the customer\.$/,
+  "Send WhatsApp": /^Send WhatsApp\s*Send a message or an approved template\.$/,
+  "Wait": /^Wait\s*Leave time before the next action\.$/,
+  "Draft with AI": /^Draft with AI\s*Prepare a draft for a later message step\.$/,
+  "Check for no reply": /^Check for no reply\s*Add actions that run if there is still no reply\.$/,
+  "Check for no booking": /^Check for no booking\s*Add actions that run if no appointment is booked\.$/,
+  "Notify owner": /^Notify owner\s*Send the owner a reminder to follow up\.$/,
+  "Add tag": /^Add tag\s*Keep the customer's record organized\.$/,
+};
+
 function addStep(label) {
   fireEvent.click(screen.getByRole("button", { name: "Add step" }));
-  fireEvent.click(screen.getByRole("button", { name: new RegExp(`^${label} `) }));
+  fireEvent.click(screen.getByRole("button", { name: actionNames[label] }));
 }
 
 test("saves an incomplete draft without publishing or executing it", async () => {
@@ -158,7 +172,7 @@ test("offers every action and retains nested data while reordering and editing a
   await openSaved(original);
   fireEvent.click(screen.getByRole("button", { name: "Add step" }));
   for (const label of ["Send email", "Send WhatsApp", "Wait", "Draft with AI", "Check for no reply", "Check for no booking", "Notify owner", "Add tag"]) {
-    expect(screen.getByRole("button", { name: new RegExp(`^${label} `) })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: actionNames[label] })).toBeInTheDocument();
   }
   fireEvent.click(screen.getByRole("button", { name: /^Edit step 2:/ }));
   fireEvent.click(screen.getByRole("button", { name: "Move step up" }));
@@ -277,7 +291,7 @@ test("preview remains non-sending and live testing still requires confirmation",
   await screen.findByText("No actions would run.");
   expect(api.dryRun).toHaveBeenCalledWith(user.email, expect.objectContaining({ id: "flow-1" }), { lead_email: "customer@example.test" });
   expect(api.executeNow).not.toHaveBeenCalled();
-  const confirm = jest.spyOn(window, "confirm").mockReturnValue(false);
+  const confirm = vi.spyOn(window, "confirm").mockReturnValue(false);
   fireEvent.click(screen.getByRole("button", { name: "Send Live Test" }));
   expect(confirm).toHaveBeenCalledWith(expect.stringContaining("customer@example.test"));
   expect(api.executeNow).not.toHaveBeenCalled();

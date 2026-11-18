@@ -1,18 +1,19 @@
+import { vi } from "vitest";
 import React from "react";
 import { render, screen, waitFor } from "@testing-library/react";
 import Automations from "./Automations";
 import api from "./AutomationsService";
 
-jest.mock("./AutomationsService", () => ({
+vi.mock("./AutomationsService", () => ({
   __esModule: true,
   default: {
-    getTemplates: jest.fn(),
-    getProfile: jest.fn(),
-    getWATemplates: jest.fn(),
-    getHealth: jest.fn(),
-    listFlows: jest.fn(),
-    getHistory: jest.fn(),
-    getDashboard: jest.fn(),
+    getTemplates: vi.fn(),
+    getProfile: vi.fn(),
+    getWATemplates: vi.fn(),
+    getHealth: vi.fn(),
+    listFlows: vi.fn(),
+    getHistory: vi.fn(),
+    getDashboard: vi.fn(),
   },
 }));
 

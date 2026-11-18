@@ -1,3 +1,4 @@
+import { vi } from "vitest";
 import React from "react";
 import { fireEvent, render, screen } from "@testing-library/react";
 import NotificationsCenter from "./NotificationsCenter";
@@ -11,7 +12,7 @@ function jsonResponse(body, status = 200) {
 }
 
 test("uses workspace identity and rolls back a failed optimistic read", async () => {
-  global.fetch = jest
+  global.fetch = vi
     .fn()
     .mockResolvedValueOnce(
       jsonResponse({

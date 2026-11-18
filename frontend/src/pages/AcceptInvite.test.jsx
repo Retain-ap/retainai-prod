@@ -1,3 +1,4 @@
+import { vi } from "vitest";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import AcceptInvite, { getInvitePasswordError } from "./AcceptInvite";
 
@@ -11,7 +12,7 @@ function jsonResponse(data, ok = true) {
 describe("AcceptInvite", () => {
   beforeEach(() => {
     window.history.pushState({}, "", "/accept-invite?token=invite-token");
-    global.fetch = jest
+    global.fetch = vi
       .fn()
       .mockResolvedValueOnce(
         jsonResponse({
@@ -26,7 +27,7 @@ describe("AcceptInvite", () => {
   });
 
   afterEach(() => {
-    jest.restoreAllMocks();
+    vi.restoreAllMocks();
   });
 
   test("requires a strong password", () => {

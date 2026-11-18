@@ -1,3 +1,4 @@
+import { vi } from "vitest";
 import { applyLeadChanges, conflictMessage, diffLeads, rebaseOnReload, saveLeadChanges } from "./leadSync";
 
 // A stand-in for GET/POST /api/leads with the same contract as the backend,
@@ -60,7 +61,7 @@ test("never sends an unversioned save: loads a fresh list first, or fails withou
 
 test("a 428 from the server reloads the list and retries with a revision", async () => {
   const server = fakeServer([ana]);
-  const send = jest.fn()
+  const send = vi.fn()
     .mockResolvedValueOnce({ status: 428, data: { ok: false, code: "revision_required" } })
     .mockImplementation(server.send);
   await saveLeadChanges({ send, load: server.load, server: { revision: "stale-but-present", leads: [ana] }, changeSets: [diffLeads([ana], [ana, ben])] });
@@ -156,9 +157,9 @@ test("gives up with a clear error if the list keeps changing", async () => {
 });
 
 test("createLeadsApi + saveFreshLeadChanges: loads first, patches one contact, sends the revision", async () => {
-  const { createLeadsApi, leadPatchChanges, saveFreshLeadChanges } = jest.requireActual("./leadSync");
+  const { createLeadsApi, leadPatchChanges, saveFreshLeadChanges } = await vi.importActual("./leadSync");
   const requests = [];
-  const fetchImpl = jest.fn(async (url, options) => {
+  const fetchImpl = vi.fn(async (url, options) => {
     requests.push({ url, method: options.method, body: options.body ? JSON.parse(options.body) : null, headers: options.headers });
     if (options.method === "GET") return { ok: true, status: 200, json: async () => ({ leads: [{ ...ana, name: "Newer" }, cara], revision: "r7" }) };
     const body = JSON.parse(options.body);
@@ -172,8 +173,8 @@ test("createLeadsApi + saveFreshLeadChanges: loads first, patches one contact, s
   expect(result.leads).toEqual(requests[1].body.leads);
 });
 
-test("a field patch never recreates a contact deleted elsewhere", () => {
-  const { leadPatchChanges } = jest.requireActual("./leadSync");
+test("a field patch never recreates a contact deleted elsewhere", async () => {
+  const { leadPatchChanges } = await vi.importActual("./leadSync");
   const { leads, conflicts } = applyLeadChanges([cara], leadPatchChanges(ana, { notes: "Hi" }));
   expect(leads).toEqual([cara]);
   expect(conflicts).toEqual([{ key: "a", name: "Ana", reason: "missing" }]);

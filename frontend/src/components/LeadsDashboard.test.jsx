@@ -1,3 +1,4 @@
+import { vi } from "vitest";
 import React from "react";
 import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import LeadsDashboard from "./LeadsDashboard";
@@ -17,7 +18,7 @@ async function openChooser(onImportLeads) {
 }
 
 test("Import Leads asks for a source before navigating or authorizing", async () => {
-  const onImportLeads = jest.fn();
+  const onImportLeads = vi.fn();
   const dialog = await openChooser(onImportLeads);
   for (const label of ["Apple Contacts", "Google Contacts", "WhatsApp contacts", "Android Contacts", "Outlook / Microsoft People", "Google Sheets", "Microsoft Excel", "HubSpot", "Salesforce", "Pipedrive", "Zoho CRM", "Another service or file"]) {
     expect(within(dialog).getByRole("button", { name: label, exact: true })).toBeInTheDocument();
@@ -31,7 +32,7 @@ test("Import Leads asks for a source before navigating or authorizing", async ()
 });
 
 test("Escape cancels without navigating and returns focus to Import Leads", async () => {
-  const onImportLeads = jest.fn();
+  const onImportLeads = vi.fn();
   const dialog = await openChooser(onImportLeads);
   fireEvent.keyDown(dialog, { key: "Escape", code: "Escape" });
   await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
@@ -41,7 +42,7 @@ test("Escape cancels without navigating and returns focus to Import Leads", asyn
 
 test("without a handler a choice still opens its import guide, never OAuth", async () => {
   const original = window.location;
-  const assign = jest.fn();
+  const assign = vi.fn();
   delete window.location;
   window.location = { ...original, assign, href: original.href };
   try {

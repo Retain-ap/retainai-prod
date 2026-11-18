@@ -1,8 +1,9 @@
+import { vi } from "vitest";
 import { HELD_DRAFT_MAX_CHARS, consumeHeldDraft, heldDraftScope, holdDraft, peekHeldDraft } from "./businessProfile";
 
 afterEach(() => {
   sessionStorage.clear();
-  jest.restoreAllMocks();
+  vi.restoreAllMocks();
 });
 
 test("scopes name the workspace and the signed-in person, and refuse unknown parts", () => {
@@ -44,7 +45,7 @@ test("peeking keeps a held draft, and consuming leaves a newer draft alone", () 
 test("an expired held draft is not restored", () => {
   const scope = heldDraftScope("ai-studio", { email: "owner@example.com" });
   const now = Date.now();
-  jest.spyOn(Date, "now").mockReturnValue(now - 13 * 60 * 60 * 1000);
+  vi.spyOn(Date, "now").mockReturnValue(now - 13 * 60 * 60 * 1000);
   holdDraft(scope, { draft: "old" });
   Date.now.mockReturnValue(now);
   expect(peekHeldDraft(scope)).toBeNull();
