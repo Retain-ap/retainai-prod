@@ -9807,24 +9807,24 @@ def _bf_ensure_files():
 
 @automations_bp.route("/health", methods=["GET"])
 def automations_health():
+    from scheduler_health import scheduler_lock_held, scheduler_status
+
     current_scheduler = globals().get("scheduler")
     enabled = bool(globals().get("SCHEDULER_ENABLED", False))
-    running = bool(current_scheduler and getattr(current_scheduler, "running", False))
+    local_running = bool(current_scheduler and getattr(current_scheduler, "running", False))
+    owner_present = scheduler_lock_held(_scheduler_process_lock_path()) if enabled and not local_running else local_running
+    result = scheduler_status(enabled, local_running, owner_present, bool(app.config.get("BOOTSTRAP_DONE")))
     next_run = None
-    if running:
+    if enabled and local_running:
         try:
             job = current_scheduler.get_job("automations_tick")
             next_run = job.next_run_time.isoformat() if job and job.next_run_time else None
         except Exception:
             next_run = None
-    return jsonify({
-        "ok": enabled and running,
-        "status": "operational" if enabled and running else "scheduler_offline",
-        "scheduler_enabled": enabled,
-        "scheduler_running": running,
-        "evaluation_interval_minutes": 10,
-        "next_evaluation": next_run,
-    })
+    # A different worker's exact schedule is not visible in this process.
+    result["next_evaluation"] = next_run
+    return jsonify(result)
+
 
 def _automation_history_for_user(user: str):
     flows = load_user_flows(user)
@@ -10801,16 +10801,17 @@ _SCHEDULER_BOOTSTRAP_LOCK = threading.Lock()
 _SCHEDULER_PROCESS_LOCK = None
 
 
+def _scheduler_process_lock_path():
+    return str(os.getenv("SCHEDULER_LOCK_FILE") or os.path.join(DATA_ROOT, ".retainai-scheduler.lock"))
+
+
 def _acquire_scheduler_process_lock() -> bool:
     """Hold an OS lock for the life of the one scheduler-owning process."""
     global _SCHEDULER_PROCESS_LOCK
     if _SCHEDULER_PROCESS_LOCK is not None:
         return True
 
-    lock_path = str(
-        os.getenv("SCHEDULER_LOCK_FILE")
-        or os.path.join(DATA_ROOT, ".retainai-scheduler.lock")
-    )
+    lock_path = _scheduler_process_lock_path()
     os.makedirs(os.path.dirname(os.path.abspath(lock_path)), exist_ok=True)
     handle = open(lock_path, "a+b")
     try:

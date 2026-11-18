@@ -2084,9 +2084,18 @@ export default function Automations({ user }) {
 
         {notice && <div className="automation-notice" role="status">{notice}</div>}
 
-        {health && !health.ok ? (
+        {health?.status === "scheduler_status_unknown" ? (
           <div className="automation-health automation-health--warning">
-            <strong>Automatic sending is paused.</strong> Active automations will not run until the service is enabled. Contact owner@retainai.ca for help.
+            <strong>Scheduler status is unavailable.</strong> We could not verify automatic scheduling. Refresh to check again, or contact owner@retainai.ca for help.
+          </div>
+        ) : health?.status === "scheduler_waiting" ? (
+          <div className="automation-health automation-health--warning">
+            <strong>Automatic scheduling is starting.</strong> Refresh shortly to check its status.
+          </div>
+        ) : health && !health.ok ? (
+          <div className="automation-health automation-health--warning">
+            <strong>{health.scheduler_enabled ? "Automatic scheduling needs attention." : "Automatic sending is paused."}</strong>{" "}
+            {health.scheduler_enabled ? "We could not confirm an active scheduler. Contact owner@retainai.ca for help." : "Active automations will not run until the service is enabled. Contact owner@retainai.ca for help."}
           </div>
         ) : health?.ok ? (
           <div className="automation-health automation-health--ok">

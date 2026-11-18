@@ -55,6 +55,25 @@ beforeEach(() => {
 
 afterEach(() => jest.restoreAllMocks());
 
+test.each([
+  ["scheduler_status_unknown", "Scheduler status is unavailable."],
+  ["scheduler_waiting", "Automatic scheduling is starting."],
+  ["scheduler_offline", "Automatic scheduling needs attention."],
+])("distinguishes enabled scheduler state %s from paused", async (status, message) => {
+  api.getHealth.mockResolvedValue({ ok: false, scheduler_enabled: true, status });
+  render(<Automations user={user} />);
+  expect(await screen.findByText(message)).toBeInTheDocument();
+  expect(screen.queryByText("Automatic sending is paused.")).not.toBeInTheDocument();
+  expect(screen.queryByText("Automation engine online.")).not.toBeInTheDocument();
+});
+
+test("recognizes the scheduler owned by another worker", async () => {
+  api.getHealth.mockResolvedValue({ ok: true, scheduler_enabled: true, status: "owned_by_another_worker" });
+  render(<Automations user={user} />);
+  expect(await screen.findByText("Automation engine online.")).toBeInTheDocument();
+  expect(screen.queryByText("Automatic sending is paused.")).not.toBeInTheDocument();
+});
+
 async function openNew() {
   render(<Automations user={user} />);
   fireEvent.click(await screen.findByRole("button", { name: "New Automation" }));
