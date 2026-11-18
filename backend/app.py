@@ -22,6 +22,7 @@ from email.utils import parseaddr
 import stripe
 import billing_checkout_policy as checkout_policy
 import dispatch_safety
+import automation_state
 import requests as pyrequests
 from email import policy
 from email.parser import BytesParser
@@ -2203,7 +2204,7 @@ def send_post_appointment_update_prompts():
                 latest_time = _parse_appointment_datetime(latest.get("appointment_time"), latest.get("timezone") or workspace_timezone).astimezone(datetime.timezone.utc)
                 if latest_time != appt_dt:
                     continue
-                sent_now = dispatch_safety.dispatch_once(
+                dispatch_safety.dispatch_once(
                     FILE_EMAIL_DISPATCH,
                     ["post-appointment", user_email, str(appt["id"]), appt_dt.isoformat()],
                     lambda: send_post_appointment_update_email(
@@ -2214,15 +2215,8 @@ def send_post_appointment_update_prompts():
                         appointment_time=appointment_time,
                         timezone_name=appointment_timezone,
                     ),
+                    is_eligible=lambda: _account_has_access((load_users() or {}).get(user_email, {})),
                 )
-                if sent_now:
-                    log_notification(
-                        user_email,
-                        f"Post-appointment update reminder sent for {lead_name}",
-                        f"We emailed you to update notes for your appointment with {lead_name}.",
-                        appt.get("lead_email")
-                    )
-
             except Exception as e:
                 print(f"[Scheduler] post-appointment update email error for {user_email}: {e}")
     # Delivery claims live separately from appointments. Never write this old
@@ -8617,8 +8611,12 @@ def save_user_flows(user_email: str, flows: List[Dict[str, Any]]):
     write_json(FILE_AUTOMATIONS, db)
 
 def load_state() -> Dict[str, Any]:
-    # A damaged state file must not look like a new set of unsent runs.
-    return dispatch_safety.read_state(FILE_STATE)
+    # Legacy progress is assigned only to an unambiguous workspace. Conflicted
+    # flow IDs stay quarantined and cannot start fresh deliveries.
+    return automation_state.scoped_state(
+        dispatch_safety.read_state(FILE_STATE),
+        read_json(FILE_AUTOMATIONS, {"users": {}}) or {"users": {}},
+    )
 
 def save_state(state: Dict[str, Any]):
     ensure_files()
@@ -8632,6 +8630,11 @@ def _serialized_automation_state(view):
             if not acquired:
                 return jsonify({"ok": False, "error": "An automation run is already in progress. Try again after it finishes.", "in_progress": True}), 409
             try:
+                # Freeze legacy ownership before a flow is created/deleted.
+                raw = dispatch_safety.read_state(FILE_STATE)
+                scoped = automation_state.scoped_state(raw, read_json(FILE_AUTOMATIONS, {"users": {}}) or {"users": {}})
+                if scoped is not raw:
+                    save_state(scoped)
                 return view(*args, **kwargs)
             except (OSError, ValueError):
                 app.logger.exception("[AUTOMATIONS] state update failed")
@@ -9059,8 +9062,10 @@ def send_whatsapp_with_window(flow, step, lead, run, caps, profile) -> bool:
         return True
     raise RuntimeError("WhatsApp rejected the approved template message.")
 
-def get_run(state: Dict[str, Any], flow_id: str, lead_key: str) -> Dict[str, Any]:
-    return state.setdefault(flow_id, {}).setdefault(lead_key, {
+def get_run(state: Dict[str, Any], workspace: str, flow_id: str, lead_key: str) -> Dict[str, Any]:
+    if automation_state.legacy_held(state, flow_id):
+        raise dispatch_safety.DeliveryHeld(automation_state.LEGACY_HELD_REASON)
+    return automation_state.workspace_state(state, workspace).setdefault(str(flow_id), {}).setdefault(lead_key, {
         "step": 0,
         "created_at": now_utc().isoformat(),
         "last_step_at": None,
@@ -9318,7 +9323,10 @@ def execute_step(flow: Dict[str, Any], step: Dict[str, Any], lead: Dict[str, Any
                 owner_email=owner_email, unsubscribe_url=unsubscribe_url,
             )
         if delivery_key is not None:
-            sent_now = dispatch_safety.dispatch_once(FILE_EMAIL_DISPATCH, delivery_key, deliver)
+            sent_now = dispatch_safety.dispatch_once(
+                FILE_EMAIL_DISPATCH, delivery_key, deliver,
+                is_eligible=lambda: _account_has_access((load_users() or {}).get(owner_email, {})),
+            )
             if not sent_now:
                 # The provider accepted this step before a crash/state-write
                 # failure. Advance it without resending or duplicating history.
@@ -9338,17 +9346,21 @@ def execute_step(flow: Dict[str, Any], step: Dict[str, Any], lead: Dict[str, Any
                 channel="email",
                 source="automation_email",
             )
-            add_notification(
-                user_email=(lead.get("owner") or flow.get("owner") or "").lower(),
-                subject="Automation email sent",
-                message=f"Automation sent an email to {lead.get('name') or email}.",
-                channel="automation",
-                lead_email=email,
-                extra={
-                    "lead_name": lead.get("name") or lead.get("first_name") or "",
-                    "type": "automation",
-                },
-            )
+            # Automatic runs already retain history under the run-state
+            # purge lock. Avoid recreating a separate notification after
+            # account deletion has already scrubbed that earlier store.
+            if delivery_key is None:
+                add_notification(
+                    user_email=(lead.get("owner") or flow.get("owner") or "").lower(),
+                    subject="Automation email sent",
+                    message=f"Automation sent an email to {lead.get('name') or email}.",
+                    channel="automation",
+                    lead_email=email,
+                    extra={
+                        "lead_name": lead.get("name") or lead.get("first_name") or "",
+                        "type": "automation",
+                    },
+                )
             _record_automation_action(
                 run,
                 "send_email",
@@ -9420,7 +9432,10 @@ def _engine_tick_locked(workspace=None):
     try:
         ensure_files()
         flows_db = read_json(FILE_AUTOMATIONS, {"users": {}}) or {"users": {}}
-        state = load_state() or {}
+        state = automation_state.scoped_state(load_state(), flows_db)
+        # Persist migration before the first provider attempt. Later flow edits
+        # cannot reassign legacy progress to another workspace.
+        save_state(state)
         leads_by_user = load_leads() or {}
         appointments_by_user = load_appointments() or {}
 
@@ -9435,6 +9450,8 @@ def _engine_tick_locked(workspace=None):
             if workspace is not None and str(user).strip().lower() != workspace:
                 continue
             try:
+                if not _account_has_access((load_users() or {}).get(user, {})):
+                    continue
                 profile = load_user_profile(user)
                 user_leads = leads_by_user.get(user, []) or []
                 user_appointments = appointments_by_user.get(user, []) or []
@@ -9451,7 +9468,9 @@ def _engine_tick_locked(workspace=None):
                         if not flow.get("enabled", False):
                             continue
 
-                        flow_id = flow.get("id") or str(uuid4())
+                        flow_id = flow.get("id")
+                        if not flow_id or automation_state.legacy_held(state, flow_id):
+                            continue
                         steps = flow.get("steps", []) or []
                         caps = flow.get("caps", {"per_lead_per_day": 1, "respect_quiet_hours": True}) or {}
                         trigger = flow.get("trigger", {}) or {}
@@ -9497,14 +9516,14 @@ def _engine_tick_locked(workspace=None):
                                     continue
 
                                 lead_key = str(lead_id)
-                                run = get_run(state, flow_id, lead_key)
+                                run = get_run(state, user, flow_id, lead_key)
 
                                 if run.get("done"):
                                     continue
 
                                 if run.get("step", 0) == 0:
                                     if not trigger_met(trigger, lead):
-                                        state.setdefault(flow_id, {}).pop(lead_key, None)
+                                        automation_state.workspace_state(state, user).setdefault(str(flow_id), {}).pop(lead_key, None)
                                         continue
 
                                 if should_auto_stop(flow, lead, run):
@@ -9746,7 +9765,7 @@ def _automation_history_for_user(user: str):
     leads = {str(lead.get("id")): lead for lead in (load_leads().get(user, []) or []) if isinstance(lead, dict)}
     state = load_state()
     rows = []
-    for flow_id, runs in (state.items() if isinstance(state, dict) else []):
+    for flow_id, runs in automation_state.workspace_state(state, user).items():
         flow = flow_map.get(str(flow_id))
         if not flow or not isinstance(runs, dict):
             continue
@@ -9765,10 +9784,24 @@ def _automation_history_for_user(user: str):
                 "replies_received": len([event for event in events if event.get("type") == "reply"]),
                 "failure_reason": run.get("error") or "", "events": events[-50:],
             })
+    for flow_id, flow in flow_map.items():
+        if automation_state.legacy_held(state, flow_id):
+            # Only the hold is visible. Quarantined history may belong to
+            # someone else, so no lead details or original events are exposed.
+            rows.append({
+                "id": f"{flow_id}:legacy-held", "flow_id": flow_id,
+                "flow_name": flow.get("name") or "Untitled flow", "lead_id": "",
+                "lead_name": "Legacy run requires review", "lead_email": "",
+                "status": "failed", "delivery_held": True, "current_step": 0,
+                "messages_sent": 0, "replies_received": 0, "events": [],
+                "failure_reason": automation_state.LEGACY_HELD_REASON,
+                "created_at": None, "last_run": None, "completed_at": None,
+            })
     rows.sort(key=lambda row: str(row.get("last_run") or ""), reverse=True)
     return rows
 
 @automations_bp.get("/dashboard")
+@_serialized_automation_state
 def automation_dashboard():
     user = user_from_request()
     flows = load_user_flows(user)
@@ -9785,6 +9818,7 @@ def automation_dashboard():
     })
 
 @automations_bp.get("/history")
+@_serialized_automation_state
 def automation_history():
     user = user_from_request()
     rows = _automation_history_for_user(user)
@@ -9804,9 +9838,14 @@ def retry_automation_run(flow_id, lead_id):
     if not any(str(flow.get("id")) == str(flow_id) for flow in load_user_flows(user)):
         return jsonify({"error": "Flow not found."}), 404
     state = load_state()
-    run = (state.get(str(flow_id)) or {}).get(str(lead_id))
+    if automation_state.legacy_held(state, flow_id):
+        return jsonify({"ok": False, "delivery_held": True, "error": automation_state.LEGACY_HELD_REASON}), 409
+    run = (automation_state.workspace_state(state, user).get(str(flow_id)) or {}).get(str(lead_id))
     if not isinstance(run, dict):
         return jsonify({"error": "Run not found."}), 404
+    reason = dispatch_safety.held_reason(FILE_EMAIL_DISPATCH, user, ["automation", user, str(flow_id), str(lead_id)])
+    if reason:
+        return jsonify({"ok": False, "delivery_held": True, "error": reason}), 409
     run["error"] = ""; run["done"] = False
     automation_event(run, "retry", "Run queued for retry")
     save_state(state)
@@ -10510,6 +10549,7 @@ def list_wa_templates():
     })
 
 @automations_bp.route("/", methods=["GET"])
+@_serialized_automation_state
 def list_flows_route():
     user = user_from_request()
     flows = [_normalize_flow_for_user(f, user) for f in load_user_flows(user)]
@@ -10517,6 +10557,7 @@ def list_flows_route():
     return jsonify({"ok": True, "flows": flows})
 
 @automations_bp.route("/", methods=["POST"])
+@_serialized_automation_state
 def create_flow_route():
     user = user_from_request()
     body = request.get_json(force=True) or {}
@@ -10535,6 +10576,7 @@ def create_flow_route():
     return jsonify({"ok": True, "flow": flow})
 
 @automations_bp.route("/<flow_id>", methods=["PUT"])
+@_serialized_automation_state
 def update_flow_route(flow_id):
     user = user_from_request()
     body = request.get_json(force=True) or {}
@@ -10562,6 +10604,7 @@ def update_flow_route(flow_id):
     return jsonify({"ok": False, "error": "not_found"}), 404
 
 @automations_bp.route("/enable/<flow_id>", methods=["POST"])
+@_serialized_automation_state
 def enable_flow_route(flow_id):
     user = user_from_request()
     body = request.get_json(force=True) or {}
@@ -10590,13 +10633,15 @@ def enable_flow_route(flow_id):
 def delete_flow_route(flow_id):
     user = user_from_request()
     flows = load_user_flows(user)
-    flows = [f for f in flows if f.get("id") != flow_id]
-    save_user_flows(user, flows)
-
+    if not any(str(f.get("id")) == str(flow_id) for f in flows):
+        return jsonify({"ok": False, "error": "not_found"}), 404
     state = load_state()
-    if flow_id in state:
-      state.pop(flow_id, None)
-      save_state(state)
+    flows = [f for f in flows if str(f.get("id")) != str(flow_id)]
+    save_user_flows(user, flows)
+    scoped = automation_state.workspace_state(state, user)
+    if str(flow_id) in scoped:
+        scoped.pop(str(flow_id), None)
+        save_state(state)
 
     return jsonify({"ok": True})
 

@@ -23,6 +23,7 @@ _WORKSPACE_JSON_FILES = (
     "whatsapp_unmatched.json",
     "automations.json",
     "automations_state.json",
+    "automatic_email_dispatch.json",
     "automation_users.json",
     "subscriptions.json",
     "invites.json",
