@@ -5,6 +5,7 @@ import GoogleCalendarEvents from "./GoogleCalendarEvents";
 import StripeConnectCard from "./StripeConnectCard";
 import WhatsAppHealthCard from "./WhatsAppHealthCard";
 import TwoFactorSettings from "./TwoFactorSettings";
+import LeadReminderEmailSetting from "./LeadReminderEmailSetting";
 import ImportContacts from "./ImportContacts";
 import {
   FaUser,
@@ -1140,10 +1141,15 @@ export default function Settings({
               <div>
                 <span className="settings-page-eyebrow">Stay informed</span>
                 <h2>Notifications</h2>
-                <p>Choose which operational updates RetainAI should prioritize for this device.</p>
+                <p>Manage owner email reminders and separate preferences for this device.</p>
               </div>
             </div>
             <div className="connected-accounts-grid">
+              {capabilities.isWorkspaceOwner && <LeadReminderEmailSetting key={profile.email} ownerEmail={profile.email} />}
+              <div className="account-card-copy" style={{ gridColumn: "1 / -1" }}>
+                <h3>Preferences for this device</h3>
+                <p>These choices do not change email delivery.</p>
+              </div>
               <article className="account-card">
                 <div className="account-card-copy">
                   <h3>Browser alerts</h3>
