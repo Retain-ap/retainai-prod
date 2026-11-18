@@ -80,6 +80,36 @@ class CalendlyAuthError(CalendlyError):
     """The stored authorization no longer works; the owner must reconnect."""
 
 
+def oauth_failure_diagnostic(reason, *, status=0, category=""):
+    """Only fixed labels and an HTTP status may reach callback diagnostics.
+
+    Provider messages, URLs, response bodies and credentials must never be logged.
+    Unknown values are discarded rather than shortened or stringified.
+    """
+    stages = {
+        "provider_error": "provider_callback",
+        "missing_code": "callback_parameters",
+        "not_configured": "configuration",
+        "token_exchange": "token_exchange",
+        "missing_access_token": "token_response",
+        "invalid_owner_uri": "token_response",
+        "store_unavailable": "connection_store",
+        "workspace_gone": "connection_store",
+    }
+    categories = {
+        "invalid_client", "invalid_grant", "invalid_request", "unauthorized_client",
+        "unsupported_grant_type", "invalid_scope", "access_denied", "server_error",
+        "temporarily_unavailable", "network", "unavailable", "rate_limited", "unauthorized",
+    }
+    safe_reason = reason if isinstance(reason, str) and reason in stages else "unknown"
+    return {
+        "stage": stages.get(safe_reason, "unknown"),
+        "reason": safe_reason,
+        "status": status if type(status) is int and 100 <= status <= 599 else 0,
+        "category": category if isinstance(category, str) and category in categories else "other",
+    }
+
+
 class RateLimited(CalendlyError):
     def __init__(self, retry_after):
         super().__init__("Calendly's rate limit was reached.", status=429, code="rate_limited")
@@ -190,7 +220,7 @@ class CalendlyClient:
                 body = {}
             body = body if isinstance(body, dict) else {}
             if response.status_code == 401:
-                raise CalendlyAuthError("Calendly no longer accepts RetainAI's authorization.", status=401, code=str(body.get("title") or "unauthorized"))
+                raise CalendlyAuthError("Calendly no longer accepts RetainAI's authorization.", status=401, code=str(body.get("error") or body.get("title") or "unauthorized"))
             if response.status_code >= 400:
                 raise CalendlyError(str(body.get("message") or body.get("error_description") or "Calendly rejected the request.")[:300],
                                     status=response.status_code, code=str(body.get("error") or body.get("title") or ""))

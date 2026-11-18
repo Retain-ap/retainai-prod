@@ -246,6 +246,70 @@ class CalendlyTests(unittest.TestCase):
         self.assertFalse(os.path.exists(app_calendly.CONNECTIONS_FILE) and self.stored())
         self.assertEqual([c["data"]["token"] for c in self.fake.calls if c["path"] == "/oauth/revoke"], ["refresh-1", "access-1"])
 
+    def test_failed_reconnect_logs_only_safe_upstream_fields_and_preserves_connection(self):
+        client, _, _ = self.connect()
+        before = self.stored()
+        canary = "synthetic-private-provider-detail"
+        for status, category in ((400, "invalid_grant"), (401, "invalid_client"), (429, "rate_limited"), (503, "unavailable")):
+            with self.subTest(status=status):
+                self.fake.push("/oauth/token", Response(status, {"error": category, "title": canary, "error_description": canary}))
+                _, state = self.start(client)
+                previous_calls = len(self.token_calls())
+                with patch.dict(os.environ, CONFIG), self.assertLogs(retainai.app.logger, level="WARNING") as logs:
+                    result = client.get("/api/calendly/oauth/callback", query_string={"code": canary, "state": state})
+                self.assertIn("calendly_error=failed", result.headers["Location"])
+                self.assertEqual(len(self.token_calls()), previous_calls + 1)
+                self.assertEqual(self.stored(), before)
+                output = "\n".join(logs.output)
+                self.assertIn(f"stage=token_exchange reason=token_exchange status={status} category={category}", output)
+                for private in (canary, state, "cal-secret", "refresh-1", "access-1"):
+                    self.assertNotIn(private, output)
+
+    def test_callback_provider_error_and_missing_code_have_distinct_safe_diagnostics(self):
+        client, _, _ = self.connect()
+        before = self.stored()
+        canary = "synthetic-private-provider-detail"
+        for params, expected in (({"error": "server_error", "error_description": canary}, "stage=provider_callback reason=provider_error status=0 category=server_error"), ({}, "stage=callback_parameters reason=missing_code status=0 category=other")):
+            _, state = self.start(client)
+            with patch.dict(os.environ, CONFIG), self.assertLogs(retainai.app.logger, level="WARNING") as logs:
+                result = client.get("/api/calendly/oauth/callback", query_string={"state": state, **params})
+            self.assertIn("calendly_error=failed", result.headers["Location"])
+            self.assertEqual(self.stored(), before)
+            output = "\n".join(logs.output)
+            self.assertIn(expected, output)
+            self.assertNotIn(canary, output)
+            self.assertNotIn(state, output)
+
+    def test_invalid_owner_response_logs_no_tokens_and_retains_revoke_cleanup(self):
+        client, _, _ = self.connect()
+        before = self.stored()
+        canary = "synthetic-private-invalid-owner"
+        self.fake.push("/oauth/token", Response(200, {"owner": canary, "access_token": "new-private-access", "refresh_token": "new-private-refresh", "scope": "scheduled_events:read"}))
+        _, state = self.start(client)
+        with patch.dict(os.environ, CONFIG), self.assertLogs(retainai.app.logger, level="WARNING") as logs:
+            result = client.get("/api/calendly/oauth/callback", query_string={"state": state, "code": "private-code"})
+        self.assertIn("calendly_error=failed", result.headers["Location"])
+        self.assertEqual(self.stored(), before)
+        self.assertEqual([c["data"]["token"] for c in self.fake.calls if c["path"] == "/oauth/revoke"], ["new-private-refresh", "new-private-access"])
+        output = "\n".join(logs.output)
+        self.assertIn("stage=token_response reason=invalid_owner_uri", output)
+        for private in (canary, state, "new-private-refresh", "new-private-access", "private-code"):
+            self.assertNotIn(private, output)
+
+    def test_connection_store_failure_is_distinct_and_preserves_cleanup(self):
+        client, _, _ = self.connect()
+        before = self.stored()
+        _, state = self.start(client)
+        with patch.dict(os.environ, CONFIG), patch.object(app_calendly, "_update", side_effect=app_calendly.vr.EvidenceStoreError("synthetic-private-path")), self.assertLogs(retainai.app.logger, level="WARNING") as logs:
+            result = client.get("/api/calendly/oauth/callback", query_string={"state": state, "code": "private-code"})
+        self.assertIn("calendly_error=failed", result.headers["Location"])
+        self.assertEqual(self.stored(), before)
+        self.assertEqual([c["data"]["token"] for c in self.fake.calls if c["path"] == "/oauth/revoke"], ["refresh-1", "access-1"])
+        output = "\n".join(logs.output)
+        self.assertIn("stage=connection_store reason=store_unavailable", output)
+        for private in ("synthetic-private-path", state, "private-code", "refresh-1", "access-1"):
+            self.assertNotIn(private, output)
+
     def test_one_calendly_user_cannot_be_linked_to_two_workspaces(self):
         self.connect()
         _, _, second = self.connect(self.other)
