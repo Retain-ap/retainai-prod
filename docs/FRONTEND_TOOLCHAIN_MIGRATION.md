@@ -1,10 +1,12 @@
-# Frontend toolchain migration — validated candidate
+# Frontend toolchain migration — candidate validation
 
 This branch refreshes PR75's replacement of Create React App's build/test wrapper
 with Vite 8.3.8 and Vitest 5.1.1. It does not change a product component, API contract, subscription,
 route, public copy or runtime package version. Linux CI, isolated browser checks
-and the screenshot review below passed for candidate `4318062`. PR75 is still
-a draft at this checkpoint; merge and exact-deployment verification are separate.
+and the screenshot review below passed for candidate `4318062`; a later
+repetition exposed a fixture timing issue described below. PR75 is still a
+draft at this checkpoint. Require the latest gate to pass before merge;
+exact-deployment verification is separate.
 
 The November 18 comparison baseline is `8377a5beea5a0f38306a52e68a28d56de47296b9`,
 the recovery documentation update after deployed application source
@@ -149,6 +151,17 @@ does not establish exhaustive keyboard navigation, manual touch/scroll gestures,
 physical iPhone/Android acceptance, or Opera Mobile 80/Samsung 30 engine results.
 The final diff keeps product source, service-worker source and runtime versions
 unchanged; test edits are the documented runner/mock and selector adapters.
+
+The docs-only repetition [44288382869](https://github.com/Retain-ap/retainai-prod/actions/runs/44288382869)
+completed all functional checks but failed the WebKit desktop error assertion:
+an initial Settings profile read was cancelled during forced document navigation.
+Its source map points to the existing caught refresh request, not Google OAuth;
+the executable files were identical to the passing run. The harness now waits
+for initial network loading to settle and asserts that no fixture API request
+remains in flight before forced navigation, with a 15-second limit. Error and
+failed-request records include the current phase, and no error is filtered.
+The original passing run remains evidence of its own execution, not proof of
+repeatability or a substitute for the latest candidate's gate.
 
 ## Required evidence before merge
 

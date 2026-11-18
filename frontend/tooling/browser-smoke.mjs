@@ -101,8 +101,26 @@ try {
       page.setDefaultTimeout(15000);
       const errors = [];
       const failedRequests = [];
-      page.on('pageerror', error => errors.push({ message: error.message, stack: error.stack, page: new URL(page.url()).pathname }));
-      page.on('requestfailed', request => { const url = new URL(request.url()); failedRequests.push({ url: url.origin + url.pathname, type: request.resourceType(), error: request.failure()?.errorText }); });
+      const pendingApi = new Set();
+      let phase = 'initial fixture';
+      const apiRequest = request => { const url = new URL(request.url()); return url.origin === origin && url.pathname.startsWith('/api/'); };
+      page.on('request', request => { if (apiRequest(request)) pendingApi.add(request); });
+      page.on('requestfinished', request => pendingApi.delete(request));
+      page.on('pageerror', error => errors.push({ message: error.message, stack: error.stack, page: new URL(page.url()).pathname, phase }));
+      page.on('requestfailed', request => { pendingApi.delete(request); const url = new URL(request.url()); failedRequests.push({ url: url.origin + url.pathname, type: request.resourceType(), error: request.failure()?.errorText, phase }); });
+      const settleFixture = async () => {
+        // Route headings can render before Settings' initial profile refresh.
+        // This loopback-only fixture must finish loading before the test tears
+        // down its document. Keep all errors, including cancellation errors.
+        await page.waitForLoadState('networkidle', { timeout: 15000 });
+        assert.equal(pendingApi.size, 0, 'Initial fixture API requests must finish before forced navigation');
+      };
+      const navigate = async (label, action) => {
+        phase = 'settling before ' + label;
+        await settleFixture();
+        phase = label;
+        await action();
+      };
       const row = { engine, layout, checks: [], passed: false };
       report.runs.push(row);
       try {
@@ -113,7 +131,7 @@ try {
         await withinViewport(page);
         await page.screenshot({ path: path.join(output, engine + '-' + layout + '-home.png'), fullPage: true });
         row.checks.push('public homepage and responsive compiled styles');
-        await page.goto(origin + '/login', { waitUntil: 'domcontentloaded' });
+        await navigate('login route', () => page.goto(origin + '/login', { waitUntil: 'domcontentloaded' }));
         await page.getByRole('button', { name: 'Login', exact: true }).waitFor();
         await withinViewport(page);
         await page.screenshot({ path: path.join(output, engine + '-' + layout + '-login.png'), fullPage: true });
@@ -132,23 +150,23 @@ try {
         });
         // ready proves an active registration, not control of this document.
         // Reload under that registration before requiring an active controller.
-        await page.reload();
+        await navigate('controlled app reload', () => page.reload());
         await page.waitForFunction(() => navigator.serviceWorker.controller !== null);
         await page.getByRole('heading', { name: 'Today’s priorities', exact: true }).waitFor();
         assert.equal(await page.getByRole('heading', { name: 'Obsolete shell fixture' }).count(), 0);
         row.checks.push('active service worker replaces a stale cached HTML shell from the network');
-        await page.goto(origin + '/app?tab=imports');
+        await navigate('imports route', () => page.goto(origin + '/app?tab=imports'));
         await page.getByRole('heading', { name: 'Import contacts', exact: true }).waitFor();
         await withinViewport(page);
         row.checks.push('direct import navigation and lazy chunk/style loading');
-        await page.goBack();
+        await navigate('history back', () => page.goBack());
         await page.getByRole('heading', { name: 'Today’s priorities', exact: true }).waitFor();
-        await page.goForward();
+        await navigate('history forward', () => page.goForward());
         await page.getByRole('heading', { name: 'Import contacts', exact: true }).waitFor();
-        await page.reload();
+        await navigate('imports reload', () => page.reload());
         await page.getByRole('heading', { name: 'Import contacts', exact: true }).waitFor();
         row.checks.push('Back/Forward/reload with verified synthetic session');
-        await page.goto(origin + '/app?tab=notifications');
+        await navigate('notification settings route', () => page.goto(origin + '/app?tab=notifications'));
         const toggle = page.getByRole('checkbox', { name: 'Email me when leads need attention', exact: true });
         await toggle.waitFor();
         // This server-confirmed control deliberately retains its checked state
@@ -156,13 +174,13 @@ try {
         await toggle.click();
         await page.getByText('Follow-up reminder emails turned off.', { exact: true }).waitFor();
         assert.equal(await toggle.isChecked(), false);
-        await page.reload();
+        await navigate('notification preference reload', () => page.reload());
         await toggle.waitFor();
         await page.waitForFunction(() => Array.from(document.querySelectorAll('label')).some(label => label.textContent.includes('Email me when leads need attention') && label.querySelector('input')?.disabled === false));
         assert.equal(await toggle.isChecked(), false);
         await withinViewport(page);
         row.checks.push('current reminder preference writes and reload against synthetic API');
-        await page.goto(origin + '/app?section=automations');
+        await navigate('automations route', () => page.goto(origin + '/app?section=automations'));
         await page.getByRole('button', { name: 'New Automation', exact: true }).waitFor();
         await page.getByRole('button', { name: 'New Automation', exact: true }).click();
         await page.getByRole('heading', { name: 'When it starts', exact: true }).waitFor();
@@ -180,10 +198,14 @@ try {
           return false;
         }), false);
         row.checks.push('service worker activates, removes old cache and never caches fixture API');
+        phase = 'final fixture settlement';
+        await settleFixture();
         assert.deepEqual(errors, [], 'No unhandled browser error is permitted');
         row.passed = true;
       } catch (error) {
         row.error = String(error.message).slice(0, 1600);
+        row.phase = phase;
+        row.pendingApiPaths = [...pendingApi].map(request => new URL(request.url()).pathname);
         row.pageErrors = errors;
         row.failedRequests = failedRequests;
         await page.screenshot({ path: path.join(output, engine + '-' + layout + '-failure.png'), fullPage: true }).catch(() => {});
