@@ -14,6 +14,8 @@ const { chromium, firefox, webkit } = await import(pathToFileURL(process.env.RET
 const buildRoot = path.resolve('build');
 const output = path.resolve('browser-acceptance');
 await mkdir(output, { recursive: true });
+const googleScriptUrl = 'https://accounts.google.com/gsi/client';
+const offlineGoogleScript = '/* Offline acceptance fixture: Google OAuth is not exercised. */';
 const fixtureUser = { email: 'browser-fixture@example.test', name: 'Browser Fixture', role: 'owner', platformOwner: false, status: 'active', emailVerified: true, canEditBusiness: true, canManageBilling: true, canInviteTeam: true, businessName: 'Synthetic service business', businessType: 'Service business', orgOwnerEmail: 'browser-fixture@example.test' };
 let signedIn = false;
 let reminders = true;
@@ -81,6 +83,9 @@ try {
       signedIn = false;
       reminders = true;
       const context = await currentBrowser.newContext({ viewport, locale: 'en-CA', timezoneId: 'America/Toronto', reducedMotion: 'reduce', serviceWorkers: 'allow' });
+      // OAuth is outside this synthetic email-login test. The network namespace
+      // denies all external hosts; fulfil only this known SDK with inert JS.
+      await context.route(googleScriptUrl, route => route.fulfill({ status: 200, contentType: 'text/javascript', body: offlineGoogleScript }));
       await context.addInitScript(value => { window.__ENV__ = { REACT_APP_API_BASE: value }; }, origin);
       const page = await context.newPage();
       page.setDefaultTimeout(15000);
@@ -92,7 +97,13 @@ try {
       report.runs.push(row);
       try {
         await page.goto(origin + '/__fixture_boot');
-        await page.evaluate(async () => { await caches.open('retainai-v2-static'); });
+        await page.evaluate(async ({ url, script }) => {
+          await caches.open('retainai-v2-static');
+          // WebKit does not route service-worker-owned requests via Playwright.
+          // Give its existing network-first fallback the same inert SDK fixture.
+          const cache = await caches.open('retainai-v3-static');
+          await cache.put(url, new Response(script, { headers: { 'Content-Type': 'text/javascript' } }));
+        }, { url: googleScriptUrl, script: offlineGoogleScript });
         await page.goto(origin + '/', { waitUntil: 'domcontentloaded' });
         await page.locator('#root h1').first().waitFor();
         await withinViewport(page);
@@ -183,7 +194,7 @@ try {
   await new Promise(resolve => server.close(resolve));
   report.apiFixturePaths = [...apiPaths].sort();
   report.attemptedFixtureWrites = [...new Set(attemptedWrites)].sort();
-  report.limitations = ['Synthetic backend only; no live provider, payment or customer acceptance', 'Desktop browser engines with narrow viewport, not physical iPhone/Android acceptance', 'Opera Mobile 80 and Samsung 30 were not executed'];
+  report.limitations = ['Synthetic backend only; no live provider, payment or customer acceptance', 'Google SDK is replaced by inert JS for offline email-login testing; Google OAuth and its rendered button are not tested', 'Desktop browser engines with narrow viewport, not physical iPhone/Android acceptance', 'Opera Mobile 80 and Samsung 30 were not executed'];
   await writeFile(path.join(output, 'report.json'), JSON.stringify(report, null, 2));
   console.log(JSON.stringify({ allPassed: report.allPassed, runs: report.runs.map(({ engine, layout, passed, error }) => ({ engine, layout, passed, error })) }));
 }
