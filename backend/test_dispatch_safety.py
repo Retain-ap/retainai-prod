@@ -421,5 +421,64 @@ class AutomaticEmailIntegrationTests(unittest.TestCase):
         self.assertNotIn("a@example.com", delivery.read_state(self.receipts)["workspaces"])
 
 
+@unittest.skipIf(delivery is None, "Requires production POSIX file locks")
+class FlowPersistenceTests(unittest.TestCase):
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp.cleanup)
+        self.path = os.path.join(self.temp.name, "automations.json")
+        self.state = os.path.join(self.temp.name, "state.json")
+        self.users = {"a@example.com": {"status": "active"}, "b@example.com": {"status": "active"}}
+        delivery.write_state(self.path, {"users": {"a@example.com": [{"id": "a"}], "b@example.com": [{"id": "b"}]}})
+        delivery.write_state(self.state, automation_state.scoped_state({}, {"users": {}}))
+        self.ns = {
+            "List": list, "Dict": dict, "Any": object, "functools": functools,
+            "dispatch_safety": delivery, "automation_state": automation_state,
+            "FILE_AUTOMATIONS": self.path, "FILE_STATE": self.state,
+            "read_json": lambda path, default: delivery.read_state(path),
+            "write_json": delivery.write_state,
+            "load_users": lambda: copy.deepcopy(self.users),
+            "_account_has_access": lambda user: user.get("status") == "active",
+            "jsonify": lambda value: value, "app": types.SimpleNamespace(logger=Mock()),
+        }
+        _definitions({"save_user_flows", "_serialized_automation_state"}, self.ns)
+
+    def _save_response(self):
+        def view():
+            self.ns["save_user_flows"]("a@example.com", [{"id": "changed"}])
+            return {"ok": True}, 200
+        return self.ns["_serialized_automation_state"](view)()
+
+    def test_active_save_preserves_other_workspace(self):
+        self.assertEqual(self._save_response()[1], 200)
+        self.assertEqual(delivery.read_state(self.path)["users"], {
+            "a@example.com": [{"id": "changed"}], "b@example.com": [{"id": "b"}],
+        })
+
+    def test_missing_or_inactive_owner_returns_403_without_recreating_flows(self):
+        for owner in [None, {"status": "suspended"}]:
+            if owner is None:
+                self.users.pop("a@example.com", None)
+            else:
+                self.users["a@example.com"] = owner
+            delivery.write_state(self.path, {"users": {"b@example.com": [{"id": "b"}]}})
+            before = Path(self.path).read_bytes()
+            response, status = self._save_response()
+            self.assertEqual(status, 403)
+            self.assertIn("not saved", response["error"])
+            self.assertEqual(Path(self.path).read_bytes(), before)
+
+    def test_purge_lock_returns_409_then_fresh_owner_check_refuses_late_save(self):
+        with delivery.exclusive(self.path, blocking=True):
+            response, status = self._save_response()
+            self.assertEqual(status, 409)
+            self.assertTrue(response["in_progress"])
+            # Production purge deletes users before taking this JSON lock.
+            self.users.pop("a@example.com")
+            delivery.write_state(self.path, {"users": {"b@example.com": [{"id": "b"}]}})
+        self.assertEqual(self._save_response()[1], 403)
+        self.assertNotIn("a@example.com", delivery.read_state(self.path)["users"])
+
+
 if __name__ == "__main__":
     unittest.main()

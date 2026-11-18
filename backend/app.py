@@ -8664,9 +8664,17 @@ def load_user_flows(user_email: str) -> List[Dict[str, Any]]:
     return db.get("users", {}).get((user_email or "").lower(), []) or []
 
 def save_user_flows(user_email: str, flows: List[Dict[str, Any]]):
-    db = read_json(FILE_AUTOMATIONS, {"users": {}})
-    db.setdefault("users", {})[(user_email or "").lower()] = flows
-    write_json(FILE_AUTOMATIONS, db)
+    owner = str(user_email or "").strip().lower()
+    # Account purge uses this same lock and removes the account before JSON
+    # cleanup. A delayed request must not recreate its workspace's flows.
+    with dispatch_safety.exclusive(FILE_AUTOMATIONS) as acquired:
+        if not acquired:
+            raise BlockingIOError("Automation flows are being updated. Try again after the update finishes.")
+        if not owner or not _account_has_access((load_users() or {}).get(owner, {})):
+            raise PermissionError("This workspace is no longer active. Automation changes were not saved.")
+        db = read_json(FILE_AUTOMATIONS, {"users": {}})
+        db.setdefault("users", {})[owner] = flows
+        write_json(FILE_AUTOMATIONS, db)
 
 def load_state() -> Dict[str, Any]:
     # Legacy progress is assigned only to an unambiguous workspace. Conflicted
@@ -8694,6 +8702,10 @@ def _serialized_automation_state(view):
                 if scoped is not raw:
                     save_state(scoped)
                 return view(*args, **kwargs)
+            except PermissionError:
+                return jsonify({"ok": False, "error": "This workspace is no longer active. Automation changes were not saved."}), 403
+            except BlockingIOError:
+                return jsonify({"ok": False, "error": "Automation flows are being updated. Try again after the update finishes.", "in_progress": True}), 409
             except (OSError, ValueError):
                 app.logger.exception("[AUTOMATIONS] state update failed")
                 return jsonify({"ok": False, "error": "Automation state could not be saved. No retry was queued."}), 503
