@@ -16,6 +16,7 @@ _last_deletion_sweep = 0
 _WORKSPACE_JSON_FILES = (
     "notifications.json",
     "lead_reminder_state.json",
+    "email_preferences.json",
     "appointments.json",
     "whatsapp_chats.json",
     "whatsapp_status.json",

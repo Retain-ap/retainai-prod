@@ -2225,11 +2225,13 @@ def send_post_appointment_update_prompts():
 def check_for_lead_reminders():
     print("[Scheduler] Checking for leads needing follow-up...")
     import lead_reminders
+    import email_preferences
 
     users = load_users() or {}
     if not isinstance(users, dict):
         return
     path = os.path.join(DATA_ROOT, lead_reminders.STATE_FILE)
+    preferences_path = os.path.join(DATA_ROOT, email_preferences.STATE_FILE)
     for user_email in users:
         if not isinstance(user_email, str) or user_email.startswith("user::"):
             continue
@@ -2238,6 +2240,8 @@ def check_for_lead_reminders():
             current_users = load_users() or {}
             role, workspace, owner, _ = _resolve_org_and_role(user_email, current_users)
             if role != "owner" or workspace != user_email or not _account_has_access(owner):
+                return None
+            if not email_preferences.lead_reminders_enabled(preferences_path, user_email):
                 return None
             profile = load_user_profile(user_email) or {}
             zone = lead_reminders.reminder_timezone(profile, owner)
@@ -2255,6 +2259,39 @@ def check_for_lead_reminders():
         except Exception:
             # Keep provider details and customer data out of scheduler errors.
             app.logger.warning("[LEAD REMINDERS] Briefing could not be completed; durable duplicate protection retained.")
+
+def _owner_email_preference_workspace():
+    actor = _session_email()
+    role, workspace, owner, _ = _resolve_org_and_role(actor, load_users() or {})
+    if role != "owner" or actor != workspace or not _account_has_access(owner):
+        raise PermissionError("Workspace owner access is required.")
+    return workspace
+
+
+@app.route("/api/email/preferences", methods=["GET", "POST"])
+def owner_email_preferences():
+    import email_preferences
+    import lead_reminders
+
+    if request.method == "POST":
+        body = request.get_json(silent=True)
+        if not isinstance(body, dict) or set(body) != {"lead_reminder_emails"} or not isinstance(body["lead_reminder_emails"], bool):
+            return jsonify({"error": "Provide a true or false lead-reminder email preference."}), 400
+    path = os.path.join(DATA_ROOT, email_preferences.STATE_FILE)
+    try:
+        if request.method == "POST":
+            preferences = email_preferences.set_preferences(
+                path, os.path.join(DATA_ROOT, lead_reminders.STATE_FILE),
+                _owner_email_preference_workspace, body["lead_reminder_emails"],
+            )
+        else:
+            preferences = email_preferences.get_preferences(path, _owner_email_preference_workspace)
+        return jsonify({"ok": True, "preferences": preferences}), 200
+    except PermissionError:
+        return jsonify({"error": "Only the active workspace owner can manage these email reminders."}), 403
+    except (OSError, ValueError, RuntimeError):
+        return jsonify({"error": "Email preferences could not be read or saved. Try again."}), 503
+
 
 def send_birthday_email(lead_email, lead_name, business_name, unsubscribe_url=""):
     return send_email_with_template(

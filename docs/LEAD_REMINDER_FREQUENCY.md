@@ -26,8 +26,24 @@ in the existing JSON backup sweep and workspace-deletion purge.
 
 This changes only the owner email titled “Leads need your attention.” Customer
 automation, birthday, appointment, trial, security and sign-in mail are separate.
-The Settings notification toggles are still browser-local preferences; this
-change does not make them server email-frequency controls.
+
+Workspace owners can turn these emails off in Settings > Notifications >
+Follow-up reminder emails. The preference is stored on the server in
+`DATA_ROOT/email_preferences.json`, scoped to the signed-in owner, and defaults
+to enabled when absent. Device notification choices remain separate. Managers
+and members cannot change this owner email preference.
+
+Preference saves and reminder sends use the same reminder lock. A save may wait
+for an already-started email attempt; after disable is confirmed, subsequent
+attempts observe it. Turning emails back on preserves all existing cooldowns
+and pending delivery claims. No preference change sends an email or clears a
+claim. Failed/uncertain UI saves require a readback before another change.
+
+The preference file is included in the existing JSON backup sweep and locked
+workspace purge. During recovery keep scheduling disabled until owner choices
+and delivery state are reconciled: an older backup without this preference
+file defaults to enabled. Do not invent or erase delivery claims to recover an
+email preference.
 
 No real emails or test notifications are sent by these tests. They use synthetic
 contacts and mocked providers. Pure policy tests run without
