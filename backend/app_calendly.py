@@ -11,7 +11,7 @@ import os
 import uuid
 from urllib.parse import urlencode
 
-from flask import Blueprint, jsonify, redirect, request, session
+from flask import Blueprint, current_app, jsonify, redirect, request, session
 
 import calendly_bookings as cal
 import value_receipt as vr
@@ -140,6 +140,15 @@ def _back(**params):
     return redirect(f"{base}/app/import?{urlencode(params)}")
 
 
+def _callback_failed(reason, *, status=0, category=""):
+    diagnostic = cal.oauth_failure_diagnostic(reason, status=status, category=category)
+    current_app.logger.warning(
+        "[CALENDLY OAUTH] stage=%s reason=%s status=%d category=%s",
+        diagnostic["stage"], diagnostic["reason"], diagnostic["status"], diagnostic["category"],
+    )
+    return _back(calendly_error="failed")
+
+
 @calendly_bp.get("/api/calendly/oauth/callback")
 def calendly_callback():
     state = request.args.get("state")
@@ -155,21 +164,30 @@ def calendly_callback():
     if error or not verifier or ctx["workspace"] != workspace or ctx["email"] != actor or vr._email(session.get("user_email")) != actor:
         return _back(calendly_error="session_mismatch")
     if request.args.get("error"):
-        return _back(calendly_error="denied" if request.args.get("error") == "access_denied" else "failed")
+        if request.args.get("error") == "access_denied":
+            return _back(calendly_error="denied")
+        return _callback_failed("provider_error", category=request.args.get("error"))
     config = _config()
     code = str(request.args.get("code") or "")
-    if not code or not config["configured"]:
-        return _back(calendly_error="failed")
+    if not code:
+        return _callback_failed("missing_code")
+    if not config["configured"]:
+        return _callback_failed("not_configured")
     client = _client(config)
     try:
         tokens = client.exchange_code(code, verifier)
-    except cal.CalendlyError:
-        return _back(calendly_error="failed")
+    except cal.CalendlyError as exc:
+        return _callback_failed("token_exchange", status=exc.status, category=exc.code)
     # The token response names the connecting user, so users:read isn't needed.
     user_uri = str(tokens.get("owner") or "")
     problem = ""
-    if not tokens.get("access_token") or not user_uri.startswith(cal.USER_URI_PREFIX):
+    failure_reason = ""
+    if not tokens.get("access_token"):
         problem = "failed"
+        failure_reason = "missing_access_token"
+    elif not user_uri.startswith(cal.USER_URI_PREFIX):
+        problem = "failed"
+        failure_reason = "invalid_owner_uri"
     elif not cal.granted_scopes_ok(tokens):
         problem = "missing_scope"
     now = _now()
@@ -195,8 +213,12 @@ def calendly_callback():
     if not problem:
         try:
             problem = _update(save, ctx["guard"])
-        except (vr.EvidenceStoreError, vr.WorkspaceGone):
+        except vr.EvidenceStoreError:
             problem = "failed"
+            failure_reason = "store_unavailable"
+        except vr.WorkspaceGone:
+            problem = "failed"
+            failure_reason = "workspace_gone"
     if problem:
         for token in (tokens.get("refresh_token"), tokens.get("access_token")):
             if token:
@@ -204,6 +226,8 @@ def calendly_callback():
                     client.revoke(token)
                 except cal.CalendlyError:
                     pass
+        if problem == "failed":
+            return _callback_failed(failure_reason)
         return _back(calendly_error=problem)
     return _back(calendly="connected")
 
