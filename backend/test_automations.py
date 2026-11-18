@@ -79,7 +79,7 @@ class AppointmentTriggerTests(unittest.TestCase):
         }
         captured = []
 
-        def fake_execute(flow, step, lead, run, caps, profile):
+        def fake_execute(flow, step, lead, run, caps, profile, delivery_key=None):
             captured.append(lead)
             return True
 
