@@ -2382,12 +2382,9 @@ def send_birthday_greetings():
                     mmdd == today and business and lead.get("email") and not bool(lead.get("email_opt_out"))
                     and not imported_without_consent(lead)
                 ):
-                    sent = _dispatch_birthday_email(user_email, lead, today_date)
-                    if sent:
-                        log_notification(user_email, f"Happy Birthday, {lead.get('name','')}!", "Automated birthday email", lead.get("email"))
+                    _dispatch_birthday_email(user_email, lead, today_date)
                 if mmdd == tomorrow:
-                    if _dispatch_birthday_email(user_email, lead, tomorrow_date, owner_reminder=True):
-                        log_notification(user_email, f"Reminder: {lead.get('name','')}'s birthday is tomorrow!", "Birthday reminder sent", lead.get("email"))
+                    _dispatch_birthday_email(user_email, lead, tomorrow_date, owner_reminder=True)
 
 TRIAL_DAYS = 14
 

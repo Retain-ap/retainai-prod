@@ -1,7 +1,7 @@
 """Birthday adapter checks; no app startup, provider calls or production data.
 
 The shared dispatch journal has its own persistence/concurrency tests. Here a
-contract fake verifies event identity, fresh eligibility and accepted-only logs.
+contract fake verifies event identity, fresh eligibility and no notification writes.
 """
 
 import ast
@@ -88,11 +88,11 @@ class BirthdayDispatchTests(unittest.TestCase):
     def run_job(self):
         self.scope["send_birthday_greetings"]()
 
-    def test_repeat_job_sends_and_logs_each_type_only_once(self):
+    def test_repeat_job_sends_each_type_once_without_notification_writes(self):
         self.run_job()
         self.run_job()
         self.assertEqual(self.send.call_count, 2)
-        self.assertEqual(self.log.call_count, 2)
+        self.log.assert_not_called()
         self.assertEqual(set(self.receipts), {
             ("birthday_customer_greeting", self.owner, "id:today", "2026-01-02"),
             ("birthday_owner_reminder", self.owner, "id:tomorrow", "2026-01-03"),
@@ -163,6 +163,17 @@ class BirthdayDispatchTests(unittest.TestCase):
         with patch.object(fake, "dispatch_once", side_effect=OSError("Journal unavailable")):
             self.run_job()
         self.send.assert_not_called()
+        self.log.assert_not_called()
+
+    def test_purge_after_dispatch_return_cannot_recreate_notifications(self):
+        def completed_then_purged(path, identity, send, *, is_eligible=None):
+            self.users.clear()
+            self.leads.clear()
+            return True
+
+        fake = sys.modules["dispatch_safety"]
+        with patch.object(fake, "dispatch_once", side_effect=completed_then_purged):
+            self.run_job()
         self.log.assert_not_called()
 
     def test_legacy_email_fallback_is_normalized_and_anonymous_contact_is_skipped(self):
