@@ -105,6 +105,17 @@ export default function Sidebar({
   const displayName =
     user?.name && user.name.trim() !== "" ? user.name : user?.email;
 
+  // Icon-only buttons in the collapsed rail need a name and a hover hint.
+  const railLabel = (text) => (collapsed ? { "aria-label": text, title: text } : {});
+  const toggleProfile = () => {
+    if (collapsed) {
+      setCollapsed(false);
+      setProfileOpen(true);
+    } else {
+      setProfileOpen((o) => !o);
+    }
+  };
+
   const goTo = useCallback(
     (nextSection) => {
       setProfileOpen(false);
@@ -143,15 +154,6 @@ export default function Sidebar({
           <FaTimes />
         </button>
       )}
-      <button
-        type="button"
-        className="sidebar-toggle"
-        onClick={() => setCollapsed(!collapsed)}
-        aria-label={collapsed ? "Open sidebar" : "Close sidebar"}
-      >
-        {collapsed ? <FaChevronRight /> : <FaChevronLeft />}
-      </button>
-
       <div
         className="sidebar-profile"
         role="button"
@@ -159,11 +161,12 @@ export default function Sidebar({
         aria-haspopup="menu"
         aria-expanded={profileOpen}
         aria-label="Account menu, including Log out"
-        onClick={() => setProfileOpen((o) => !o)}
+        title={collapsed ? displayName : undefined}
+        onClick={toggleProfile}
         onKeyDown={(e) => {
           if (e.target === e.currentTarget && (e.key === "Enter" || e.key === " ")) {
             e.preventDefault();
-            setProfileOpen((o) => !o);
+            toggleProfile();
           }
         }}
       >
@@ -246,6 +249,7 @@ export default function Sidebar({
               type="button"
               className={`sidebar-owner-console-btn${section === "owner" ? " active" : ""}`}
               onClick={() => goTo("owner")}
+            {...railLabel("Owner Console")}
             >
               <FaCrown /> {!collapsed && "Owner Console"}
             </button>
@@ -256,6 +260,7 @@ export default function Sidebar({
           type="button"
           className={section === "overview" ? "active" : ""}
           onClick={() => goTo("overview")}
+        {...railLabel("Overview")}
         >
           <FaHome /> {!collapsed && "Overview"}
         </button>
@@ -263,6 +268,7 @@ export default function Sidebar({
           type="button"
           className={section === "dashboard" ? "active" : ""}
           onClick={() => goTo("dashboard")}
+        {...railLabel("Contacts")}
         >
           <FaAddressBook /> {!collapsed && "Contacts"}
         </button>
@@ -270,6 +276,7 @@ export default function Sidebar({
           type="button"
           className={section === "calendar" ? "active" : ""}
           onClick={() => goTo("calendar")}
+        {...railLabel("Calendar")}
         >
           <FaCalendarAlt /> {!collapsed && "Calendar"}
         </button>
@@ -277,6 +284,7 @@ export default function Sidebar({
           type="button"
           className={section === "messages" ? "active" : ""}
           onClick={() => goTo("messages")}
+        {...railLabel("Messages")}
         >
           <FaEnvelopeOpenText /> {!collapsed && "Messages"}
         </button>
@@ -285,6 +293,7 @@ export default function Sidebar({
           type="button"
           className={section === "analytics" ? "active" : ""}
           onClick={() => goTo("analytics")}
+        {...railLabel("Insights")}
         >
           <FaChartBar /> {!collapsed && "Insights"}
         </button>
@@ -292,6 +301,7 @@ export default function Sidebar({
           type="button"
           className={section === "ai-prompts" ? "active" : ""}
           onClick={() => goTo("ai-prompts")}
+        {...railLabel("AI Studio")}
         >
           <FaRobot /> {!collapsed && "AI Studio"}
         </button>
@@ -299,6 +309,7 @@ export default function Sidebar({
           type="button"
           className={section === "notifications" ? "active" : ""}
           onClick={() => goTo("notifications")}
+        {...railLabel("Notifications")}
         >
           <FaBell /> {!collapsed && "Notifications"}
         </button>
@@ -306,6 +317,7 @@ export default function Sidebar({
           type="button"
           className={section === "automations" ? "active" : ""}
           onClick={() => goTo("automations")}
+        {...railLabel("Automations")}
         >
           <FaRobot /> {!collapsed && "Automations"}
         </button>
@@ -317,31 +329,30 @@ export default function Sidebar({
             type="button"
             className={section === "invoices" ? "active" : ""}
             onClick={() => goTo("invoices")}
+          {...railLabel("Invoices")}
           >
             <FaFileInvoiceDollar /> {!collapsed && "Invoices"}
           </button>
         )}
       </nav>
 
-      {!collapsed && (
-        <button
-          type="button"
-          className="sidebar-quick-search-btn"
-          onClick={() =>
-            window.dispatchEvent(
-              new KeyboardEvent("keydown", { key: "k", ctrlKey: true })
-            )
-          }
-          aria-label="Search or jump to a page"
-          title="Search RetainAI (Ctrl+K)"
-        >
-          <FaSearch style={{ marginRight: 9, fontSize: 16 }} />
-          Quick search
-        </button>
-      )}
+      <button
+        type="button"
+        className="sidebar-quick-search-btn"
+        onClick={() =>
+          window.dispatchEvent(
+            new KeyboardEvent("keydown", { key: "k", ctrlKey: true })
+          )
+        }
+        aria-label="Search or jump to a page"
+        title="Search RetainAI (Ctrl+K)"
+      >
+        <FaSearch style={{ fontSize: 16 }} />
+        {!collapsed && "Quick search"}
+      </button>
 
       {/* Invite Team */}
-      {!collapsed && capabilities.canInviteTeam && (
+      {capabilities.canInviteTeam && (
         <button
           type="button"
           className="sidebar-invite-btn"
@@ -353,24 +364,32 @@ export default function Sidebar({
           aria-label="Invite team members"
           title="Invite team members"
         >
-          <FaUserPlus style={{ marginRight: 9, fontSize: 18 }} />
-          Invite Team
+          <FaUserPlus style={{ fontSize: 18 }} />
+          {!collapsed && "Invite Team"}
         </button>
       )}
 
       {/* Settings */}
-      {!collapsed && (
-        <>
-        <button
-          type="button"
-          className="sidebar-settings-btn"
-          onClick={() => goTo("settings")}
-        >
-          <FaCog style={{ marginRight: 9, fontSize: 18 }} />
-          Settings
-        </button>
-        </>
-      )}
+      <button
+        type="button"
+        className="sidebar-settings-btn"
+        onClick={() => goTo("settings")}
+        {...railLabel("Settings")}
+      >
+        <FaCog style={{ fontSize: 18 }} />
+        {!collapsed && "Settings"}
+      </button>
+
+      <button
+        type="button"
+        className="sidebar-toggle"
+        onClick={() => setCollapsed(!collapsed)}
+        aria-label={collapsed ? "Open sidebar" : "Close sidebar"}
+        title={collapsed ? "Expand sidebar" : "Collapse sidebar"}
+      >
+        {collapsed ? <FaChevronRight /> : <FaChevronLeft />}
+        {!collapsed && <span>Collapse</span>}
+      </button>
     </aside>
   );
 }
