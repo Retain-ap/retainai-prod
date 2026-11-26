@@ -35,9 +35,11 @@ Closet Muse only; no RetainAI code changed. The owner asked for:
 
 ## 1.0.4 release
 
-- The release check passed on `325a5a3` (run 45769117935).
-- The Mac native check was started on the same commit (approved paid run). An earlier run on `158f409` compiled the new Swift on iPhone and iPad. It was cancelled after the compile to save minutes, because #85 changed the commit.
-- Next: upload build 17 with Friends push enabled, then submit 1.0.4 through the App Review workflow.
+- **Release check:** passed on `325a5a3` (run 45769117935).
+- **Mac native check:** passed on iPhone and iPad (run 45769512227). This was the first compile and test of the #82 and #83 Swift. An earlier run on `158f409` was cancelled after its compile to save minutes, because #85 changed the commit.
+- **Build 17:** uploaded on 26 November at 07:13 UTC (run 45773435905). The log confirms version 1.0.4 and production Friends push.
+- **Submission:** 1.0.4 (build 17) was submitted for App Review on 26 November at 07:25 UTC (run 45775166589). It is set to release automatically after approval.
+- **SDK warning from Apple:** starting April 2027, apps must be built with the iOS 27 SDK. This build used iOS 26.2.
 
 ## Still open
 
