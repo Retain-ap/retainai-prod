@@ -6,6 +6,7 @@ links) and what is still open. Add a file at the end of each session.
 
 | Date | Session | Summary |
 | --- | --- | --- |
+| 2026-11-23 to 11-26 | [Closet Muse 3D fixes, motion and 1.0.4](2026-11-23-closet-muse-3d-fixes-and-1.0.4.md) | 1.0.3 approved and live; waistband, jacket and skin glitches fixed; Studio motion and Try on photo live on the web; Actions outage 23 to 26 Nov; 1.0.4 in progress |
 | 2026-11-20 | [Owner hub, sidebar polish and 3D skin tone](2026-11-20-owner-hub-and-polish.md) | Sidebar collapse fix live; Closet Muse skin-tone picker merged; owner hub, Monday brief and routine calendar; Simulation lab and backup automation left for owner |
 | 2026-11-16 | [Simple workflow builder](2026-11-16-workflow-builder.md) | Vertical trigger and steps; separate draft/publish and explicit pause; 319 frontend tests, lint/build and real local API/responsive checks passed; review pending, not deployed |
 | 2026-11-15 evening | [Live website tax and Apple build 7](2026-11-15-live-tax-and-apple-build-7.md) | Tax enabled and purchases reopened on both websites; unpaid previews expired; existing subscriptions unchanged; TestFlight build 7 VALID and draft-selected, not submitted |
