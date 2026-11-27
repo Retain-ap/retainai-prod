@@ -28,7 +28,7 @@ class ContactRecordingTests(unittest.TestCase):
     def setUp(self):
         self.owner = f"owner-{uuid.uuid4().hex[:8]}@example.com"
         self.users = {self.owner: {"email": self.owner, "role": "owner", "org_id": self.owner, "status": "active",
-                                   "security_version": 0, "name": "Morgan", "business": "North Star Studio"}}
+                                   "security_version": 0, "name": "Morgan", "business": "North Star Studio", "mailingAddress": "1 Main St, Toronto ON"}}
         patchers = [patch.object(retainai, "load_users", side_effect=lambda: self.users),
                     patch.object(retainai, "SG_TEMPLATE_FOLLOWUP_LEAD", "template-followup"),
                     patch.object(retainai, "add_notification"),

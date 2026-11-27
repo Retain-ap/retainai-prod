@@ -1374,15 +1374,20 @@ def _email_unsubscribe_url(owner_email: str, lead: dict) -> str:
     return f"{API_PUBLIC_URL}/api/email/unsubscribe?token={urllib.parse.quote(token, safe='')}"
 
 
-def _append_unsubscribe_footer(html_body: str, unsubscribe_url: str, business_name: str) -> str:
+def _append_unsubscribe_footer(html_body: str, unsubscribe_url: str, business_name: str, address: str = "", contact: str = "") -> str:
     if not unsubscribe_url:
         return str(html_body or "")
     safe_url = html.escape(unsubscribe_url, quote=True)
     safe_business = html.escape(str(business_name or "this business"), quote=False)
+    # Canada's anti-spam law (CASL) requires the sender's mailing address and a contact in each message.
+    safe_address = html.escape(str(address or "").strip(), quote=False)
+    safe_contact = html.escape(str(contact or "").strip(), quote=False)
+    identity = safe_business + (f", {safe_address}" if safe_address else "")
+    contact_line = f" Contact: {safe_contact}." if safe_contact else ""
     footer = (
         "<div style=\"margin-top:28px;padding-top:16px;border-top:1px solid #ddd;"
         "font-size:12px;line-height:1.5;color:#666\">"
-        f"You received this message from {safe_business}. "
+        f"You received this message from {identity}.{contact_line} "
         f"<a href=\"{safe_url}\">Unsubscribe from email follow-ups</a>."
         "</div>"
     )
@@ -1588,6 +1593,8 @@ def api_get_user(email):
         "lineOfBusiness": base.get("businessType", ""),
         "setup_preset": _setup_preset(base),
         "location": base.get("location", ""),
+        "mailingAddress": base.get("mailingAddress", ""),
+        "businessContact": base.get("businessContact", ""),
         "people": base.get("people") or base.get("teamSize", ""),
         "teamSize": base.get("teamSize") or base.get("people", ""),
 
@@ -1658,6 +1665,8 @@ def api_profile():
             "lineOfBusiness": base.get("businessType", ""),
             "setup_preset": _setup_preset(base),
             "location": base.get("location", ""),
+            "mailingAddress": base.get("mailingAddress", ""),
+            "businessContact": base.get("businessContact", ""),
             "people": base.get("people") or base.get("teamSize", ""),
             "teamSize": base.get("teamSize") or base.get("people", ""),
 
@@ -1748,6 +1757,18 @@ def api_profile():
             if len(location_value) > 200:
                 return jsonify({"error": "Location must be 200 characters or fewer."}), 400
             target["location"] = location_value
+
+        # Sender identification that Canada's anti-spam law requires in customer emails.
+        if "mailingAddress" in data:
+            address_value = " ".join(str(data.get("mailingAddress") or "").split())
+            if len(address_value) > 300:
+                return jsonify({"error": "Mailing address must be 300 characters or fewer."}), 400
+            target["mailingAddress"] = address_value
+        if "businessContact" in data:
+            contact_value = " ".join(str(data.get("businessContact") or "").split())
+            if len(contact_value) > 160:
+                return jsonify({"error": "Business contact must be 160 characters or fewer."}), 400
+            target["businessContact"] = contact_value
 
         people_val = data.get("people", data.get("teamSize"))
         if people_val is not None:
@@ -1853,9 +1874,25 @@ def _workspace_business_name(record: Any) -> str:
     return _bounded_ai_text(name, 160)
 
 
-def _business_profile_required(*, with_ok: bool = False):
+SENDER_DETAILS_MESSAGE = (
+    "Add your business mailing address in Settings before sending customer emails. "
+    "Canada's anti-spam law requires it in every message."
+)
+
+
+def _workspace_sender_details(record: Any, fallback_contact: str = "") -> Dict[str, str]:
+    """CASL sender identification for customer emails: the business mailing address, and a
+    contact (phone, email or website) that falls back to the workspace email. Address is "" when unset."""
+    if not isinstance(record, dict):
+        return {"address": "", "contact": str(fallback_contact or "").strip()}
+    address = " ".join(str(record.get("mailingAddress") or "").split())[:300]
+    contact = " ".join(str(record.get("businessContact") or "").split())[:160]
+    return {"address": address, "contact": contact or str(fallback_contact or "").strip()}
+
+
+def _business_profile_required(*, with_ok: bool = False, message: str = ""):
     body = {
-        "error": "Add your business name in Settings before creating or sending customer messages.",
+        "error": message or "Add your business name in Settings before creating or sending customer messages.",
         "code": "business_profile_required",
         "settings_path": "/app?tab=profile",
     }
@@ -2293,13 +2330,15 @@ def owner_email_preferences():
         return jsonify({"error": "Email preferences could not be read or saved. Try again."}), 503
 
 
-def send_birthday_email(lead_email, lead_name, business_name, unsubscribe_url=""):
+def send_birthday_email(lead_email, lead_name, business_name, unsubscribe_url="", business_address="", business_contact=""):
     return send_email_with_template(
         to_email=lead_email,
         template_id=SG_TEMPLATE_BIRTHDAY,
         dynamic_data={
             "lead_name": lead_name,
             "business_name": business_name,
+            "business_address": business_address,
+            "business_contact": business_contact,
             "unsubscribe_url": unsubscribe_url,
             "unsubscribe_link": unsubscribe_url,
         },
@@ -2365,13 +2404,14 @@ def _dispatch_birthday_email(user_email, lead, occurrence, *, owner_reminder=Fal
         if day != occurrence or "-".join(birthday.split("-")[1:3]) != occurrence.strftime("%m-%d"):
             return False
         business = _workspace_business_name(user)
+        sender = _workspace_sender_details(user, owner)
         if not owner_reminder and (
-            not business or not original_email
+            not business or not sender["address"] or not original_email
             or str(current.get("email") or "").strip().lower() != original_email
             or bool(current.get("email_opt_out")) or imported_without_consent(current)
         ):
             return False
-        fresh.update(user=user, lead=current, business=business)
+        fresh.update(user=user, lead=current, business=business, sender=sender)
         return True
 
     def deliver():
@@ -2385,6 +2425,7 @@ def _dispatch_birthday_email(user_email, lead, occurrence, *, owner_reminder=Fal
         return send_birthday_email(
             original_email, current.get("name", ""), fresh["business"],
             unsubscribe_url=_email_unsubscribe_url(owner, current),
+            business_address=fresh["sender"]["address"], business_contact=fresh["sender"]["contact"],
         ) is True
 
     try:
@@ -2411,6 +2452,8 @@ def send_birthday_greetings():
         if not _account_has_access(user):
             continue
         business = _workspace_business_name(user)
+        sender_address = _workspace_sender_details(user, user_email)["address"]
+        paused = 0
         for lead in (leads or []):
             bday = (lead.get("birthday") or "").strip()
             if bday and len(bday.split("-")) >= 3:
@@ -2419,9 +2462,18 @@ def send_birthday_greetings():
                     mmdd == today and business and lead.get("email") and not bool(lead.get("email_opt_out"))
                     and not imported_without_consent(lead)
                 ):
-                    _dispatch_birthday_email(user_email, lead, today_date)
+                    if sender_address:
+                        _dispatch_birthday_email(user_email, lead, today_date)
+                    else:
+                        paused += 1
                 if mmdd == tomorrow:
                     _dispatch_birthday_email(user_email, lead, tomorrow_date, owner_reminder=True)
+        if paused:
+            # One notice per workspace per daily run, so the owner knows why greetings stopped.
+            log_notification(
+                user_email, "Birthday emails paused",
+                f"{paused} birthday email{'s' if paused != 1 else ''} today weren't sent. {SENDER_DETAILS_MESSAGE}",
+            )
 
 TRIAL_DAYS = 14
 
@@ -8442,6 +8494,9 @@ def send_ai_message():
     business_name = _workspace_business_name(user_profile)
     if not business_name:
         return _business_profile_required(with_ok=True)
+    sender = _workspace_sender_details(user_profile, owner_email)
+    if not sender["address"]:
+        return _business_profile_required(with_ok=True, message=SENDER_DETAILS_MESSAGE)
     user_name = _bounded_ai_text(user_profile.get("name"), 120)
     lead_name = _bounded_ai_text(lead.get("name"), 120)
 
@@ -8500,6 +8555,8 @@ def send_ai_message():
         "lead_first_name": (lead_name.split(" ")[0] if lead_name else ""),
         "lead_name": lead_name,
         "business_name": business_name,
+        "business_address": sender["address"],
+        "business_contact": sender["contact"],
         "user_name": user_name,
         "user_email": owner_email,
         "tags": tags,
@@ -9215,6 +9272,8 @@ def send_email_sendgrid_auto(
     business_name: str,
     owner_email: str = "",
     unsubscribe_url: str = "",
+    business_address: str = "",
+    business_contact: str = "",
 ) -> bool:
     if not globals().get("SENDGRID_API_KEY"):
         raise RuntimeError("Email automation is unavailable because SendGrid is not configured.")
@@ -9224,7 +9283,7 @@ def send_email_sendgrid_auto(
             from_email=Email(globals().get("SENDER_EMAIL", "noreply@retainai.ca"), business_name or "RetainAI"),
             to_emails=to_email,
             subject=subject,
-            html_content=_append_unsubscribe_footer(html, unsubscribe_url, business_name),
+            html_content=_append_unsubscribe_footer(html, unsubscribe_url, business_name, business_address, business_contact),
         )
 
         if owner_email:
@@ -9420,11 +9479,17 @@ def execute_step(flow: Dict[str, Any], step: Dict[str, Any], lead: Dict[str, Any
             return True
 
         owner_email = (lead.get("owner") or flow.get("owner") or "").lower()
+        sender = _workspace_sender_details((load_users() or {}).get(owner_email, {}), owner_email)
+        if not sender["address"]:
+            create_notification(owner_email, "Setup needed", "Email blocked: " + SENDER_DETAILS_MESSAGE)
+            _record_automation_action(run, "send_email", "blocked", {"reason": "Add your business mailing address in Settings."})
+            return True
         unsubscribe_url = _email_unsubscribe_url(owner_email, lead)
         def deliver():
             return send_email_sendgrid_auto(
                 email, subject, html, profile.get("business_name") or "RetainAI",
                 owner_email=owner_email, unsubscribe_url=unsubscribe_url,
+                business_address=sender["address"], business_contact=sender["contact"],
             )
         if delivery_key is not None:
             sent_now = dispatch_safety.dispatch_once(

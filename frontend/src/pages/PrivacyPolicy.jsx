@@ -8,7 +8,7 @@ export default function PrivacyPolicy() {
         <h1 className="text-3xl md:text-4xl font-bold text-yellow-400 mb-7">Privacy Policy</h1>
 
         <p className="text-sm text-gray-400 mb-8">
-          Effective August 21, 2026 · Updated November 7, 2026 (one fixed AI model and provider; optional booking connections)
+          Effective August 21, 2026 · Updated November 27, 2026 (privacy officer, where data is processed, your rights, anti-spam sender details)
         </p>
 
         <p className="mb-6">
@@ -141,6 +141,13 @@ export default function PrivacyPolicy() {
           required consent, and appropriate notices for customer communications. Do not upload payment-card data, government identifiers,
           health records, account passwords, or other sensitive information unless RetainAI expressly supports that use in writing.
         </p>
+        <p className="mb-6">
+          For the information customers place in RetainAI about their own clients, the customer is responsible for it and RetainAI
+          processes it on the customer&apos;s behalf, as described in the Terms of Service. Each email RetainAI sends for a business names
+          that business and shows the mailing address and contact it saved in Settings, with a working unsubscribe link, as Canada&apos;s
+          Anti-Spam Legislation (CASL) requires. Sending waits until a mailing address is saved, and an unsubscribe stops further email
+          follow-ups from that business right away.
+        </p>
 
         <h2 className="text-2xl font-bold text-yellow-300 mt-8 mb-2">7. Data Retention</h2>
         <p className="mb-6">
@@ -159,13 +166,26 @@ export default function PrivacyPolicy() {
         <h2 className="text-2xl font-bold text-yellow-300 mt-8 mb-2">9. Your Choices & Rights</h2>
         <ul className="list-disc ml-6 mb-6 space-y-2">
           <li>Access, correct, or delete profile data from your account settings or by contacting support.</li>
+          <li>Ask us in writing for access to, or correction of, the personal information we hold about you. We answer within 30 days, as Canada&apos;s privacy law requires, and tell you if we need more time.</li>
+          <li>If you are a client of a business that uses RetainAI, contact that business first: it decides what it keeps about you. We will help it answer your request.</li>
           <li>Unsubscribe from marketing communications (where applicable) using provided links.</li>
           <li>EEA/UK residents may have additional rights (e.g., objection, restriction, portability).</li>
+          <li>
+            If you are not satisfied with our answer, you can complain to the{" "}
+            <a href="https://www.priv.gc.ca/en/report-a-concern/" className="text-yellow-300 underline" target="_blank" rel="noreferrer">Office of the Privacy Commissioner of Canada</a>
+            {" "}or, in Quebec, the{" "}
+            <a href="https://www.cai.gouv.qc.ca/" className="text-yellow-300 underline" target="_blank" rel="noreferrer">Commission d&apos;accès à l&apos;information</a>.
+          </li>
         </ul>
 
-        <h2 className="text-2xl font-bold text-yellow-300 mt-8 mb-2">10. International Transfers</h2>
+        <h2 className="text-2xl font-bold text-yellow-300 mt-8 mb-2">10. Where Information Is Processed</h2>
         <p className="mb-6">
-          If we transfer data internationally, we use appropriate safeguards (e.g., SCCs) to protect your information.
+          RetainAI is operated from Canada. Its servers and stored data are hosted by Render in Oregon, United States, and the service
+          providers named in section 4 (including Stripe, SendGrid, Google, OpenRouter and OpenAI) may process information in the United
+          States or other countries. Information processed outside Canada is subject to the laws of those countries and may be accessible
+          to their courts, law enforcement and national security authorities. We choose providers with written privacy and security
+          commitments, share only what each feature needs, and use appropriate safeguards (such as standard contractual clauses) for
+          transfers from the EEA or UK.
         </p>
 
         <h2 className="text-2xl font-bold text-yellow-300 mt-8 mb-2">11. Children’s Privacy</h2>
@@ -178,8 +198,9 @@ export default function PrivacyPolicy() {
           We may update this policy from time to time. We’ll notify you of material changes by email or in-app notices.
         </p>
 
-        <h2 className="text-2xl font-bold text-yellow-300 mt-8 mb-2">13. Contact</h2>
+        <h2 className="text-2xl font-bold text-yellow-300 mt-8 mb-2">13. Contact and Privacy Officer</h2>
         <p className="mb-6">
+          RetainAI&apos;s owner is the person responsible for protecting personal information (our Privacy Officer).
           Privacy questions, access/correction requests, or complaints may be sent to{" "}
           <a href="mailto:owner@retainai.ca" className="text-yellow-300 underline">owner@retainai.ca</a>.
         </p>

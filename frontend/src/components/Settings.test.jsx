@@ -215,3 +215,30 @@ test("a source chosen before navigation opens its matching file guide", async ()
   expect(screen.getByText(/Upload the CSV, not the .xlsx workbook/)).toBeInTheDocument();
   expect(googleCard()).not.toHaveClass("google-import-focus");
 });
+
+test("the owner saves the mailing address and contact that customer emails must show (CASL)", async () => {
+  localStorage.setItem("user", JSON.stringify(user));
+  const saved = [];
+  global.fetch = vi.fn().mockImplementation((_url, options = {}) => {
+    if (options.method === "POST") {
+      saved.push(JSON.parse(options.body));
+      return Promise.resolve(response({ ...user, ...saved[saved.length - 1] }));
+    }
+    return Promise.resolve(response(user));
+  });
+
+  render(
+    <MemoryRouter>
+      <Settings user={user} refreshUser={vi.fn()} />
+    </MemoryRouter>
+  );
+
+  fireEvent.click(await screen.findByRole("button", { name: "Edit Profile" }));
+  const field = (label) => screen.getByRole("textbox", { name: label });
+  fireEvent.change(field("Mailing address (shown in customer emails)"), { target: { value: "12 Main St, Toronto ON M5V 1A1" } });
+  fireEvent.change(field("Customer contact: phone, email or website"), { target: { value: "416-555-0100" } });
+  fireEvent.click(screen.getByRole("button", { name: "Save" }));
+
+  await waitFor(() => expect(saved).toHaveLength(1));
+  expect(saved[0]).toMatchObject({ mailingAddress: "12 Main St, Toronto ON M5V 1A1", businessContact: "416-555-0100" });
+});

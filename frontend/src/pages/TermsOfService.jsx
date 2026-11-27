@@ -8,7 +8,7 @@ export default function TermsOfService() {
         <h1 className="text-3xl md:text-4xl font-bold text-yellow-400 mb-7">Terms of Service</h1>
 
         <p className="text-sm text-gray-400 mb-8">
-          Effective August 21, 2026
+          Effective August 21, 2026 · Updated November 27, 2026
         </p>
 
         <h2 className="text-2xl font-bold text-yellow-300 mt-8 mb-2">1. Acceptance of Terms</h2>
@@ -24,6 +24,7 @@ export default function TermsOfService() {
           <li>Do not use RetainAI for unlawful, abusive, or harmful purposes.</li>
           <li>Do not send spam, impersonate others, bypass consent requirements, upload malicious code, probe the Service, or use it to make unlawful high-impact decisions.</li>
           <li>You are responsible for your contact data, message content, customer notices, and compliance with applicable privacy, telemarketing, anti-spam, and messaging-platform rules.</li>
+          <li>Under Canada&apos;s Anti-Spam Legislation (CASL), you must have each person&apos;s express or implied consent before RetainAI emails them for your business, and keep a valid mailing address and contact in Settings. RetainAI adds them, with an unsubscribe link, to every customer email and stops sending until an address is saved. Keep records of how you obtained consent.</li>
         </ul>
 
         <h2 className="text-2xl font-bold text-yellow-300 mt-8 mb-2">3. Payment & Subscription</h2>
@@ -42,6 +43,17 @@ export default function TermsOfService() {
           We handle your data according to our{" "}
           <a href="/privacy-policy" className="text-yellow-300 underline">Privacy Policy</a>.
         </p>
+        <p className="mb-2">
+          <b>Information about your clients.</b> You control the contact and message information you add about your own clients, and
+          RetainAI processes it on your behalf. RetainAI will:
+        </p>
+        <ul className="list-disc ml-6 mb-6 space-y-2">
+          <li>use it only to provide, secure and support the Service for you, never to sell it or advertise to your clients;</li>
+          <li>keep it confidential, protect it with the safeguards described in the Privacy Policy, and share it only with the service providers listed there, for the features you use;</li>
+          <li>tell you without undue delay if a breach of security safeguards affects it, and help you meet your own notification duties;</li>
+          <li>help you answer your clients&apos; access, correction and deletion requests; and</li>
+          <li>delete it from the live service when you delete your workspace, with backup copies removed as backups rotate.</li>
+        </ul>
 
         <h2 className="text-2xl font-bold text-yellow-300 mt-8 mb-2">6. Connected Services</h2>
         <p className="mb-6">Optional integrations are also governed by their providers, including Meta/WhatsApp, Google, Stripe, and SendGrid. RetainAI is not responsible for third-party outages, policy changes, suspensions, or actions outside our control.</p>

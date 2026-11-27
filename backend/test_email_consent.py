@@ -37,6 +37,7 @@ class EmailConsentTests(unittest.TestCase):
             "security_version": 0,
             "name": "Morgan",
             "business": "North Star Studio",
+            "mailingAddress": "1 Main St, Toronto ON",
         }
 
     def _signed_client(self):
