@@ -96,6 +96,8 @@ function normalizeUser(u) {
     businessType: u.businessType || u.lineOfBusiness || "",
     lineOfBusiness: u.lineOfBusiness || u.businessType || "",
     location: u.location || "",
+    mailingAddress: u.mailingAddress || "",
+    businessContact: u.businessContact || "",
     people,
     teamSize,
     stripe_connected: Boolean(u.stripe_connected),
@@ -188,6 +190,8 @@ export default function Settings({
     business: profile?.business || profile?.businessName || "",
     type: profile?.businessType || profile?.lineOfBusiness || "",
     location: profile?.location || "",
+    mailingAddress: profile?.mailingAddress || "",
+    businessContact: profile?.businessContact || "",
     teamSize: String(profile?.people ?? profile?.teamSize ?? ""),
     preset: profile?.setup_preset || "general",
   }));
@@ -317,6 +321,8 @@ export default function Settings({
         prev.businessType !== next.businessType ||
         prev.setup_preset !== next.setup_preset ||
         prev.location !== next.location ||
+        prev.mailingAddress !== next.mailingAddress ||
+        prev.businessContact !== next.businessContact ||
         String(prev.people ?? "") !== String(next.people ?? "") ||
         Boolean(prev.stripe_connected) !== Boolean(next.stripe_connected) ||
         String(prev.stripe_account_id || "") !==
@@ -335,6 +341,8 @@ export default function Settings({
         business: next.business || next.businessName || "",
         type: next.businessType || next.lineOfBusiness || "",
         location: next.location || "",
+        mailingAddress: next.mailingAddress || "",
+        businessContact: next.businessContact || "",
         teamSize: String(next.people ?? next.teamSize ?? ""),
         preset: next.setup_preset || "general",
       });
@@ -385,6 +393,8 @@ export default function Settings({
           business: fromBackend.business || fromBackend.businessName || "",
           type: fromBackend.businessType || fromBackend.lineOfBusiness || "",
           location: fromBackend.location || "",
+          mailingAddress: fromBackend.mailingAddress || "",
+          businessContact: fromBackend.businessContact || "",
           teamSize: String(fromBackend.people ?? fromBackend.teamSize ?? ""),
           preset: fromBackend.setup_preset || "general",
         });
@@ -418,6 +428,8 @@ export default function Settings({
             business: fromBackend.business || fromBackend.businessName || "",
             type: fromBackend.businessType || fromBackend.lineOfBusiness || "",
             location: fromBackend.location || "",
+            mailingAddress: fromBackend.mailingAddress || "",
+            businessContact: fromBackend.businessContact || "",
             teamSize: String(fromBackend.people ?? fromBackend.teamSize ?? ""),
             preset: fromBackend.setup_preset || "general",
           });
@@ -545,6 +557,8 @@ export default function Settings({
       businessType: form.type,
       lineOfBusiness: form.type,
       location: form.location,
+      mailingAddress: form.mailingAddress,
+      businessContact: form.businessContact,
       people: form.teamSize,
       teamSize: form.teamSize,
       setup_preset: form.preset || "general",
@@ -858,6 +872,8 @@ export default function Settings({
                   { label: "Business", name: "business" },
                   { label: "Type", name: "type" },
                   { label: "Location", name: "location" },
+                  { label: "Mailing address (shown in customer emails)", name: "mailingAddress" },
+                  { label: "Customer contact: phone, email or website", name: "businessContact" },
                   { label: "Team Size", name: "teamSize" },
                 ].map(({ label, name }) => (
                   <div key={name} className="field-row">
@@ -866,6 +882,7 @@ export default function Settings({
                       <input
                         className="field-input"
                         type="text"
+                        aria-label={label}
                         value={form[name]}
                         onChange={(e) => {
                           formDirtyRef.current = true;
@@ -917,6 +934,8 @@ export default function Settings({
                               profile.lineOfBusiness ||
                               "",
                             location: profile.location || "",
+                            mailingAddress: profile.mailingAddress || "",
+                            businessContact: profile.businessContact || "",
                             teamSize: String(
                               profile.people ?? profile.teamSize ?? ""
                             ),

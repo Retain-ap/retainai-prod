@@ -100,7 +100,7 @@ class BusinessProfileRequiredTests(unittest.TestCase):
 
     def test_named_workspace_still_drafts_and_sends_with_its_real_name(self):
         for field in ("businessName", "business"):
-            user = _owner(**{field: "  North Star Studio  "})
+            user = _owner(**{field: "  North Star Studio  "}, mailingAddress="1 Main St, Toronto ON")
             for name in REQUESTS:
                 with self.subTest(field=field, endpoint=name):
                     response, ai, raw_http, send_email = self._post(user, name)

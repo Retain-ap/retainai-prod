@@ -47,5 +47,24 @@ class SendGridFooterTests(unittest.TestCase):
         self.assertFalse(footer.has_unsubscribe_link("<a href=\"<%asm_group_unsubscribe_raw_url%>\">x</a>"))
 
 
+    def test_footer_identifies_the_sender_as_casl_requires(self):
+        html_body, plain = footer.add_footer("<body><p>Hi</p></body>", "Hi")
+        self.assertTrue(footer.has_sender_identity(html_body))
+        for variable in ("business_name", "business_address", "business_contact", "unsubscribe_url"):
+            self.assertIn(variable, html_body)
+            self.assertIn(variable, plain)
+
+    def test_old_footer_without_address_is_upgraded_not_duplicated(self):
+        old_html = "<body><p>Hi</p>" + footer.OLD_HTML_FOOTER + "</body>"
+        old_plain = "Hi" + footer.OLD_TEXT_FOOTER
+        self.assertTrue(footer.has_unsubscribe_link(old_html))
+        self.assertFalse(footer.has_sender_identity(old_html), "the old footer has no mailing address")
+        html_body, plain = footer.add_footer(old_html, old_plain)
+        self.assertTrue(footer.has_sender_identity(html_body))
+        self.assertNotIn(footer.OLD_HTML_FOOTER, html_body)
+        self.assertEqual(html_body.count("{{unsubscribe_url}}"), 1)
+        self.assertEqual(plain.count("{{unsubscribe_url}}"), 1)
+
+
 if __name__ == "__main__":
     unittest.main()

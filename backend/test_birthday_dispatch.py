@@ -22,7 +22,7 @@ class BirthdayDispatchTests(unittest.TestCase):
     def setUp(self):
         self.owner = "owner@example.test"
         self.now = datetime.datetime(2026, 1, 2, 9, 5)
-        self.users = {self.owner: {"status": "active", "name": "Owner", "business": "Studio"}}
+        self.users = {self.owner: {"status": "active", "name": "Owner", "business": "Studio", "mailingAddress": "1 Main St, Toronto ON"}}
         self.leads = {self.owner: [
             {"id": "today", "name": "Avery", "email": "avery@example.test", "birthday": "1990-01-02"},
             {"id": "tomorrow", "name": "Blake", "email": "blake@example.test", "birthday": "1990-01-03"},
@@ -67,6 +67,7 @@ class BirthdayDispatchTests(unittest.TestCase):
             "load_leads": lambda: copy.deepcopy(self.leads),
             "_account_has_access": lambda user: user.get("status") == "active",
             "_workspace_business_name": lambda user: user.get("business", ""),
+            "_workspace_sender_details": lambda user, fallback="": {"address": user.get("mailingAddress", ""), "contact": fallback},
             "imported_without_consent": lambda lead: lead.get("email_consent_status") == "unknown",
             "_email_unsubscribe_url": lambda owner, lead: "https://example.test/unsubscribe",
             "send_email_with_template": self.send,
@@ -129,10 +130,11 @@ class BirthdayDispatchTests(unittest.TestCase):
             "address-changed": lambda: self.leads[self.owner][0].update(email="new@example.test"),
             "birthday-changed": lambda: self.leads[self.owner][0].update(birthday="1990-03-01"),
             "business-removed": lambda: self.users[self.owner].update(business=""),
+            "mailing-address-removed": lambda: self.users[self.owner].update(mailingAddress=""),
         }
         for name, mutate in mutations.items():
             with self.subTest(name=name):
-                self.users[self.owner] = {"status": "active", "business": "Studio"}
+                self.users[self.owner] = {"status": "active", "business": "Studio", "mailingAddress": "1 Main St, Toronto ON"}
                 self.leads[self.owner] = [copy.deepcopy(source)]
                 self.before_check = mutate
                 self.assertFalse(self.scope["_dispatch_birthday_email"](self.owner, source, self.now.date()))
@@ -185,6 +187,17 @@ class BirthdayDispatchTests(unittest.TestCase):
         self.run_job()
         self.assertEqual(self.send.call_count, 1)
         self.assertEqual(next(iter(self.receipts))[2], "email:legacy@example.test")
+
+
+    def test_no_mailing_address_pauses_customer_greetings_and_tells_the_owner_once(self):
+        self.users[self.owner]["mailingAddress"] = ""
+        self.scope["SENDER_DETAILS_MESSAGE"] = "Add your business mailing address in Settings."
+        self.run_job()
+        sent_to = [call.kwargs.get("to_email") for call in self.send.call_args_list]
+        self.assertNotIn("avery@example.test", sent_to, "no customer greeting without the sender's address")
+        paused = [call for call in self.log.call_args_list if call.args[1:2] == ("Birthday emails paused",)]
+        self.assertEqual(len(paused), 1)
+        self.assertIn("1 birthday email today", paused[0].args[2])
 
 
 if __name__ == "__main__":

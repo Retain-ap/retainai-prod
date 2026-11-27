@@ -210,6 +210,8 @@ class AutomaticEmailIntegrationTests(unittest.TestCase):
             "_account_has_access": lambda user: user.get("status") == "active",
             "load_appointments": lambda: copy.deepcopy(self.appointments),
             "load_user_profile": lambda owner: {"business_name": "Example"},
+            "_workspace_sender_details": lambda user, fallback="": {"address": "1 Main St, Toronto ON", "contact": fallback},
+            "create_notification": Mock(),
             "trigger_met": lambda *args: True, "should_auto_stop": lambda *args: False,
             "render_text": lambda text, *args: text, "contains_blockers": lambda text: False,
             "in_quiet_hours": lambda *args: False, "_email_unsubscribe_url": lambda *args: "",

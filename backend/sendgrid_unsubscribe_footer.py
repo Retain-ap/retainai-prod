@@ -1,4 +1,8 @@
-"""Check or add the unsubscribe footer in RetainAI's customer-facing SendGrid templates.
+"""Check or add the sender-identity and unsubscribe footer in RetainAI's customer-facing SendGrid templates.
+
+Canada's anti-spam law (CASL) requires every commercial message to name the sender, give
+a mailing address and a contact (phone, email or website), and offer an unsubscribe link.
+The app sends business_name, business_address and business_contact in the dynamic data.
 
 RetainAI already sends a signed ``unsubscribe_url`` in the dynamic data and the
 List-Unsubscribe headers, but a dynamic template only shows a visible link if
@@ -37,8 +41,8 @@ CUSTOMER_TEMPLATES = {
     "d-a7a2c04c57e344aebd6a94559ae71ea9": "AI upsell",
 }
 
-# Matches app._append_unsubscribe_footer so every customer email looks the same.
-HTML_FOOTER = (
+# The footer first shipped without the mailing address; --apply replaces it.
+OLD_HTML_FOOTER = (
     "{{#if unsubscribe_url}}"
     "<div style=\"margin-top:28px;padding-top:16px;border-top:1px solid #ddd;"
     "font-size:12px;line-height:1.5;color:#666\">"
@@ -47,27 +51,58 @@ HTML_FOOTER = (
     "</div>"
     "{{/if}}"
 )
-TEXT_FOOTER = (
+OLD_TEXT_FOOTER = (
     "{{#if unsubscribe_url}}\n\n"
     "Unsubscribe from email follow-ups: {{unsubscribe_url}}"
     "{{/if}}"
 )
+
+# Matches app._append_unsubscribe_footer so every customer email looks the same.
+HTML_FOOTER = (
+    "{{#if unsubscribe_url}}"
+    "<div style=\"margin-top:28px;padding-top:16px;border-top:1px solid #ddd;"
+    "font-size:12px;line-height:1.5;color:#666\">"
+    "You received this message from {{business_name}}"
+    "{{#if business_address}}, {{business_address}}{{/if}}."
+    "{{#if business_contact}} Contact: {{business_contact}}.{{/if}} "
+    "<a href=\"{{unsubscribe_url}}\">Unsubscribe from email follow-ups</a>."
+    "</div>"
+    "{{/if}}"
+)
+TEXT_FOOTER = (
+    "{{#if unsubscribe_url}}\n\n"
+    "You received this message from {{business_name}}"
+    "{{#if business_address}}, {{business_address}}{{/if}}."
+    "{{#if business_contact}} Contact: {{business_contact}}.{{/if}}\n"
+    "Unsubscribe from email follow-ups: {{unsubscribe_url}}"
+    "{{/if}}"
+)
 _HAS_LINK = re.compile(r"\{\{\{?\s*(unsubscribe_url|unsubscribe_link)\b")
+_HAS_ADDRESS = re.compile(r"\{\{\{?\s*(#if\s+)?business_address\b")
 
 
 def has_unsubscribe_link(html_content):
     return bool(_HAS_LINK.search(html_content or ""))
 
 
+def has_sender_identity(html_content):
+    """True when the template shows the unsubscribe link and the sender's mailing address."""
+    body = html_content or ""
+    return has_unsubscribe_link(body) and bool(_HAS_ADDRESS.search(body))
+
+
 def add_footer(html_content, plain_content):
-    """Return (html, plain) with the footer added before </body> or at the end."""
-    html_body = html_content or ""
+    """Return (html, plain) with the footer added before </body> or at the end.
+
+    The earlier footer (no mailing address) is removed first, so a template never shows both.
+    """
+    html_body = (html_content or "").replace(OLD_HTML_FOOTER, "")
     if re.search(r"</body\s*>", html_body, flags=re.I):
         html_body = re.sub(r"</body\s*>", HTML_FOOTER + "</body>", html_body, count=1, flags=re.I)
     else:
         html_body += HTML_FOOTER
-    plain = plain_content or ""
-    if plain and not _HAS_LINK.search(plain):
+    plain = (plain_content or "").replace(OLD_TEXT_FOOTER, "")
+    if plain and not _HAS_ADDRESS.search(plain):
         plain += TEXT_FOOTER
     return html_body, plain
 
@@ -79,7 +114,7 @@ def _active_version(template):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
-    parser.add_argument("--apply", action="store_true", help="add the footer where it is missing")
+    parser.add_argument("--apply", action="store_true", help="add or upgrade the footer where it is missing")
     args = parser.parse_args()
 
     key = os.getenv("SENDGRID_API_KEY") or getpass.getpass("SendGrid API key (hidden): ")
@@ -98,20 +133,20 @@ def main():
             print(f"[{label}] has no active version")
             missing += 1
             continue
-        if has_unsubscribe_link(version.get("html_content")):
-            print(f"[{label}] OK: already shows an unsubscribe link")
+        if has_sender_identity(version.get("html_content")):
+            print(f"[{label}] OK: shows the sender's address and an unsubscribe link")
             continue
 
         missing += 1
         if not args.apply:
-            print(f"[{label}] MISSING unsubscribe link (active version: {version.get('name')})")
+            print(f"[{label}] MISSING sender address or unsubscribe link (active version: {version.get('name')})")
             continue
 
         html_body, plain = add_footer(version.get("html_content"), version.get("plain_content"))
         stamp = datetime.date.today().isoformat()
         new_version = {
             "active": 1,
-            "name": f"{(version.get('name') or label)[:70]} + unsubscribe {stamp}",
+            "name": f"{(version.get('name') or label)[:60]} + sender identity {stamp}",
             "subject": version.get("subject") or "{{subject}}",
             "html_content": html_body,
             "editor": "code",
@@ -129,7 +164,7 @@ def main():
             print(f"[{label}] update failed: HTTP {created.status_code} {created.text[:200]}")
 
     if missing and not args.apply:
-        print("\nRe-run with --apply to add the footer to the templates marked MISSING.")
+        print("\nRe-run with --apply to add the sender-identity footer to the templates marked MISSING.")
     return 1 if missing else 0
 
 

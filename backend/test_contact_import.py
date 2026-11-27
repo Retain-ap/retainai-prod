@@ -181,6 +181,7 @@ class ImportApiTests(unittest.TestCase):
         # Consent is the variable under test; the workspace must also have a
         # real sender name before any customer birthday email is eligible.
         self.users[self.owner]["businessName"] = "Sample Studio"
+        self.users[self.owner]["mailingAddress"] = "1 Main St, Toronto ON"
         old = "2020-01-01T00:00:00Z"
         today = datetime.utcnow().strftime("%m-%d")
         imported = {"id": "i1", "name": "Imported", "email": "imp@example.com", "birthday": f"1990-{today}",
